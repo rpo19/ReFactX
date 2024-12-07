@@ -46,6 +46,7 @@ def select_all(sub, pred, obj):
     return True
 
 def custom_selector(sub, pred, obj):
+    # TODO bisogna estendere :  le label sono rdfs:label
     is_wikidata = sub.startswith('http://www.wikidata.org/entity/Q') and pred.startswith('http://www.wikidata.org/prop/direct/P')
     # pdb.set_trace()
     return is_wikidata
