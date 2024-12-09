@@ -4,6 +4,7 @@ import rdflib
 from tqdm import tqdm
 import psycopg
 import sys
+import pickle
 
 # python wikidata_downloader.py postgres://postgres:pass@postgres:5432/postgres 1 1048576 2> >(python filter_error.py)
 
@@ -81,7 +82,10 @@ def download_and_process(url, triple_selector, postgres_connection, worker_num, 
                                         line = staged_line + line
                                         staged_line = ''
                                         assert line[0] == '<' and line[-1] == '.'
-                                    continue
+                                        pass
+                                    else:
+                                        # ignore line with bad start
+                                        continue
                                 elif line[-1] != '.':
                                     # print('no .')
                                     # nt line should end with .
@@ -92,7 +96,10 @@ def download_and_process(url, triple_selector, postgres_connection, worker_num, 
 
                                 ok_lines += line + '\n'
 
-                            g.parse(data=ok_lines, format="nt")
+                            try:
+                                g.parse(data=ok_lines, format="nt")
+                            except Exception as e:
+                                breakpoint()
 
                             selected_triples = (item for item in g if triple_selector(*item))
 

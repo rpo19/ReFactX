@@ -9,7 +9,7 @@ delete = sys.argv[4] if len(sys.argv) >= 5 else 'no'
 with psycopg.connect(postgres_connect) as conn:
     with conn.cursor() as cur:
         if delete == 'delete':
-            cur.execute('DELETE FROM work;')
+            cur.execute('DELETE FROM work; DELETE FROM relations; DELETE FROM labels; DELETE FROM attributes;')
 
         cur.execute("SELECT * FROM work;")
         results = cur.fetchone()
