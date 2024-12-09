@@ -26,4 +26,9 @@ with psycopg.connect(postgres_connect) as conn:
             cur.execute('''INSERT INTO work (bytestart, byteend, lastbyteprocessed, actualbytestart, actualbyteend)
             VALUES (%s, %s, %s, %s, %s);''', (work[0], work[1], -1, work[0], work[1]))
 
+        cur.execute("SELECT id, bytestart, byteend, lastbyteprocessed, actualbytestart, actualbyteend FROM work;")
+        results = cur.fetchall()
+        for item in results:
+            print(item)
+
     conn.commit()
