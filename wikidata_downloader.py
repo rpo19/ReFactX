@@ -6,18 +6,24 @@ import sys
 import re
 
 ntriple_regex = re.compile(r'<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>\s+'
-r'(?:<http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)>|<http:\/\/www\.w3\.org\/2000\/01\/rdf-schema#label>)\s+'
+r'<http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)>\s+'
 r'(?:<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>|"(\S+)"@en)\s+\.')
+
+label_regex = re.compile(r'(?:<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>|<http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)>)\s+'
+r'<http:\/\/www\.w3\.org\/2000\/01\/rdf-schema#label>\s+'
+r'"(\S+)"@en\s+\.')
 
 # groups
 # relation when 4th is None
 # attribute when 3rd is None
 # label when 2nd and 3th are None
 
-# match = ntriple_regex.match('<http://www.wikidata.org/entity/Q1234> <http://www.wikidata.org/prop/direct/P1235> "assfadf"@en .')
-# match2 = ntriple_regex.match('<http://www.wikidata.org/entity/Q1234> <http://www.wikidata.org/prop/direct/P1235> <http://www.wikidata.org/entity/Q1234> .')
-# match3 = ntriple_regex.match('<http://www.wikidata.org/entity/Q148> <http://www.w3.org/2000/01/rdf-schema#label> "chinA"@en .')
-# print(match, match2)
+# match1 = ntriple_regex.match('<http://www.wikidata.org/entity/Q1234> <http://www.wikidata.org/prop/direct/P1235> <http://www.wikidata.org/entity/Q1234> .')
+# match2 = ntriple_regex.match('<http://www.wikidata.org/entity/Q1234> <http://www.wikidata.org/prop/direct/P1235> "assfadf"@en .')
+# match3 = label_regex.match('<http://www.wikidata.org/entity/Q148> <http://www.w3.org/2000/01/rdf-schema#label> "chinA"@en .')
+# match4 = label_regex.match('<http://www.wikidata.org/prop/direct/P1235> <http://www.w3.org/2000/01/rdf-schema#label> "chinA"@en .')
+# print(match1, match2)
+# print(match3, match4)
 # breakpoint()
 
 # python wikidata_downloader.py postgres://postgres:pass@postgres:5432/postgres 1 1048576 2> >(python filter_error.py)
@@ -65,11 +71,12 @@ def download_and_process(url, triple_selector, postgres_connection, worker_num, 
 
                     staged_line = '' # broken line at the end of the chunk to continue in the next
 
-                    relations = []
-                    attributes = []
-                    labels = []
-
                     for chunk in response.iter_content(chunk_size):
+                        relations = []
+                        attributes = []
+                        entity_labels = []
+                        pred_labels = []
+
                         byte_count = len(chunk)
                         byte_count_cum += byte_count
 
@@ -114,36 +121,38 @@ def download_and_process(url, triple_selector, postgres_connection, worker_num, 
                                 for line in ok_lines:
                                     save_triple = line
 
-                                    match = ntriple_regex.match(line)
+                                    triple_match = ntriple_regex.match(line)
                                     # groups
                                     # relation when 4th is None
                                     # attribute when 3rd is None
-                                    # label when 2nd and 3th are None
-                                    if match is None:
-                                        continue
+                                    if triple_match:
+                                        sub, pred, ob1, ob2 = triple_match.groups()
+                                        if ob1:
+                                            # relation
+                                            sub = int(sub)
+                                            pred = int(pred)
+                                            obj = int(ob1)
+                                            relations.append((sub, pred, obj))
+                                        elif ob2:
+                                            # attribute
+                                            sub = int(sub)
+                                            pred = int(pred)
+                                            obj = ob2
+                                            attributes.append((sub, pred, obj))
+                                        else:
+                                            raise Exception('ERROR: Unecpected case triple match.')
                                     else:
-                                        sub, pred, ob1, ob2 = match.groups()
-
-
-                                    if ob2 is None:
-                                        # relation
-                                        sub = int(sub)
-                                        pred = int(pred)
-                                        obj = int(ob1)
-                                        relations.append((sub, pred, obj))
-                                    elif pred is None:
-                                        # is label
-                                        sub = int(sub)
-                                        obj = ob2
-                                        labels.append((sub, obj))
-                                    elif ob1 is None:
-                                        # attribute
-                                        sub = int(sub)
-                                        pred = int(pred)
-                                        obj = ob2
-                                        attributes.append((sub, pred, obj))
-                                    else:
-                                        raise Exception('ERROR: Unecpected case.')
+                                        label_match = label_regex.match(line)
+                                        if label_match:
+                                            sub, pred, obj = label_match.groups()
+                                            if sub:
+                                                # entity label
+                                                entity_labels.append((sub, obj))
+                                            elif pred:
+                                                # entity label
+                                                pred_labels.append((pred, obj))
+                                            else:
+                                                raise Exception('ERROR: Unecpected case triple match.')
 
                             except Exception as e:
                                 print('Exception on triple', save_triple, file=sys.stderr, flush=True)
@@ -157,8 +166,12 @@ def download_and_process(url, triple_selector, postgres_connection, worker_num, 
                             for item in attributes:
                                 copy.write_row(item)
 
-                        with cur.copy("COPY labels (subject, object) FROM STDIN") as copy:
-                            for item in labels:
+                        with cur.copy("COPY entitylabels (subject, object) FROM STDIN") as copy:
+                            for item in entity_labels:
+                                copy.write_row(item)
+
+                        with cur.copy("COPY predlabels (predicate, object) FROM STDIN") as copy:
+                            for item in pred_labels:
                                 copy.write_row(item)
 
                         cur.execute('''UPDATE work SET lastbyteprocessed = %s WHERE id = %s;''', (bytestart + byte_count_cum, worker_num))
