@@ -1,10 +1,24 @@
 import requests
 import bz2
-import rdflib
 from tqdm import tqdm
 import psycopg
 import sys
-import pickle
+import re
+
+ntriple_regex = re.compile(r'<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>\s+'
+r'(?:<http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)>|<http:\/\/www\.w3\.org\/2000\/01\/rdf-schema#label>)\s+'
+r'(?:<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>|"(\S+)"@en)\s+\.')
+
+# groups
+# relation when 4th is None
+# attribute when 3rd is None
+# label when 2nd and 3th are None
+
+# match = ntriple_regex.match('<http://www.wikidata.org/entity/Q1234> <http://www.wikidata.org/prop/direct/P1235> "assfadf"@en .')
+# match2 = ntriple_regex.match('<http://www.wikidata.org/entity/Q1234> <http://www.wikidata.org/prop/direct/P1235> <http://www.wikidata.org/entity/Q1234> .')
+# match3 = ntriple_regex.match('<http://www.wikidata.org/entity/Q148> <http://www.w3.org/2000/01/rdf-schema#label> "chinA"@en .')
+# print(match, match2)
+# breakpoint()
 
 # python wikidata_downloader.py postgres://postgres:pass@postgres:5432/postgres 1 1048576 2> >(python filter_error.py)
 
@@ -14,7 +28,10 @@ def select_all(sub, pred, obj):
 def custom_selector(sub, pred, obj):
     # TODO bisogna estendere :  le label sono rdfs:label
     is_wikidata = sub.startswith('http://www.wikidata.org/entity/Q') and pred.startswith('http://www.wikidata.org/prop/direct/P')
-    is_label = str(pred) == 'http://www.w3.org/2000/01/rdf-schema#label' and obj.language == 'en'
+    is_label = pred == 'http://www.w3.org/2000/01/rdf-schema#label' and obj.endswith('@en')
+    if is_label:
+        breakpoint()
+
     return is_wikidata or is_label
 
 # def download_and_process(url, output_file, chunk_size=1024*1024, triple_selector=select_all):
@@ -52,13 +69,11 @@ def download_and_process(url, triple_selector, postgres_connection, worker_num, 
                     attributes = []
                     labels = []
 
-                    stopnext = False
                     for chunk in response.iter_content(chunk_size):
                         byte_count = len(chunk)
                         byte_count_cum += byte_count
 
                         if chunk:
-                            g = rdflib.Graph()
                             decompressed = decompressor.decompress(chunk)
 
                             if byte_count_cum < bytestart:
@@ -66,10 +81,15 @@ def download_and_process(url, triple_selector, postgres_connection, worker_num, 
 
                             # first and last line can ba a problem
                             byte_lines = decompressed.split(b'\n')
-                            ok_lines = ''
+                            ok_lines = []
 
                             for line in byte_lines:
                                 line = line.decode()
+
+                                if staged_line:
+                                    line = staged_line + line
+                                    staged_line = ''
+
                                 if not line:
                                     # empty line
                                     # print('emtpy')
@@ -77,52 +97,54 @@ def download_and_process(url, triple_selector, postgres_connection, worker_num, 
                                 elif line[0] != '<':
                                     # print('no <', line)
                                     # nt line should start with <
-                                    if staged_line:
-                                        # in this worker
-                                        line = staged_line + line
-                                        staged_line = ''
-                                        assert line[0] == '<' and line[-1] == '.'
-                                        pass
-                                    else:
-                                        # ignore line with bad start
-                                        continue
-                                elif line[-1] != '.':
+                                    continue
+                                elif not line.endswith(' .'):
                                     # print('no .')
                                     # nt line should end with .
                                     # TODO need to continue in next chunk. if last one more
                                     staged_line = line
                                     # TODO go over byteend if there is a stagedline
                                     continue
+                                else:
+                                    ok_lines.append(line)
 
-                                ok_lines += line + '\n'
-
-                            try:
-                                g.parse(data=ok_lines, format="nt")
-                            except Exception as e:
-                                breakpoint()
-
-                            selected_triples = (item for item in g if triple_selector(*item))
+                            save_triple = ''
 
                             try:
-                                for sub, pred, obj in selected_triples:
-                                    save_triple = sub, pred, obj
-                                    if str(pred) == 'http://www.w3.org/2000/01/rdf-schema#label':
-                                        # is label
-                                        sub = int(str(sub)[32:])
-                                        obj = str(obj)[:255]
-                                        labels.append((sub, obj))
+                                for line in ok_lines:
+                                    save_triple = line
+
+                                    match = ntriple_regex.match(line)
+                                    # groups
+                                    # relation when 4th is None
+                                    # attribute when 3rd is None
+                                    # label when 2nd and 3th are None
+                                    if match is None:
+                                        continue
                                     else:
-                                        # is fact
-                                        sub = int(str(sub)[32:])
-                                        pred = int(str(pred)[37:])
-                                        if str(obj).startswith('http://www.wikidata.org/entity/Q'):
-                                            obj = int(str(obj)[32:])
-                                            relations.append((sub, pred, obj))
-                                        # if isinstance(obj, rdflib.term.Literal):
-                                        else:
-                                            # literal
-                                            obj = str(obj)[:255]
-                                            attributes.append((sub, pred, obj))
+                                        sub, pred, ob1, ob2 = match.groups()
+
+
+                                    if ob2 is None:
+                                        # relation
+                                        sub = int(sub)
+                                        pred = int(pred)
+                                        obj = int(ob1)
+                                        relations.append((sub, pred, obj))
+                                    elif pred is None:
+                                        # is label
+                                        sub = int(sub)
+                                        obj = ob2
+                                        labels.append((sub, obj))
+                                    elif ob1 is None:
+                                        # attribute
+                                        sub = int(sub)
+                                        pred = int(pred)
+                                        obj = ob2
+                                        attributes.append((sub, pred, obj))
+                                    else:
+                                        raise Exception('ERROR: Unecpected case.')
+
                             except Exception as e:
                                 print('Exception on triple', save_triple, file=sys.stderr, flush=True)
                                 raise e

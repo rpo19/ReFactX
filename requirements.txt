@@ -1,4 +1,3 @@
 requests
-rdflib
 tqdm
 psycopg[binary]
