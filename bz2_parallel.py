@@ -10,6 +10,12 @@ from tqdm import tqdm
 # 4. you need to check data broken into more blocks: stage incomplete data (e.g. broken line or json dictionary) at start and end of each block
 #    # and process it when you have found the respective start-end pair
 
+# simpler solution
+# 1. download big dump in bz2
+# 2. run bzip2recovery to divide the big bz2 into its blocks
+# 3. process each block in parallel (will have blocken lines at the beginning and end)
+# 4. process the broken lines: look for last line of blockN and merge it with blockN+1 to process
+
 def find_next_sequence(stream, sequence):
     seekbegin = stream.tell()
     _seq_index = 0
@@ -72,3 +78,92 @@ def testit(fname, chunk_size=1024 - 6):
             pbar.refresh()
 
             next_idx = find_next_sequence(fd, compressed_magic)
+
+def testit2(fname, magic_idx=None, chunk_size=1024, n_blocks=None):
+    fd = open(fname, 'rb')
+
+    header = fd.read(4)
+
+    end_of_file = fd.seek(0, os.SEEK_END)
+    fd.seek(0)
+
+    if not magic_idx:
+        magic_idx = list(find_all_compressed_magic(fd))
+
+    finaldata = b''
+
+    for i in range(len(magic_idx)):
+        if i > n_blocks:
+            break
+        current_idx = magic_idx[i]
+        next_idx = magic_idx[i+1] if i < len(magic_idx) else end_of_file
+
+        fd.seek(current_idx)
+
+        decompressor = bz2.BZ2Decompressor()
+
+        data = b''
+        begin = True
+        while fd.tell() < next_idx:
+            print('.',end='')
+            remaining_size = next_idx - fd.tell()
+            read_size = remaining_size if chunk_size > remaining_size else chunk_size
+
+            if begin:
+                chunk = header + fd.read(read_size - len(header))
+                begin = False
+            else:
+                chunk = fd.read(read_size)
+
+            data += decompressor.decompress(chunk)
+
+        finaldata += data
+
+        print()
+        print('B', data[:64].decode())
+        print('E', data[-64:].decode())
+        print('len', len(data))
+        print(fd.tell(), next_idx)
+
+    return finaldata, fd.tell(), i - 1
+
+
+from multiprocessing import Process
+
+def process_block(name):
+    print 'hello', name
+
+if __name__ == '__main__':
+    p = Process(target=f, args=('bob',))
+    p.start()
+    p.join()
+
+def testit3(fname, magic_idx=None, chunk_size=1024 - 6):
+    fd = open(fname, 'rb')
+
+    header = fd.read(4)
+
+    end_of_file = fd.seek(0, os.SEEK_END)
+    fd.seek(0)
+
+    if not magic_idx:
+        magic_idx = list(find_all_compressed_magic(fd))
+
+    for i in range(len(magic_idx)):
+        next_idx = magic_idx[i+1] if i < len(magic_idx) else end_of_file
+
+        fd.seek(next_idx)
+
+        decompressor = bz2.BZ2Decompressor()
+
+        data = b''
+        while fd.tell() < next_idx:
+            remaining_size = next_idx - fd.tell()
+            read_size = remaining_size if chunk_size > remaining_size else chunk_size
+            chunk = header + fd.read(read_size)
+
+            data += decompressor.decompress(chunk)
+            if len(data) == read_size:
+                print('begin', data[:64])
+
+        print('end', data[-64:])
