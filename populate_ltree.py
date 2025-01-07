@@ -8,9 +8,10 @@ fname = sys.argv[1]
 postgres_connection = sys.argv[2] # 'postgres://postgres:secret@host:5432/postgres'
 total_rows = int(sys.argv[3]) if len(sys.argv) > 3 else None
 
-with psycopg.connect(postgres_connection, autocommit=True) as conn:
+with psycopg.connect(postgres_connection, autocommit=False) as conn:
     with conn.cursor() as cur:
-        with cur.copy("COPY tree (path) FROM STDIN") as copy:
+        cur.execute("TRUNCATE TABLE tree;")
+        with cur.copy("COPY tree (path) FROM STDIN WITH (FREEZE)") as copy:
             with bz2.BZ2File(fname, "rb") as bz2file:
                 with tqdm(total=total_rows) as pbar:
                     count = 0
@@ -23,10 +24,16 @@ with psycopg.connect(postgres_connection, autocommit=True) as conn:
                             # print(array)
                             copy.write_row(row)
 
+                            count += 1
+
                             if count % 10000 == 0:
                                 pbar.n = count
                                 pbar.refresh()
 
-                            count += 1
                         except EOFError:
+                            print('Reached end of file.')
                             break  # End of file reached
+    conn.commit()
+
+# CREATE INDEX tree_path_gist_idx ON tree USING GIST (path);
+# TODO add index creation (and also primary key?) # CREATE INDEX path_idx ON tree USING BTREE (path); # ALTER TABLE tree ADD PRIMARY KEY (id);
