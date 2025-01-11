@@ -40,6 +40,8 @@ enroot = tken(root)
 
 peekable_id = peekable(itertools.count())
 
+count = 0
+
 with psycopg.connect(postgres_connection, autocommit=False) as conn:
     with conn.cursor() as cur:
         cur.execute("TRUNCATE TABLE ctrie;")
@@ -53,9 +55,11 @@ with psycopg.connect(postgres_connection, autocommit=False) as conn:
                             for row in explode(array, enroot, peekable_id):
                                 copy.write_row(row)
 
-                            if peekable_id.peek() % 10000 == 0:
-                                pbar.n = peekable_id.peek()
+                            if count % 10000 == 0:
+                                pbar.n = count
                                 pbar.refresh()
+
+                            count += 1
 
                         except EOFError:
                             print('Reached end of file.')
