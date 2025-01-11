@@ -1,6 +1,6 @@
 # CREATE TABLE my_table (
-#     id BIGINT PRIMARY KEY,
-#     path BYTEA NOT NULL,
+#     id BIGINT, -- later make it PRIMARY KEY
+#     key BYTEA NOT NULL,
 #     child BYTEA NOT NULL,
 #     child_id BIGINT NOT NULL
 # );
@@ -29,11 +29,11 @@ def tkde(bbytes):
     return decoded
 
 def explode(token_ids, root, peekable_id):
-    path = root
+    key = root
     for token in token_ids:
         entoken = tken(token)
-        row = (next(peekable_id), path, entoken, peekable_id.peek())
-        path += entoken
+        row = (next(peekable_id), key, entoken, peekable_id.peek())
+        key += entoken
         yield row
 
 enroot = tken(root)
@@ -43,7 +43,7 @@ peekable_id = peekable(itertools.count())
 with psycopg.connect(postgres_connection, autocommit=False) as conn:
     with conn.cursor() as cur:
         cur.execute("TRUNCATE TABLE ctrie;")
-        with cur.copy("COPY ctrie (id, path, child, childid) FROM STDIN WITH (FREEZE)") as copy:
+        with cur.copy("COPY ctrie (id, key, child, childid) FROM STDIN WITH (FREEZE)") as copy:
             with bz2.BZ2File(fname, "rb") as bz2file:
                 with tqdm(total=total_rows) as pbar:
                     while True:
@@ -62,4 +62,4 @@ with psycopg.connect(postgres_connection, autocommit=False) as conn:
                             break  # End of file reached
     conn.commit()
 
-# CREATE INDEXes
+# CREATE INDEXes and PKEY
