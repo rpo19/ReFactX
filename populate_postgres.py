@@ -43,7 +43,7 @@ peekable_id = peekable(itertools.count())
 with psycopg.connect(postgres_connection, autocommit=False) as conn:
     with conn.cursor() as cur:
         cur.execute("TRUNCATE TABLE ctrie;")
-        with cur.copy("COPY ctrie (id, key, child, childid) FROM STDIN WITH (FREEZE)") as copy:
+        with cur.copy("COPY ctrie (id, key, child, child_id) FROM STDIN WITH (FREEZE)") as copy:
             with bz2.BZ2File(fname, "rb") as bz2file:
                 with tqdm(total=total_rows) as pbar:
                     while True:
