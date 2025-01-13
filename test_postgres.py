@@ -44,26 +44,30 @@ count = 0
 
 with psycopg.connect(postgres_connection, autocommit=False) as conn:
     with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE ctrie;")
-        with cur.copy("COPY ctrie (id, key, child, child_id) FROM STDIN WITH (FREEZE)") as copy:
-            with bz2.BZ2File(fname, "rb") as bz2file:
-                with tqdm(total=total_rows) as pbar:
-                    while True:
-                        try:
-                            # Load each pickled object from the bz2 file
-                            array = pickle.load(bz2file)
-                            for row in explode(array, enroot, peekable_id):
-                                copy.write_row(row)
+        with bz2.BZ2File(fname, "rb") as bz2file:
+            while True:
+                try:
+                    # Load each pickled object from the bz2 file
+                    array = pickle.load(bz2file)
 
-                            count += 1
+                    lookup_key = 0
+                    lookup_child = 0
 
-                            if count % 10000 == 0:
-                                pbar.n = count
-                                pbar.refresh()
+                    import pdb
+                    pdb.set_trace()
 
-                        except EOFError:
-                            print('Reached end of file.')
-                            break  # End of file reached
-    conn.commit()
+                    cur.execute("SELECT * FROM ctrie WHERE key = %s;", (lookup_key,))
+                    key_result = cur.fetchall()
+                    print(key_result)
+
+                   # cur.execute("SELECT * FROM ctrie WHERE child_id = %s;", lookup_child)
+                   # key_result = cur.fetchall()
+                   # print(key_result)
+
+                    pdb.set_trace()
+
+                except EOFError:
+                    print('Reached end of file.')
+                    break  # End of file reached
 
 # CREATE INDEXes and PKEY
