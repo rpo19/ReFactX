@@ -55,14 +55,14 @@ with psycopg.connect(postgres_connection, autocommit=False) as conn:
                             array = pickle.load(bz2file)
                             batch = batch.union(set(explode(array, enroot)))
 
+                            count += 1
 
-                            if len(batch) >= batch_size:
+                            if count % batch_size == 0:
+                                # batch on number or rows processed
                                 for row in batch:
                                     copy.write_row(row)
                                 # reset batch
                                 batch = set()
-
-                            count += 1
 
                             if count % 10000 == 0:
                                 pbar.n = count
