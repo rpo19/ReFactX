@@ -10,8 +10,6 @@ import bz2
 import psycopg
 from tqdm import tqdm
 import sys
-from more_itertools import peekable
-import itertools
 
 fname = sys.argv[1]
 postgres_connection = sys.argv[2] # 'postgres://postgres:secret@host:5432/postgres'
