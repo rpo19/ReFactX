@@ -45,13 +45,13 @@ def get_rows(trie, rootkey, switch_parameter):
         level, key, level = stack.pop()
         children = level.keys()
         if level >= switch_parameter:
-            yield key, None, pickle.dumps(level, protocol=5) # highest protocol for best efficiency. supported by python 3.8
+            yield key, b''.join(map(tken, children)), pickle.dumps(level, protocol=5) # highest protocol for best efficiency. supported by python 3.8
         else:
             for child in children:
                 stack.append((level + 1, key + tken(child), level[child]))
             if len(children) > 0:
                 # skip adding empty keys to save space
-                yield key, b''.join(map(tken, children), None)
+                yield key, b''.join(map(tken, children)), None
 
 
 enroot = tken(root)
