@@ -1,7 +1,8 @@
 # CREATE TABLE ctrie (
 #     id BIGINT GENERATED ALWAYS AS IDENTITY, -- Automatically generates unique values for id -- later make it PRIMARY KEY
 #     key BYTEA NOT NULL,
-#     children BYTEA NOT NULL
+#     children BYTEA, -- either children or subtree must be present (todo add constraint?)
+#     subtree BYTEA,
 # );
 
 
@@ -15,7 +16,8 @@ fname = sys.argv[1]
 postgres_connection = sys.argv[2] # 'postgres://postgres:secret@host:5432/postgres'
 root = int(sys.argv[3]) # number that not collides with the vocab (check max vocab) # maybe 60000
 batch_size = int(sys.argv[4])
-total_rows = int(sys.argv[5]) if len(sys.argv) > 5 else None
+switch_parameter = int(sys.argv[5]) # after N token save all the branch to the leaf
+total_rows = int(sys.argv[6]) if len(sys.argv) > 6 else None
 
 def tken(token):
     # token encode
@@ -35,18 +37,21 @@ def batch_append(trie, token_ids):
 
         level = level[token_id]
 
-def get_rows(trie, rootkey):
+def get_rows(trie, rootkey, switch_parameter):
     # iterative depth first traversal with a stack
     key = rootkey
-    stack = [(key, trie)]
+    stack = [(0, key, trie)]
     while len(stack) > 0:
-        key, level = stack.pop()
+        level, key, level = stack.pop()
         children = level.keys()
-        for child in children:
-            stack.append((key + tken(child), level[child]))
-        if len(children) > 0:
-            # skip adding empty keys to save space
-            yield key, b''.join(map(tken, children))
+        if level >= switch_parameter:
+            yield key, None, pickle.dumps(level, protocol=5) # highest protocol for best efficiency. supported by python 3.8
+        else:
+            for child in children:
+                stack.append((level + 1, key + tken(child), level[child]))
+            if len(children) > 0:
+                # skip adding empty keys to save space
+                yield key, b''.join(map(tken, children), None)
 
 
 enroot = tken(root)
@@ -56,7 +61,7 @@ count = 0
 with psycopg.connect(postgres_connection, autocommit=False) as conn:
     with conn.cursor() as cur:
         cur.execute("TRUNCATE TABLE ctrie;")
-        with cur.copy("COPY ctrie (key, children) FROM STDIN WITH (FREEZE)") as copy:
+        with cur.copy("COPY ctrie (key, children, subtree) FROM STDIN WITH (FREEZE)") as copy:
             with bz2.BZ2File(fname, "rb") as bz2file:
                 with tqdm(total=total_rows) as pbar:
                     batch = {}
