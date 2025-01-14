@@ -1,8 +1,9 @@
-# CREATE TABLE my_table (
-#     id BIGINT, -- later make it PRIMARY KEY
+# CREATE TABLE ctrie (
+#     id BIGINT GENERATED ALWAYS AS IDENTITY, -- Automatically generates unique values for id -- later make it PRIMARY KEY
 #     key BYTEA NOT NULL,
 #     children BYTEA NOT NULL
 # );
+
 
 import pickle
 import bz2
