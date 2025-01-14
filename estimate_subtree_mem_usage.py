@@ -4,7 +4,8 @@ import pickle
 import bz2
 from tqdm import tqdm
 import sys
-import itertools
+import math
+import numpy
 
 fname = sys.argv[1]
 root = int(sys.argv[2]) # number that not collides with the vocab (check max vocab) # maybe 60000
@@ -85,9 +86,10 @@ def calc_size_by_level(root):
     levelnum = 0
     while len(stack) > 0:
         new_stack = []
+        sizes = []
         for level in stack:
-            size = total_size(level)
-            print(levelnum, size)
+            sizes.append(total_size(level))
+            print(levelnum, (min(sizes), max(sizes), math.mean(sizes)), numpy.quantile(sizes, [0.75,0.9,0.99]))
 
             new_stack.extend(list(level.values()))
 
