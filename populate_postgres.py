@@ -51,7 +51,7 @@ def get_rows(trie, rootkey):
 
 
 enroot = tken(root)
-
+tbar_update = batch_size
 count = 0
 
 with psycopg.connect(postgres_connection, autocommit=False) as conn:
@@ -73,12 +73,12 @@ with psycopg.connect(postgres_connection, autocommit=False) as conn:
 
                             if count % batch_size == 0:
                                 # batch on number or rows processed
-                                for row in get_rows(batch):
+                                for row in get_rows(batch, enroot):
                                     copy.write_row(row)
                                 # reset batch
                                 batch = {}
 
-                            if count % 10000 == 0:
+                            if count % tbar_update == 0:
                                 pbar.n = count
                                 pbar.refresh()
 
