@@ -2,7 +2,7 @@
 #     id BIGINT GENERATED ALWAYS AS IDENTITY, -- Automatically generates unique values for id -- later make it PRIMARY KEY
 #     key BYTEA NOT NULL,
 #     children BYTEA, -- either children or subtree must be present (todo add constraint?)
-#     subtree BYTEA,
+#     subtree BYTEA
 # );
 
 
@@ -42,13 +42,13 @@ def get_rows(trie, rootkey, switch_parameter):
     key = rootkey
     stack = [(0, key, trie)]
     while len(stack) > 0:
-        level, key, level = stack.pop()
+        level_num, key, level = stack.pop()
         children = level.keys()
-        if level >= switch_parameter:
+        if level_num >= switch_parameter:
             yield key, b''.join(map(tken, children)), pickle.dumps(level, protocol=5) # highest protocol for best efficiency. supported by python 3.8
         else:
             for child in children:
-                stack.append((level + 1, key + tken(child), level[child]))
+                stack.append((level_num + 1, key + tken(child), level[child]))
             if len(children) > 0:
                 # skip adding empty keys to save space
                 yield key, b''.join(map(tken, children)), None
@@ -77,7 +77,7 @@ with psycopg.connect(postgres_connection, autocommit=False) as conn:
 
                             if count % batch_size == 0:
                                 # batch on number or rows processed
-                                for row in get_rows(batch, enroot):
+                                for row in get_rows(batch, enroot, switch_parameter):
                                     copy.write_row(row)
                                 # reset batch
                                 batch = {}
