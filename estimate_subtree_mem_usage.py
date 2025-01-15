@@ -4,13 +4,12 @@ import pickle
 import bz2
 from tqdm import tqdm
 import sys
-import math
 import numpy
 
 fname = sys.argv[1]
 root = int(sys.argv[2]) # number that not collides with the vocab (check max vocab) # maybe 60000
 sample_size = int(sys.argv[3])
-switch_parameter = int(sys.argv[4]) # after N token save all the branch to the leaf
+switch_parameter = int(sys.argv[4]) # calculate for levels >= switch_parameter (speed up)
 
 ##### https://code.activestate.com/recipes/577504-compute-memory-footprint-of-an-object-and-its-cont/
 from sys import getsizeof, stderr
@@ -84,17 +83,21 @@ def batch_append(trie, token_ids):
 def calc_size_by_level(root):
     stack = [root]
     levelnum = 0
+    sizes = {}
     while len(stack) > 0:
         new_stack = []
-        sizes = []
         for level in stack:
-            sizes.append(total_size(level))
-            print(levelnum, (min(sizes), max(sizes), math.mean(sizes)), numpy.quantile(sizes, [0.75,0.9,0.99]))
+            if levelnum not in sizes:
+                sizes[levelnum] = []
+            if levelnum >= switch_parameter:
+                sizes[levelnum].append(total_size(level))
 
             new_stack.extend(list(level.values()))
 
         levelnum += 1
         stack = new_stack
+
+    return sizes
 
 enroot = tken(root)
 tbar_update = sample_size // 100
@@ -124,6 +127,10 @@ with bz2.BZ2File(fname, "rb") as bz2file:
                 print('Reached end of file.')
                 break  # End of file reached
 
-calc_size_by_level(batch)
+sizes_dict = calc_size_by_level(batch)
 
+print('int size', total_size(32))
 
+for levelnum, sizes in sizes_dict.items():
+    if len(sizes) > 0:
+        print(levelnum, min(sizes), max(sizes), float(numpy.mean(sizes)), numpy.quantile(sizes, [0.75,0.9,0.99]))
