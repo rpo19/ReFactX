@@ -11,12 +11,36 @@ from mergedeep import merge
 from transformers import AutoTokenizer
 import sys
 import random
+import time
+
+print('Start.')
 
 postgres_connection = sys.argv[1] # 'postgres://postgres:secret@host:5432/postgres'
 model_name = sys.argv[2]
 initial_tokens = sys.argv[3] if len(sys.argv) > 3 else ''
 
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+class TimeMeasure:
+    def __init__(self, tag='default', verbose=False, outfile=sys.stderr):
+        self.tag = tag
+        self.verbose = verbose
+        self.start_time = None
+        self.duration = None
+        self.outfile = outfile
+
+    def __enter__(self):
+        self.start_time = time.time()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.duration = time.time() - self.start_time
+        if self.verbose:
+            print(self.tag, 'duration:', self.duration_ms(self.duration), file=self.outfile)
+
+    def duration_ms(self, duration):
+        return "{:.2f} ms".format(duration * 1000)
+
+with TimeMeasure(tag='Loading tokenizer', verbose=True) as tm:
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 def choose(children, initial_tokens):
     if len(initial_tokens) > 0:
@@ -47,9 +71,9 @@ enroot = tken(rootkey)
 sentence = [enroot]
 
 while True:
-    
-    cur.execute('SELECT children, subtree FROM ctrie WHERE key = %s;', (b''.join(sentence),))
-    res = cur.fetchall()
+    with TimeMeasure(tag=f'Query {len(sentence)}', verbose=True) as tm:
+        cur.execute('SELECT children, subtree FROM ctrie WHERE key = %s;', (b''.join(sentence),))
+        res = cur.fetchall()
 
     if len(res) > 0:
     
@@ -80,24 +104,25 @@ while True:
                 merge(merged_subtree, subtree)
 
         if len(merged_subtree) > 0:
-            # continue the generation from the subtree
-            # from now on the token_ids are already int. no need to tkde
-            desentence = list(map(tkde,sentence))
-            print(tokenizer.decode(desentence))
-            print('.\nReached the switch level. Proceeding with the in-memory sub-tree.\n')
-            level = merged_subtree[tkde(next_token)]
-            children = list(level.keys())
-            while len(children) > 0:
-                next_token = choose(children, initial_tokens)
-                level = level[next_token]
-                children = list(level.keys())
+            with TimeMeasure(tag=f'Subtree generation', verbose=True) as tm:
+                 # continue the generation from the subtree
+                 # from now on the token_ids are already int. no need to tkde
+                 desentence = list(map(tkde,sentence))
+                 print(tokenizer.decode(desentence))
+                 print('.\nReached the switch level. Proceeding with the in-memory sub-tree.\n')
+                 level = merged_subtree[tkde(next_token)]
+                 children = list(level.keys())
+                 while len(children) > 0:
+                     next_token = choose(children, initial_tokens)
+                     level = level[next_token]
+                     children = list(level.keys())
 
-                desentence.append(next_token)
+                     desentence.append(next_token)
 
-                print(desentence)
+                     print(desentence)
 
-            print('+')
-            break
+                 print('+')
+                 break
 
     else:
         print('.')
