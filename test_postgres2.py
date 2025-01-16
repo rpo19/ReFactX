@@ -44,7 +44,7 @@ with TimeMeasure(tag='Loading tokenizer', verbose=True) as tm:
 
 def choose(children, initial_tokens):
     if len(initial_tokens) > 0:
-        choice = initial_tokens.pop(0) 
+        choice = initial_tokens.pop(0)
         assert choice in children
     else:
         choice = random.choice(children)
@@ -76,7 +76,6 @@ while True:
         res = cur.fetchall()
 
     if len(res) > 0:
-    
         exploded_children = set()
         map_subtree = {}
         for i, children in enumerate(res):
@@ -87,11 +86,11 @@ while True:
                     map_subtree[child] = set()
                 map_subtree[child].add(i)
             exploded_children.update(set(children[i:i+2] for i in range(0, len(children), 2)))
-        
+
         next_token = choose(list(exploded_children), initial_tokens)
-        
+
         sentence.append(next_token)
-        
+
         print(list(map(tkde,sentence)))
 
         corresponding_rows = map_subtree[next_token]
