@@ -12,12 +12,16 @@ from transformers import AutoTokenizer
 import sys
 import random
 import time
+import json
 
 print('Start.')
 
 postgres_connection = sys.argv[1] # 'postgres://postgres:secret@host:5432/postgres'
 model_name = sys.argv[2]
 initial_tokens = sys.argv[3] if len(sys.argv) > 3 else ''
+if initial_tokens == 'json' and len(sys.argv) > 4:
+    initial_tokens = json.loads(sys.argv[4])
+    assert isinstance(initial_tokens, list)
 
 class TimeMeasure:
     def __init__(self, tag='default', verbose=False, outfile=sys.stderr):
@@ -60,7 +64,10 @@ def tkde(bbytes):
     decoded = int.from_bytes(bbytes, byteorder='big', signed=False)
     return decoded
 
-initial_tokens = list(map(tken, tokenizer(initial_tokens)['input_ids']))
+if isinstance(initial_tokens, str):
+    initial_tokens = tokenizer(initial_tokens)['input_ids']
+
+initial_tokens = list(map(tken, initial_tokens))
 
 conn = psycopg.connect(postgres_connection, autocommit=False)
 cur = conn.cursor()
@@ -85,7 +92,7 @@ while True:
                 if child not in map_subtree:
                     map_subtree[child] = set()
                 map_subtree[child].add(i)
-            exploded_children.update(set(children[i:i+2] for i in range(0, len(children), 2)))
+            exploded_children.update(splitted_children)
 
         next_token = choose(list(exploded_children), initial_tokens)
 

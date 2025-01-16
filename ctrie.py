@@ -104,7 +104,7 @@ class ModDisjunctiveTrie:
                             if full_child_sequence not in self.cached_bsubtrees_map:
                                 self.cached_bsubtrees_map[full_child_sequence] = set()
                             self.cached_bsubtrees_map[full_child_sequence].add(subtree_id)
-                    exploded_children.update(set(children[i:i+2] for i in range(0, len(children), 2)))
+                    exploded_children.update(splitted_children)
 
         children_token_ids = list(map(tkde, exploded_children))
         
@@ -148,23 +148,65 @@ class ModDisjunctiveTrie:
             return sum([self.count_leaves(nn) for nn in next_nodes])
 
 class CtrieLogitsProcessor(LogitsProcessor):
-    def __init__(self, ctrie, eos_token = None, tokenizer = None):
+    # initial_state = 'normal' or 'constrained'
+    def __init__(self, ctrie, initial_state = 'normal', switch_pattern = [], end_token = None, tokenizer = None, debug = False):
         self.ctrie = ctrie
         self.sequence = []
+        self.switch_pattern = switch_pattern
         self.prompt = None
-        self.eos_token = eos_token
+        self.end_token = end_token
+        self.current_state = initial_state
+
+        self.debug = debug        
         self.tokenizer = tokenizer # debug
 
+    def seq_endswith(self, seq1, seq2):
+        if len(seq2) == 0:
+            return False
+        subseq1 = seq1[-len(seq2):]
+        return subseq1 == seq2
+
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
-        if self.prompt is None:
-            self.prompt = input_ids[0].tolist()
+        input_sequence = input_ids[0].tolist()
+
+        if self.seq_endswith(input_sequence, self.switch_pattern):
+            self.current_state = 'constrained'
+            if self.debug is not None:
+                print('Switch to constrain generation')
+
+        if self.current_state == 'constrained':
+            # constrained generation
+            scores = self.constrained_generation(input_sequence, scores)
+        else:
+            # normal geneation
+            # scores are not altered
+            pass
         
-        self.sequence = input_ids[0].tolist()[len(self.prompt):] # ignore prompt
+        return scores
+
+    def reset_constrained_generation(self):
+        # reset ctrie
+        self.ctrie.reset_cache()
+        # reset prompt
+        self.prompt = None
+        
+    def constrained_generation(self, input_sequence, scores: torch.FloatTensor):
+        if self.prompt is None: # not always the prompt but what was there before starting constrained generation
+            self.prompt = input_sequence
+        
+        self.sequence = input_sequence[len(self.prompt):] # ignore prompt
 
         possible_tokens = self.ctrie.next_tokens(self.sequence)
-        if not possible_tokens and self.eos_token is not None:
-            # send end of string
-            possible_tokens = [self.eos_token]
+        if not possible_tokens:
+            # end of constrained generation
+            self.current_state = 'normal'
+            if self.end_token is not None:
+                # send end of string
+                possible_tokens = [self.end_token]
+                self.reset_constrained_generation()
+            
+            if self.debug is not None:
+                print('Switch to normal generation')
 
         possible_scores = scores[:, possible_tokens]
 
@@ -174,9 +216,10 @@ class CtrieLogitsProcessor(LogitsProcessor):
             scores[:, possible_tokens] = possible_scores
             constrained_highest_scores = self.tokenizer.convert_ids_to_tokens(scores[0,:].argsort(descending=True)[:10])
             print('normal:', highest_scores)
-            print('consrtained:', constrained_highest_scores)
+            print('constrained:', constrained_highest_scores)
 
         else:
             scores[:,:] = -float('inf')
             scores[:, possible_tokens] = possible_scores
+            
         return scores
