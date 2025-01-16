@@ -37,13 +37,14 @@ class ModDisjunctiveTrie:
 
     #     self.trie = root
 
-    def __init__(self, postgresql_connection):
+    def __init__(self, postgresql_connection, rootkey: int):
         r"""
         A helper class that builds a trie with the words represented in `nested_token_ids`.
         """
 
         self.reset_cache()
         self.postgresql_connection = postgresql_connection
+        self.rootkey = rootkey
 
     def reset_cache(self):
         self.cache_sequence_prefix = []
@@ -51,6 +52,8 @@ class ModDisjunctiveTrie:
         self.reset_subtree_cache()
 
     def seq_startswith(self, seq1, seq2):
+        if len(seq2) == 0:
+            return False
         subseq1 = seq1[:len(seq2)]
         return subseq1 == seq2
 
@@ -58,7 +61,8 @@ class ModDisjunctiveTrie:
         self.cached_bsubtrees = {}
         self.cached_bsubtrees_map = {}
 
-    def next_token(self, current_seq):
+    def next_tokens(self, current_seq):
+        current_seq = [self.rootkey] + current_seq
         encoded_sequence = map(tken, current_seq)
         byte_sequence = b''.join(encoded_sequence)
 
@@ -74,9 +78,11 @@ class ModDisjunctiveTrie:
                 self.reset_subtree_cache()
 
         if self.seq_startswith(current_seq, self.cache_sequence_prefix):
-            return self._next_tokens_from_dict(current_seq)
+            _next_tokens = self._next_tokens_from_dict(current_seq)
         else:
-            return self._next_tokens_from_postgresql(byte_sequence)
+            _next_tokens = self._next_tokens_from_postgresql(byte_sequence)
+
+        return _next_tokens
 
     def _next_tokens_from_postgresql(self, byte_sequence):
         """
@@ -90,16 +96,19 @@ class ModDisjunctiveTrie:
             if len(query_result) > 0:
                 self.reset_cache() # reset to refill again
                 for subtree_id, (children, subtree) in enumerate(query_result):
-                    self.cached_bsubtrees[subtree_id] = subtree
                     splitted_children = set(children[i:i+2] for i in range(0, len(children), 2))
-                    for child in splitted_children:
-                        full_child_sequence = byte_sequence + child
-                        if full_child_sequence not in self.cached_bsubtrees_map:
-                            self.cached_bsubtrees_map[full_child_sequence] = set()
-                        self.cached_bsubtrees_map[full_child_sequence].add(subtree_id)
+                    if subtree is not None:
+                        self.cached_bsubtrees[subtree_id] = subtree
+                        for child in splitted_children:
+                            full_child_sequence = byte_sequence + child
+                            if full_child_sequence not in self.cached_bsubtrees_map:
+                                self.cached_bsubtrees_map[full_child_sequence] = set()
+                            self.cached_bsubtrees_map[full_child_sequence].add(subtree_id)
                     exploded_children.update(set(children[i:i+2] for i in range(0, len(children), 2)))
 
-        return list(exploded_children)
+        children_token_ids = list(map(tkde, exploded_children))
+        
+        return children_token_ids
 
     def _load_merge_subtrees(self, subtrees_list):
         merged_subtree = {}
@@ -139,20 +148,35 @@ class ModDisjunctiveTrie:
             return sum([self.count_leaves(nn) for nn in next_nodes])
 
 class CtrieLogitsProcessor(LogitsProcessor):
-    def __init__(self, ctrie):
+    def __init__(self, ctrie, eos_token = None, tokenizer = None):
         self.ctrie = ctrie
         self.sequence = []
         self.prompt = None
+        self.eos_token = eos_token
+        self.tokenizer = tokenizer # debug
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
         if self.prompt is None:
             self.prompt = input_ids[0].tolist()
-
+        
         self.sequence = input_ids[0].tolist()[len(self.prompt):] # ignore prompt
 
         possible_tokens = self.ctrie.next_tokens(self.sequence)
+        if not possible_tokens and self.eos_token is not None:
+            # send end of string
+            possible_tokens = [self.eos_token]
+
         possible_scores = scores[:, possible_tokens]
 
-        scores[:,:] = -float('inf')
-        scores[:, possible_tokens] = possible_scores
-        return scores # Minimally working
+        if self.tokenizer is not None:
+            highest_scores = self.tokenizer.convert_ids_to_tokens(scores[0,:].argsort(descending=True)[:10])
+            scores[:,:] = -float('inf')
+            scores[:, possible_tokens] = possible_scores
+            constrained_highest_scores = self.tokenizer.convert_ids_to_tokens(scores[0,:].argsort(descending=True)[:10])
+            print('normal:', highest_scores)
+            print('consrtained:', constrained_highest_scores)
+
+        else:
+            scores[:,:] = -float('inf')
+            scores[:, possible_tokens] = possible_scores
+        return scores
