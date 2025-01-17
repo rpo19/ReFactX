@@ -37,7 +37,7 @@ class ModDisjunctiveTrie:
 
     #     self.trie = root
 
-    def __init__(self, postgresql_connection, rootkey: int):
+    def __init__(self, rootkey: int, postgresql_connection = None):
         r"""
         A helper class that builds a trie with the words represented in `nested_token_ids`.
         """
@@ -77,7 +77,7 @@ class ModDisjunctiveTrie:
                 self.cache_sequence_prefix = current_seq[:-1] # todo debug
                 self.reset_subtree_cache()
 
-        if self.seq_startswith(current_seq, self.cache_sequence_prefix):
+        if self.postgresql_connection is None or self.seq_startswith(current_seq, self.cache_sequence_prefix):
             _next_tokens = self._next_tokens_from_dict(current_seq)
         else:
             _next_tokens = self._next_tokens_from_postgresql(byte_sequence)
@@ -106,7 +106,7 @@ class ModDisjunctiveTrie:
                             self.cached_bsubtrees_map[full_child_sequence].add(subtree_id)
                     exploded_children.update(splitted_children)
 
-        children_token_ids = list(map(tkde, exploded_children))
+        children_token_ids = set(map(tkde, exploded_children))
         
         return children_token_ids
 
@@ -127,9 +127,12 @@ class ModDisjunctiveTrie:
         subtree_seq = current_seq[len(self.cache_sequence_prefix):]
 
         for current_token in subtree_seq:
+            if current_token not in start:
+                start = {}
+                break
             start = start[current_token]
 
-        next_tokens = list(start.keys())
+        next_tokens = set(start.keys())
 
         return next_tokens
 
@@ -138,18 +141,21 @@ class ModDisjunctiveTrie:
 
         return len(next_tokens) == 0
 
-    def count_leaves(self, root = None):
-        if root is None:
-            root = self.trie
-        next_nodes = list(root.values())
-        if len(next_nodes) == 0:
-            return 1
-        else:
-            return sum([self.count_leaves(nn) for nn in next_nodes])
+    def append(self, nested_token_ids): # : List[List[int]]):
+        # useful to populate in-memory dictionary when not using postgresql
+        root = self.cached_tree
+        for token_ids in tqdm(nested_token_ids):
+            level = root
+            for tidx, token_id in enumerate(token_ids):
+                if token_id not in level:
+                    level[token_id] = {}
+                    
+                level = level[token_id]
 
 class CtrieLogitsProcessor(LogitsProcessor):
     # initial_state = 'normal' or 'constrained'
-    def __init__(self, ctrie, initial_state = 'normal', switch_pattern = [], end_token = None, tokenizer = None, debug = False):
+    # blacklist_ctrie: saves generated facts and avoids generating again the same fact
+    def __init__(self, ctrie, initial_state = 'normal', switch_pattern = [], end_token = None, tokenizer = None):
         self.ctrie = ctrie
         self.sequence = []
         self.switch_pattern = switch_pattern
@@ -157,7 +163,6 @@ class CtrieLogitsProcessor(LogitsProcessor):
         self.end_token = end_token
         self.current_state = initial_state
 
-        self.debug = debug        
         self.tokenizer = tokenizer # debug
 
     def seq_endswith(self, seq1, seq2):
@@ -171,7 +176,7 @@ class CtrieLogitsProcessor(LogitsProcessor):
 
         if self.seq_endswith(input_sequence, self.switch_pattern):
             self.current_state = 'constrained'
-            if self.debug is not None:
+            if self.tokenizer is not None:
                 print('Switch to constrain generation')
 
         if self.current_state == 'constrained':
@@ -197,7 +202,8 @@ class CtrieLogitsProcessor(LogitsProcessor):
         self.sequence = input_sequence[len(self.prompt):] # ignore prompt
 
         possible_tokens = self.ctrie.next_tokens(self.sequence)
-        if not possible_tokens:
+        
+        if len(possible_tokens) == 0:
             # end of constrained generation
             self.current_state = 'normal'
             if self.end_token is not None:
@@ -205,11 +211,14 @@ class CtrieLogitsProcessor(LogitsProcessor):
                 possible_tokens = [self.end_token]
                 self.reset_constrained_generation()
             
-            if self.debug is not None:
+            if self.tokenizer is not None:
+                print('CGenerated:', self.tokenizer.decode(self.sequence)) # TODO add in a blacklist tree
                 print('Switch to normal generation')
 
+        possible_tokens = list(possible_tokens)
         possible_scores = scores[:, possible_tokens]
 
+        '''
         if self.tokenizer is not None:
             highest_scores = self.tokenizer.convert_ids_to_tokens(scores[0,:].argsort(descending=True)[:10])
             scores[:,:] = -float('inf')
@@ -219,7 +228,8 @@ class CtrieLogitsProcessor(LogitsProcessor):
             print('constrained:', constrained_highest_scores)
 
         else:
-            scores[:,:] = -float('inf')
-            scores[:, possible_tokens] = possible_scores
+        '''
+        scores[:,:] = -float('inf')
+        scores[:, possible_tokens] = possible_scores
             
         return scores
