@@ -152,6 +152,26 @@ class ModDisjunctiveTrie:
                     
                 level = level[token_id]
 
+class BeamAwareLogitsProcessor(LogitsProcessor):
+    def __init__(self, logitProcessorGenerator):
+        self.logitProcessorGenerator = logitProcessorGenerator
+        self.childlogitsProcessors = []
+
+    def initialize(self, number_of_children):
+        for i in range(number_of_children):
+            self.childlogitsProcessors.append(next(self.logitProcessorGenerator))
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
+        if len(self.childlogitsProcessors) == 0:
+            self.initialize(input_ids.shape[0])
+
+        scores_list = []
+        for i, childlogitsProcessor in enumerate(self.childlogitsProcessors):
+            scores_list.append(childlogitsProcessor(input_ids[[i],:], scores[[i],:]))
+
+        scores = torch.cat(scores_list, dim=0)
+        return scores
+
 class CtrieLogitsProcessor(LogitsProcessor):
     # initial_state = 'normal' or 'constrained'
     # blacklist_ctrie: saves generated facts and avoids generating again the same fact
@@ -172,6 +192,7 @@ class CtrieLogitsProcessor(LogitsProcessor):
         return subseq1 == seq2
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
+
         input_sequence = input_ids[0].tolist()
 
         if self.seq_endswith(input_sequence, self.switch_pattern):
