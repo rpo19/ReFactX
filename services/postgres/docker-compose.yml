@@ -1,0 +1,15 @@
+services:
+  postgres:
+    restart: $RESTART_POLICY
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: $POSTGRES_PASSWORD
+    ports:
+      - 5432:5432
+    volumes:
+      #- /mnt/data/rpozzi/postgres_wikidata:/var/lib/postgresql/data
+      #- /mnt/data/rpozzi/postgres_ltree:/var/lib/postgresql/data
+      #- /mnt/secondment/postgres_v2_data:/var/lib/postgresql/data
+      - ./postgres_v2_data:/var/lib/postgresql/data
+      - "./init.sql:/docker-entrypoint-initdb.d/init.sql"
+
