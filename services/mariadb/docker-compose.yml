@@ -1,0 +1,10 @@
+services:
+  mariadb:
+    image: mariadb
+    restart: no
+    environment:
+      MARIADB_ROOT_PASSWORD: example
+    ports:
+      - 127.0.0.1:3306:3306
+    volumes:
+      - ./data:/var/lib/mysql
