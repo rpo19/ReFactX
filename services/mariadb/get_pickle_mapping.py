@@ -22,7 +22,7 @@ cursor = connection.cursor()
 cursor.execute(query)
 
 # Populate the dictionary
-wikidata_dict = {row[0]: {'title': row[1].decode(), 'short_desc': row[2].decode() for row in cursor.fetchall()}
+wikidata_dict = {row[0]: {'title': row[1].decode(), 'short_desc': row[2].decode()} for row in cursor.fetchall()}
 
 print(f"Retrieved {len(wikidata_dict)} entries.")
 print(list(wikidata_dict.items())[:5])
