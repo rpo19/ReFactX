@@ -49,6 +49,8 @@ with TimeMeasure(tag='Loading tokenizer', verbose=True) as tm:
 def choose(children, initial_tokens):
     if len(initial_tokens) > 0:
         choice = initial_tokens.pop(0)
+        if isinstance(choice, bytes) and isinstance(next(iter(children)), int):
+            choice = tkde(choice)
         assert choice in children
     else:
         choice = random.choice(children)
