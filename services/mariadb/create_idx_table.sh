@@ -9,7 +9,7 @@ SELECT
     CAST(SUBSTRING(page_props.pp_value, 2) AS INT) AS wikidata_number,  -- Casts the numeric part to integer
     page.page_title,
     page.page_is_redirect,
-    page_props_shortdesc.pp_value AS wikidata_shortdesc  -- Retrieves the short description from the second join
+    page_props_shortdesc.pp_value AS wikibase_shortdesc  -- Retrieves the short description from the second join
 FROM
     page
 INNER JOIN

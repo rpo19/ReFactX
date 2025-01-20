@@ -22,7 +22,7 @@ import re
 with gzip.open('/workspace/data/filtered_props_dict.gz', 'r') as fd:
     prop_labels = json.load(fd)
 
-with open('/workspace/data/ents_truthy_fix.pickle', 'rb') as fd:
+with open('/workspace/data/ents_truthy_fix.pickle', 'rb') as fd: # TODO update
     ent_labels = pickle.load(fd)
 
 wiki_dump = '/workspace/data/latest-truthy.nt.bz2'
@@ -30,7 +30,7 @@ wiki_dump = '/workspace/data/latest-truthy.nt.bz2'
 outfile = '/workspace/data/verbalized.latest-truthy.nt.bz2'
 
 triple_regex = re.compile(r'<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>\s+'
-r'<http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)>\s+'
+r'<(?:http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)|http:\/\/schema\.org\/description)>\s+' # added schema description # todo test
 r'(?:<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>|"([^"]+)"@en)\s+\.')
 
 tqdm_params = {'total': 7923563616}
