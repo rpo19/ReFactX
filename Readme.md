@@ -1,17 +1,10 @@
-## Download dump
-Go to https://dumps.wikimedia.org/wikidatawiki/entities/ and download `latest-truthy.nt.bz2`.
+## Download dumps
+- Go to https://dumps.wikimedia.org/wikidatawiki/entities/ and download `latest-truthy.nt.bz2`.
+- Go to https://dumps.wikimedia.org/enwiki/20241220/ and download `enwiki-20241220-page.sql.gz` and `enwiki-20241220-page_props.sql.gz`
 
-## Filter labels from the dump
-We filter for labels, altLabels, and descriptions
+## Create Label mappings
 
-```
-bzgrep -P '(http://www\\.w3\\.org/2000/01/rdf-schema#label|http://www\\.w3\\.org/2004/02/skos/core#altLabel|http://schema\\.org/description).*\\@en\s+.' latest-truthy.nt.bz2 | pv | gzip -c > /workspace/data/latest-truthy-labels-descriptions.nt.gz
-```
-
-## Load the labels into a pickle
-```
-python load_labels_truthy_fix.py
-```
+Refer to the readme in services/mariadb: [Readme.md](services/mariadb/Readme.md)
 
 ## Download property labels
 Go to https://hay.toolforge.org/propbrowse/ and Download all properties as JSON.
@@ -21,6 +14,10 @@ Use the notebook `filter_props.ipynb`
 
 ## Verbalize the triples using the labels
 ```
+# TODO adapt to new label_mappings
+# TODO solve unicode problem
+# TODO keep description
+# TODO keep wikibase-shortdesc ?
 python verbalize_triples.py
 ```
 
