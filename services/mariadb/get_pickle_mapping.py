@@ -1,4 +1,4 @@
-import mariadb
+import pymysql
 import pickle
 
 # Database connection details
@@ -11,20 +11,18 @@ db_config = {
 
 # Query to retrieve data
 query = """
-SELECT pp_value AS wikidata_qid, page_title
-FROM page, page_props
-WHERE page_id = pp_page AND pp_propname = 'wikibase_item';
+SELECT wikidata_number, page_title FROM mappings_plus WHERE wikidata_prefix = 'Q'; -- Only for entities
 """
 
 # Connect to the database and execute the query
-connection = mariadb.connect(**db_config)
+connection = pymysql.connect(**db_config)
 cursor = connection.cursor()
 
 # Execute the query
 cursor.execute(query)
 
 # Populate the dictionary
-wikidata_dict = {row[0]: row[1] for row in cursor.fetchall()}
+wikidata_dict = {row[0]: row[1].decode() for row in cursor.fetchall()}
 
 print(f"Retrieved {len(wikidata_dict)} entries.")
 print(list(wikidata_dict.items())[:5])
