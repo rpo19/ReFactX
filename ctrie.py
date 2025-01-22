@@ -2,6 +2,7 @@ from transformers.generation.logits_process import LogitsProcessor
 import torch
 import pickle
 from mergedeep import merge
+import copy
 
 def tken(token):
     # token encode
@@ -45,6 +46,14 @@ class ModDisjunctiveTrie:
         self.reset_cache()
         self.postgresql_connection = postgresql_connection
         self.rootkey = rootkey
+
+    def clone(self, other):
+        self.cache_sequence_prefix = other.cache_sequence_prefix.copy()
+        self.cached_tree = copy.deepcopy(other.cached_tree)
+        self.cached_bsubtrees = copy.deepcopy(other.cached_bsubtrees)
+        self.cached_bsubtrees_map = copy.deepcopy(other.cached_bsubtrees_map)
+        self.postgresql_connection = other.postgresql_connection
+        self.rootkey = other.rootkey
 
     def reset_cache(self):
         self.cache_sequence_prefix = []
@@ -161,13 +170,46 @@ class BeamAwareLogitsProcessor(LogitsProcessor):
         for i in range(number_of_children):
             self.childlogitsProcessors.append(next(self.logitProcessorGenerator))
 
+    def _find_line_starting_with(self, matrix, sequence):
+        possible_ids = set(torch.where((matrix == sequence).all(dim=1))[0].tolist())
+        return possible_ids
+
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
         if len(self.childlogitsProcessors) == 0:
             self.initialize(input_ids.shape[0])
 
+        # TODO non ha senso farlo se non c'è constraint
+        # le sequences possono avere lunghezze diverse (triple lunghezza diversa, entrata in constrained in momenti diversi)
+        # problema: map input_ids to the correct processor
+        # for each input_id:
+            # find processor with matching sequence
+            # then copy it (could be duplicated)
+        if len(self.childlogitsProcessors[0].prompt) > 0:
+            matches = [None] * input_ids.shape[0]
+            for i in range(input_ids.shape[0]):
+                for c_num, childlogitsProcessor in enumerate(self.childlogitsProcessors):
+                    if input_ids[i,len(self.childlogitsProcessors[0].prompt):-1].tolist() == childlogitsProcessor.sequence:
+                        matches[i] = c_num
+                        break
+        else:
+            matches = list(range(input_ids.shape[0]))
+
+        print(matches)
+
         scores_list = []
-        for i, childlogitsProcessor in enumerate(self.childlogitsProcessors):
+        new_childlogitsProcessors = []
+        for i, c_num in enumerate(matches):
+            if c_num is not None:
+                childlogitsProcessor = self.childlogitsProcessors[c_num].copy()
+            else:
+                childlogitsProcessor = next(self.logitProcessorGenerator)
+            if childlogitsProcessor.tokenizer:
+                print(i, childlogitsProcessor, childlogitsProcessor.current_state)
+
             scores_list.append(childlogitsProcessor(input_ids[[i],:], scores[[i],:]))
+            new_childlogitsProcessors.append(childlogitsProcessor)
+
+        self.childlogitsProcessors = new_childlogitsProcessors
 
         scores = torch.cat(scores_list, dim=0)
         return scores
@@ -179,11 +221,24 @@ class CtrieLogitsProcessor(LogitsProcessor):
         self.ctrie = ctrie
         self.sequence = []
         self.switch_pattern = switch_pattern
-        self.prompt = None
+        self.prompt = []
         self.end_token = end_token
         self.current_state = initial_state
 
         self.tokenizer = tokenizer # debug
+
+    def copy(self):
+        new_ctrie = CtrieLogitsProcessor(ModDisjunctiveTrie(0))
+        new_ctrie.clone(self)
+        return new_ctrie
+
+    def clone(self, other):
+        self.ctrie.clone(other.ctrie)
+        self.sequence = other.sequence.copy()
+        self.switch_pattern = other.switch_pattern
+        self.prompt = other.prompt
+        self.end_token = other.end_token
+        self.current_state = other.current_state
 
     def seq_endswith(self, seq1, seq2):
         if len(seq2) == 0:
@@ -214,10 +269,10 @@ class CtrieLogitsProcessor(LogitsProcessor):
         # reset ctrie
         self.ctrie.reset_cache()
         # reset prompt
-        self.prompt = None
+        self.prompt = []
         
     def constrained_generation(self, input_sequence, scores: torch.FloatTensor):
-        if self.prompt is None: # not always the prompt but what was there before starting constrained generation
+        if len(self.prompt) == 0: # not always the prompt but what was there before starting constrained generation
             self.prompt = input_sequence
         
         self.sequence = input_sequence[len(self.prompt):] # ignore prompt
@@ -226,6 +281,9 @@ class CtrieLogitsProcessor(LogitsProcessor):
         
         if len(possible_tokens) == 0:
             # end of constrained generation
+            if self.sequence[-1] != 869:
+                import pdb
+                pdb.set_trace()
             self.current_state = 'normal'
             if self.end_token is not None:
                 # send end of string
