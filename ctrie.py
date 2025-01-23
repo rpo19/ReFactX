@@ -2,96 +2,59 @@ from transformers.generation.logits_process import LogitsProcessor
 import torch
 import pickle
 from mergedeep import merge
-import copy
 
-def tken(token):
-    # token encode
-    encoded = token.to_bytes(2, byteorder='big', signed=False)
-    return encoded
-
-def tkde(bbytes):
-    # token decode
-    decoded = int.from_bytes(bbytes, byteorder='big', signed=False)
-    return decoded
-
-class ModDisjunctiveTrie:
-    # def __init__(self, nested_token_ids: List[List[int]], no_subsets=True):
-    #     r"""
-    #     A helper class that builds a trie with the words represented in `nested_token_ids`.
-    #     """
-    #     self.max_height = max([len(one) for one in nested_token_ids])
-
-    #     root = {}
-    #     for token_ids in nested_token_ids:
-    #         level = root
-    #         for tidx, token_id in enumerate(token_ids):
-    #             if token_id not in level:
-    #                 level[token_id] = {}
-
-    #             level = level[token_id]
-
-    #     if no_subsets and self.has_subsets(root, nested_token_ids):
-    #         raise ValueError(
-    #             "Each list in `nested_token_ids` can't be a complete subset of another list, but is"
-    #             f" {nested_token_ids}."
-    #         )
-
-    #     self.trie = root
-
-    def __init__(self, rootkey: int, postgresql_connection = None):
-        r"""
-        A helper class that builds a trie with the words represented in `nested_token_ids`.
-        """
-
-        self.reset_cache()
-        self.postgresql_connection = postgresql_connection
+class PostgresTrieIndex:
+    def __init__(self, rootkey : int, postgresql_connection, switch_parameter : int):
         self.rootkey = rootkey
+        self.postgresql_connection = postgresql_connection
+        self.switch_parameter = switch_parameter+1 # counting the rootkey
 
-    def clone(self, other):
-        self.cache_sequence_prefix = other.cache_sequence_prefix.copy()
-        self.cached_tree = copy.deepcopy(other.cached_tree)
-        self.cached_bsubtrees = copy.deepcopy(other.cached_bsubtrees)
-        self.cached_bsubtrees_map = copy.deepcopy(other.cached_bsubtrees_map)
-        self.postgresql_connection = other.postgresql_connection
-        self.rootkey = other.rootkey
+    def tken(self, token):
+        # token encode
+        encoded = token.to_bytes(2, byteorder='big', signed=False)
+        return encoded
 
-    def reset_cache(self):
-        self.cache_sequence_prefix = []
-        self.cached_tree = {}
-        self.reset_subtree_cache()
-
-    def seq_startswith(self, seq1, seq2):
-        if len(seq2) == 0:
-            return False
-        subseq1 = seq1[:len(seq2)]
-        return subseq1 == seq2
-
-    def reset_subtree_cache(self):
-        self.cached_bsubtrees = {}
-        self.cached_bsubtrees_map = {}
+    def tkde(self, bbytes):
+        # token decode
+        decoded = int.from_bytes(bbytes, byteorder='big', signed=False)
+        return decoded
 
     def next_tokens(self, current_seq):
         current_seq = [self.rootkey] + current_seq
-        encoded_sequence = map(tken, current_seq)
-        byte_sequence = b''.join(encoded_sequence)
+        postgres_seq = current_seq[:self.switch_parameter] # max length of sequences indexed in postgres
 
-        if byte_sequence in self.cached_bsubtrees_map:
-            # if the chosen token has the subtree cached in memory
-            # load the subtree and proceed in memory
-            if len(self.cached_tree) == 0:
-                # need to load and merge the matching subtrees
-                subtrees_ids = self.cached_bsubtrees_map[byte_sequence]
-                subtrees_list = (self.cached_bsubtrees[id] for id in subtrees_ids)
-                self._load_merge_subtrees(subtrees_list)
-                self.cache_sequence_prefix = current_seq[:-1] # todo debug
-                self.reset_subtree_cache()
+        postgres_byte_seq = b''.join(map(self.tken, postgres_seq))
+        _next_tokens, subtree = self._next_tokens_from_postgresql(postgres_byte_seq)
 
-        if self.postgresql_connection is None or self.seq_startswith(current_seq, self.cache_sequence_prefix):
-            _next_tokens = self._next_tokens_from_dict(current_seq)
-        else:
-            _next_tokens = self._next_tokens_from_postgresql(byte_sequence)
+        if len(current_seq) >= self.switch_parameter:
+            # continue in the subtree
+            subtree_seq = current_seq[self.switch_parameter:]
+
+            _next_tokens = self._next_tokens_from_subtree(subtree, subtree_seq)
 
         return _next_tokens
+
+    def _next_tokens_from_subtree(self, subtree, subtree_seq):
+        """
+        The next possible tokens that will progress the trie, given the current sequence of tokens in `current_seq`.
+        """
+        start = subtree
+
+        for current_token in subtree_seq:
+            if current_token not in start:
+                start = {}
+                break
+            start = start[current_token]
+
+        return set(start.keys())
+
+    def _load_merge_subtrees(self, subtrees_list):
+        merged_subtree = {}
+        for bsubtree in subtrees_list:
+            if bsubtree is not None:
+                subtree = pickle.loads(bsubtree)
+                merge(merged_subtree, subtree)
+        return merged_subtree
 
     def _next_tokens_from_postgresql(self, byte_sequence):
         """
@@ -101,214 +64,100 @@ class ModDisjunctiveTrie:
             cursor.execute('SELECT children, subtree FROM ctrie WHERE key = %s;', (byte_sequence,))
             query_result = cursor.fetchall()
 
-            exploded_children = set()
-            if len(query_result) > 0:
-                self.reset_cache() # reset to refill again
-                for subtree_id, (children, subtree) in enumerate(query_result):
-                    splitted_children = set(children[i:i+2] for i in range(0, len(children), 2))
-                    if subtree is not None:
-                        self.cached_bsubtrees[subtree_id] = subtree
-                        for child in splitted_children:
-                            full_child_sequence = byte_sequence + child
-                            if full_child_sequence not in self.cached_bsubtrees_map:
-                                self.cached_bsubtrees_map[full_child_sequence] = set()
-                            self.cached_bsubtrees_map[full_child_sequence].add(subtree_id)
-                    exploded_children.update(splitted_children)
-
-        children_token_ids = set(map(tkde, exploded_children))
-        
-        return children_token_ids
-
-    def _load_merge_subtrees(self, subtrees_list):
+        exploded_children = set()
         merged_subtree = {}
-        for bsubtree in subtrees_list:
-            if bsubtree is not None:
-                subtree = pickle.loads(bsubtree)
-                merge(merged_subtree, subtree)
-        self.cached_tree = merged_subtree
+        subtrees_list = []
+        if len(query_result) > 0:
+            for children, subtree in query_result:
+                splitted_children = set(children[i:i+2] for i in range(0, len(children), 2))
+                exploded_children.update(splitted_children)
+                if subtree:
+                    subtrees_list.append(subtree)
 
-    def _next_tokens_from_dict(self, current_seq):
-        """
-        The next possible tokens that will progress the trie, given the current sequence of tokens in `current_seq`.
-        """
-        start = self.cached_tree
+        merged_subtree = self._load_merge_subtrees(subtrees_list)
+        children_token_ids = set(map(self.tkde, exploded_children))
 
-        subtree_seq = current_seq[len(self.cache_sequence_prefix):]
+        return children_token_ids, merged_subtree
 
-        for current_token in subtree_seq:
-            if current_token not in start:
-                start = {}
-                break
-            start = start[current_token]
-
-        next_tokens = set(start.keys())
-
-        return next_tokens
-
-    def reached_leaf(self, current_seq):
-        next_tokens = self.next_tokens(current_seq)
-
-        return len(next_tokens) == 0
-
-    def append(self, nested_token_ids): # : List[List[int]]):
-        # useful to populate in-memory dictionary when not using postgresql
-        root = self.cached_tree
-        for token_ids in tqdm(nested_token_ids):
-            level = root
-            for tidx, token_id in enumerate(token_ids):
-                if token_id not in level:
-                    level[token_id] = {}
-                    
-                level = level[token_id]
-
-class BeamAwareLogitsProcessor(LogitsProcessor):
-    def __init__(self, logitProcessorGenerator):
-        self.logitProcessorGenerator = logitProcessorGenerator
-        self.childlogitsProcessors = []
-
-    def initialize(self, number_of_children):
-        for i in range(number_of_children):
-            self.childlogitsProcessors.append(next(self.logitProcessorGenerator))
-
-    def _find_line_starting_with(self, matrix, sequence):
-        possible_ids = set(torch.where((matrix == sequence).all(dim=1))[0].tolist())
-        return possible_ids
-
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
-        if len(self.childlogitsProcessors) == 0:
-            self.initialize(input_ids.shape[0])
-
-        # TODO non ha senso farlo se non c'è constraint
-        # le sequences possono avere lunghezze diverse (triple lunghezza diversa, entrata in constrained in momenti diversi)
-        # problema: map input_ids to the correct processor
-        # for each input_id:
-            # find processor with matching sequence
-            # then copy it (could be duplicated)
-        if len(self.childlogitsProcessors[0].prompt) > 0:
-            matches = [None] * input_ids.shape[0]
-            for i in range(input_ids.shape[0]):
-                for c_num, childlogitsProcessor in enumerate(self.childlogitsProcessors):
-                    if input_ids[i,len(self.childlogitsProcessors[0].prompt):-1].tolist() == childlogitsProcessor.sequence:
-                        matches[i] = c_num
-                        break
-        else:
-            matches = list(range(input_ids.shape[0]))
-
-        print(matches)
-
-        scores_list = []
-        new_childlogitsProcessors = []
-        for i, c_num in enumerate(matches):
-            if c_num is not None:
-                childlogitsProcessor = self.childlogitsProcessors[c_num].copy()
-            else:
-                childlogitsProcessor = next(self.logitProcessorGenerator)
-            if childlogitsProcessor.tokenizer:
-                print(i, childlogitsProcessor, childlogitsProcessor.current_state)
-
-            scores_list.append(childlogitsProcessor(input_ids[[i],:], scores[[i],:]))
-            new_childlogitsProcessors.append(childlogitsProcessor)
-
-        self.childlogitsProcessors = new_childlogitsProcessors
-
-        scores = torch.cat(scores_list, dim=0)
-        return scores
-
-class CtrieLogitsProcessor(LogitsProcessor):
-    # initial_state = 'normal' or 'constrained'
-    # blacklist_ctrie: saves generated facts and avoids generating again the same fact
-    def __init__(self, ctrie, initial_state = 'normal', switch_pattern = [], end_token = None, tokenizer = None):
-        self.ctrie = ctrie
-        self.sequence = []
+class ConstrainedLogitsProcessor(LogitsProcessor):
+    def __init__(self, index, switch_pattern, end_token):
+        self.index = index
         self.switch_pattern = switch_pattern
-        self.prompt = []
+        self.switch_pattern_reversed = list(reversed(self.switch_pattern))
         self.end_token = end_token
-        self.current_state = initial_state
 
-        self.tokenizer = tokenizer # debug
+    def _find_sequence_index(self, lst, seq):
+        """Find the first index of the sequence in the list."""
+        for i in range(len(lst) - len(seq) + 1):
+            if lst[i:i+len(seq)] == seq:
+                return i
+        raise ValueError(f"{seq} is not in list")
 
-    def copy(self):
-        new_ctrie = CtrieLogitsProcessor(ModDisjunctiveTrie(0))
-        new_ctrie.clone(self)
-        return new_ctrie
+    def _find_if_constrained(self, sequence):
+        """
+        Given a sequence it analyze the sequence in reverse:
+        if the switch_pattern is found first (starting from the end of the sequence) it means we are in CONSTRAINED GENERATION
+        otherwise if the end_token is found first we are in NORMAL GENERATION
+        """
+        reversed_sequence = list(reversed(sequence))
+        try:
+            end_token_index = reversed_sequence.index(self.end_token)
+        except ValueError:
+            end_token_index = None
 
-    def clone(self, other):
-        self.ctrie.clone(other.ctrie)
-        self.sequence = other.sequence.copy()
-        self.switch_pattern = other.switch_pattern
-        self.prompt = other.prompt
-        self.end_token = other.end_token
-        self.current_state = other.current_state
+        try:
+            switch_pattern_index = self._find_sequence_index(reversed_sequence, self.switch_pattern_reversed)
+        except ValueError:
+            switch_pattern_index = None
 
-    def seq_endswith(self, seq1, seq2):
-        if len(seq2) == 0:
-            return False
-        subseq1 = seq1[-len(seq2):]
-        return subseq1 == seq2
+        if switch_pattern_index is None and end_token_index is None:
+            constrained = False
+        elif end_token_index is None or switch_pattern_index < end_token_index:
+            # switch pattern is last generated
+            constrained = True
+        elif switch_pattern_index is None or end_token_index < switch_pattern_index:
+            constrained =  False
+        else:
+            raise Exception("Should not happen. Note that this implementation assumes nor switch_pattern not end_token can be inside the triples.")
+
+        constrain_generation_sequence = []
+        if constrained:
+            constrain_generation_sequence = sequence[len(sequence)-switch_pattern_index:]
+
+        return constrained, constrain_generation_sequence
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
 
         input_sequence = input_ids[0].tolist()
 
-        if self.seq_endswith(input_sequence, self.switch_pattern):
-            self.current_state = 'constrained'
-            if self.tokenizer is not None:
-                print('Switch to constrain generation')
+        for i in range(input_ids.shape[0]):
+            input_sequence = input_ids[i].tolist()
 
-        if self.current_state == 'constrained':
-            # constrained generation
-            scores = self.constrained_generation(input_sequence, scores)
-        else:
-            # normal geneation
-            # scores are not altered
-            pass
-        
+            constrained, constrain_generation_sequence = self._find_if_constrained(input_sequence)
+
+            if constrained:
+                # constrained generation
+                scores[[i],:] = self.constrained_generation(constrain_generation_sequence, scores[[i],:])
+            # else:
+            #     # normal geneation
+            #     # scores are not altered
+            #     pass
+
         return scores
 
-    def reset_constrained_generation(self):
-        # reset ctrie
-        self.ctrie.reset_cache()
-        # reset prompt
-        self.prompt = []
-        
     def constrained_generation(self, input_sequence, scores: torch.FloatTensor):
-        if len(self.prompt) == 0: # not always the prompt but what was there before starting constrained generation
-            self.prompt = input_sequence
-        
-        self.sequence = input_sequence[len(self.prompt):] # ignore prompt
 
-        possible_tokens = self.ctrie.next_tokens(self.sequence)
-        
+        possible_tokens = self.index.next_tokens(input_sequence)
+
         if len(possible_tokens) == 0:
             # end of constrained generation
-            if self.sequence[-1] != 869:
-                import pdb
-                pdb.set_trace()
-            self.current_state = 'normal'
-            if self.end_token is not None:
-                # send end of string
-                possible_tokens = [self.end_token]
-                self.reset_constrained_generation()
-            
-            if self.tokenizer is not None:
-                print('CGenerated:', self.tokenizer.decode(self.sequence)) # TODO add in a blacklist tree
-                print('Switch to normal generation')
+            # send end of string
+            possible_tokens = [self.end_token]
 
         possible_tokens = list(possible_tokens)
         possible_scores = scores[:, possible_tokens]
 
-        '''
-        if self.tokenizer is not None:
-            highest_scores = self.tokenizer.convert_ids_to_tokens(scores[0,:].argsort(descending=True)[:10])
-            scores[:,:] = -float('inf')
-            scores[:, possible_tokens] = possible_scores
-            constrained_highest_scores = self.tokenizer.convert_ids_to_tokens(scores[0,:].argsort(descending=True)[:10])
-            print('normal:', highest_scores)
-            print('constrained:', constrained_highest_scores)
-
-        else:
-        '''
         scores[:,:] = -float('inf')
         scores[:, possible_tokens] = possible_scores
-            
+
         return scores

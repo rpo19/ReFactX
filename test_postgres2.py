@@ -117,7 +117,7 @@ while True:
                  # from now on the token_ids are already int. no need to tkde
                  desentence = list(map(tkde,sentence))
                  print(tokenizer.decode(desentence))
-                 print('.\nReached the switch level. Proceeding with the in-memory sub-tree.\n')
+                 print('.\nReached the switch level at len {}. Proceeding with the in-memory sub-tree.\n'.format(len(sentence)))
                  level = merged_subtree[tkde(next_token)]
                  children = list(level.keys())
                  while len(children) > 0:
