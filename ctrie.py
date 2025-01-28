@@ -1,13 +1,17 @@
 from transformers.generation.logits_process import LogitsProcessor
+from transformers import StoppingCriteria
 import torch
 import pickle
 from mergedeep import merge
+from psycopg import sql
 
 class PostgresTrieIndex:
-    def __init__(self, rootkey : int, postgresql_connection, switch_parameter : int):
+    def __init__(self, rootkey : int, postgresql_connection, switch_parameter : int, table_name):
         self.rootkey = rootkey
         self.postgresql_connection = postgresql_connection
         self.switch_parameter = switch_parameter+1 # counting the rootkey
+        self.table_name = table_name
+        self.select_query = sql.SQL('SELECT children, subtree FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
 
     def tken(self, token):
         # token encode
@@ -61,7 +65,7 @@ class PostgresTrieIndex:
         The next possible tokens that will progress the trie, given the current sequence of tokens in `current_seq`.
         """
         with self.postgresql_connection.cursor() as cursor:
-            cursor.execute('SELECT children, subtree FROM ctrie WHERE key = %s;', (byte_sequence,))
+            cursor.execute(self.select_query, (byte_sequence,))
             query_result = cursor.fetchall()
 
         exploded_children = set()
