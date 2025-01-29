@@ -165,3 +165,60 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         scores[:, possible_tokens] = possible_scores
 
         return scores
+
+class GetAnswer(StoppingCriteria):
+    # todo: do not in reverse. consider multiple samples in the batch
+    # terminate when all batches generate end token?
+    # strategy=all strategy=any. strategy can be all or any python functions
+    def __init__(self, prompt, answer, eofanswer, early_stop_token, strategy=all):
+        self.prompt = prompt
+        self.answer_reversed = list(reversed(answer))
+        print(self.answer_reversed)
+        self.eofanswer = eofanswer
+        self.early_stop_token = early_stop_token
+        self.strategy = strategy
+
+    def __call__(self, input_ids, scores, **kwargs):
+        input_ids = input_ids[:,len(self.prompt):] # remove prompt
+        outcome = self.strategy(
+            self.get_answer(input_ids[i].tolist(), return_answer=False) for i in range(input_ids.shape[0]))
+
+        if outcome:
+            pdb.set_trace()
+
+        return outcome
+
+    def get_answer(self, sequence, return_answer=True):
+        reversed_seq = reversed(sequence)
+        eofanswer_count = 0
+        answer_cursor = 0
+        answer_tokens = []
+        for token in reversed_seq:
+            if token == self.answer_reversed[answer_cursor]:
+                #print(token, '==', self.answer_reversed[answer_cursor], answer_cursor, len(self.answer_reversed))
+                answer_cursor += 1
+                if answer_cursor >= len(self.answer_reversed):
+                    # found "Answer:"
+                    if eofanswer_count >= 1:
+                        # found the entire answer
+                        #print('A')
+                        outcome = (True, answer_tokens) if return_answer else False
+                        return outcome
+                    else:
+                        # found "Answer:" but still waiting for the entire answer
+                        #print('B')
+                        outcome = (False, answer_tokens) if return_answer else False
+                        return outcome
+            elif token == self.early_stop_token:
+                break
+            else:
+                answer_cursor = 0
+                if token == self.eofanswer:
+                    eofanswer_count += 1
+                    answer_tokens = []
+                else:
+                    answer_tokens.insert(0, token)
+                    #print(token, answer_cursor, self.tokenizer.decode(token))
+                    
+        outcome = (False, []) if return_answer else False
+        return outcome
