@@ -4,3 +4,5 @@ psycopg[binary]
 torch
 transformers
 mergedeep
+bitsandbytes
+accelerate
