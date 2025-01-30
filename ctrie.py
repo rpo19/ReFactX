@@ -172,19 +172,22 @@ class GetAnswer(StoppingCriteria):
     # todo: do not in reverse. consider multiple samples in the batch
     # terminate when all batches generate end token?
     # strategy=all strategy=any. strategy can be all or any python functions
-    def __init__(self, prompt, answer, eofanswer, strategy=all):
-        self.prompt = prompt
+    def __init__(self, answer, eofanswer, strategy=all):
+        self.prompt = None
         self.answer = answer
-        self.eofanswer = eofanswer
+        self.eofanswer = set(eofanswer)
         self.strategy = strategy
 
     def __call__(self, input_ids, scores, **kwargs):
-        input_ids = input_ids[:,len(self.prompt):] # remove prompt
         outcome = self.strategy(
-            self.get_answer(input_ids[i].tolist(), return_answer=False) for i in range(input_ids.shape[0]))
+            self.get_answer(input_ids[i], return_answer=False) for i in range(input_ids.shape[0]))
         return outcome
 
-    def get_answer(self, sequence, return_answer=True):
+    def set_prompt(self, prompt):
+        self.prompt = prompt
+
+    def get_answer(self, input_ids, return_answer=True):
+        sequence = input_ids[len(self.prompt):].tolist() # remove prompt
         eofanswer_count = 0
         answer_cursor = 0
         answer_tokens = []
@@ -202,7 +205,7 @@ class GetAnswer(StoppingCriteria):
         while token_id < len(sequence):
             token = sequence[token_id]
             token_id += 1
-            if token == self.eofanswer:
+            if token in self.eofanswer:
                 answer_is_complete = True
                 break
             else:

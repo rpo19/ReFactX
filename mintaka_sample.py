@@ -1,5 +1,6 @@
 import json
 from torch.utils.data import Dataset
+import random
 
 class QADataset(Dataset):
     def __init__(self):
@@ -7,6 +8,11 @@ class QADataset(Dataset):
         print(f'Loading {self.path}')
         with open(self.path) as fd:
             self.dataset = json.load(fd)
+
+        # sample
+        self.random_seed = 1234
+        random.seed(self.random_seed)
+        self.dataset = random.sample(self.dataset, 20)
 
         self.skip_serialize = set(['skip_serialize','dataset'])
 
