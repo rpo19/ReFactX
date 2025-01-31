@@ -180,14 +180,14 @@ class GetAnswer(StoppingCriteria):
 
     def __call__(self, input_ids, scores, **kwargs):
         outcome = self.strategy(
-            self.get_answer(input_ids[i], return_answer=False) for i in range(input_ids.shape[0]))
+            self.get_answer(input_ids[i].tolist(), return_answer=False) for i in range(input_ids.shape[0]))
         return outcome
 
     def set_prompt(self, prompt):
         self.prompt = prompt
 
-    def get_answer(self, input_ids, return_answer=True):
-        sequence = input_ids[len(self.prompt):].tolist() # remove prompt
+    def get_answer(self, sequence, return_answer=True):
+        sequence = sequence[len(self.prompt):] # remove prompt
         eofanswer_count = 0
         answer_cursor = 0
         answer_tokens = []

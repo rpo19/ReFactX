@@ -93,14 +93,20 @@ with open(output_file, 'w') as output_fd:
                 past_key_values=prompt_cache,
             ).past_key_values
 
-        for batch in tqdm(dataloader):
+        for batch_number, batch in enumerate(tqdm(dataloader)):
             prompted_batch = list(map(model.apply_prompt_template, batch))
 
             batch_inputs = model.tokenize_fun(prompted_batch)
 
             getanswer.set_prompt(batch_inputs.input_ids[0])
 
-            past_key_values = copy.deepcopy(prompt_cache)
+            if inputs_prompt_begin.input_ids.shape[0] != batch_inputs.input_ids.shape[0] * model.generate_args.get('num_beams', 1):
+                # last batch can mismatch in dimensions wrt the prompt cache
+                assert batch_number == len(dataloader) - 1
+                # in this case do not use the cache
+                past_key_values = None
+            else:
+                past_key_values = copy.deepcopy(prompt_cache)
 
             output = model.model.generate(
                 **batch_inputs,
