@@ -17,12 +17,14 @@ import time
 import re
 from tqdm import tqdm
 import pickle
+import sys
 
 triple_regex = re.compile(r'<http:\/\/www\.wikidata\.org\/.*\/([QP][0-9]+)>\s+'
 r'<(\S+)>\s+'
 r'"([^"]+)"@en\s+\.')
 
-labels_path = '/workspace/data/latest-truthy-labels.nt.gz'
+labels_path = sys.argv[1] #'/workspace/data/latest-truthy-labels.nt.gz'
+outfile = sys.argv[2]
 
 ents = {}
 
@@ -33,7 +35,7 @@ try:
     with gzip.open(labels_path, 'r') as fd:
         with tqdm() as pbar:
             for count, bline in enumerate(fd):
-                line = bline.decode()
+                line = bline.decode('unicode_escape') # correctly load unicode characters
                 match = triple_regex.match(line)
                 if match:
                     sub, pred, obj = match.groups()
@@ -44,7 +46,9 @@ try:
                         ents[sub]['label'] = obj
                     elif pred == 'http://www.w3.org/2004/02/skos/core#altLabel':
                         ents[sub]['altlabels'].add(obj)
-    
+                    elif pred == 'http://schema.org/description':
+                        ents[sub]['description'] = obj
+
                 if count % 10000 == 0:
                     pbar.n = count
                     pbar.refresh()
@@ -55,6 +59,6 @@ elapsed = time.time() - start
 print('elapsed', elapsed)
 # -
 
-with open('/workspace/data/ents_truthy_fix2.pickle', 'wb') as fd:
+with open(outfile, 'wb') as fd:
     pickle.dump(ents, fd)
 
