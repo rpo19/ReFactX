@@ -24,9 +24,11 @@ r'<(\S+)>\s+'
 r'"([^"]+)"@en\s+\.')
 
 labels_path = sys.argv[1] #'/workspace/data/latest-truthy-labels.nt.gz'
-outfile = sys.argv[2]
+outfile_ents = sys.argv[2]
+outfile_props = sys.argv[3]
 
 ents = {}
+props = {}
 
 # +
 start = time.time()
@@ -39,15 +41,20 @@ try:
                 match = triple_regex.match(line)
                 if match:
                     sub, pred, obj = match.groups()
-                    if sub not in ents:
-                        ents[sub] = {'altlabels':set()}
+                    res_id = int(sub[1:])
+                    if sub[0] == 'Q':
+                        mydict = ents
+                    else:
+                        mydict = props
+                    if res_id not in mydict:
+                        mydict[res_id] = ['',set(),''] # label, altLabels, description
                     if pred == 'http://www.w3.org/2000/01/rdf-schema#label':
-                        assert 'label' not in ents[sub]
-                        ents[sub]['label'] = obj
+                        assert mydict[res_id][0] == ''
+                        mydict[res_id][0] = obj
                     elif pred == 'http://www.w3.org/2004/02/skos/core#altLabel':
-                        ents[sub]['altlabels'].add(obj)
+                        mydict[res_id][1].add(obj)
                     elif pred == 'http://schema.org/description':
-                        ents[sub]['description'] = obj
+                        mydict[res_id][2] = obj
 
                 if count % 10000 == 0:
                     pbar.n = count
@@ -59,6 +66,9 @@ elapsed = time.time() - start
 print('elapsed', elapsed)
 # -
 
-with open(outfile, 'wb') as fd:
+with open(outfile_ents, 'wb') as fd:
     pickle.dump(ents, fd)
+
+with open(outfile_props, 'wb') as fd:
+    pickle.dump(props, fd)
 

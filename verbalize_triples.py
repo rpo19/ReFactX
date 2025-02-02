@@ -63,12 +63,12 @@ with tqdm(**tqdm_params) as pbar:
                             added_shortdesc.add(sub_id)
                             outfd.write(f'<{v_sub}> <short description> <{sub_short_desc}> .\n'.encode('utf-8'))
 
-                        sub_wikidata = ent_labels_wikidata.get('Q'+sub_id, {})
-                        sub_description = sub_wikidata.get('description', '')
+                        sub_wikidata = ent_labels_wikidata.get(sub_id, ['',set(),'']) #label, altlabels, description
+                        sub_description = sub_wikidata[2]
 
                         if not v_sub:
                             # not in wikipedia --> use wikidata label (description)
-                            v_sub = sub_wikidata.get('label', '')
+                            v_sub = sub_wikidata[0]
                             if v_sub and sub_description:
                                 vsub = '{} ({})'.format(vsub, sub_description)
 
@@ -90,12 +90,12 @@ with tqdm(**tqdm_params) as pbar:
                                         added_shortdesc.add(obj_id)
                                         outfd.write(f'<{v_obj}> <short description> <{obj_short_desc}> .\n'.encode('utf-8'))
 
-                                    obj_wikidata = ent_labels_wikidata.get('Q'+obj_id, {})
-                                    obj_description = obj_wikidata.get('description', '')
+                                    obj_wikidata = ent_labels_wikidata.get(obj_id, ['',set(),''])
+                                    obj_description = obj_wikidata[2]
 
                                     if not v_obj:
                                         # not in wikipedia --> use wikidata label (description)
-                                        v_obj = obj_wikidata.get('label', '')
+                                        v_obj = obj_wikidata[0]
                                         if v_obj and obj_description:
                                             v_obj = '{} ({})'.format(v_obj, obj_description)
 
