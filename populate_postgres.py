@@ -1,10 +1,10 @@
-# CREATE TABLE ctrie (
-#     id BIGINT GENERATED ALWAYS AS IDENTITY, -- Automatically generates unique values for id -- later make it PRIMARY KEY
-#     key BYTEA NOT NULL,
-#     children BYTEA, -- either children or subtree must be present (todo add constraint?)
-#     subtree BYTEA
+# CREATE TABLE ctrieV2 (
+#     id BIGINT GENERATED ALWAYS AS IDENTITY -- later make PRIMARY KEY
+#     key INT[] NOT NULL,
+#     children INT[],
+#     numleaves INT[],
+#     subtree JSONB
 # );
-
 
 import pickle
 import bz2
@@ -14,10 +14,11 @@ import sys
 
 fname = sys.argv[1]
 postgres_connection = sys.argv[2] # 'postgres://postgres:secret@host:5432/postgres'
-root = int(sys.argv[3]) # number that not collides with the vocab (check max vocab) # maybe 60000
-batch_size = int(sys.argv[4])
-switch_parameter = int(sys.argv[5]) # after N token save all the branch to the leaf
-total_rows = int(sys.argv[6]) if len(sys.argv) > 6 else None
+table_name = sys.argv[3]
+root = int(sys.argv[4]) # number that not collides with the vocab (check max vocab) # maybe 60000
+batch_size = int(sys.argv[5])
+switch_parameter = int(sys.argv[6]) # after N token save all the branch to the leaf
+total_rows = int(sys.argv[7]) if len(sys.argv) > 7 else None
 
 def tken(token):
     # token encode
@@ -29,29 +30,48 @@ def tkde(bbytes):
     decoded = int.from_bytes(bbytes, byteorder='big', signed=False)
     return decoded
 
+# {
+#     'A': (3,
+#     {
+#         'B1': (1, {'C1': (1,{})}),
+#         'B2': (2,
+#         {
+#             'C2': (1, {}),
+#             'C3': (1, {})
+#         })
+#     }),
+#     'A1': (1,
+#     {
+#         'B3': (1, {'C4': (1, {})}
+#     )}
+# )}
 def batch_append(trie, token_ids):
-    level = trie
+    level = trie # (leaves_count, child_tree)
     for token_id in token_ids:
-        if token_id not in level:
-            level[token_id] = {}
+        if token_id not in level[1]:
+            level[1][token_id] = (0, {}) # (leaves_count, child_tree)
 
-        level = level[token_id]
+        # increment count of current level
+        level[0] += 1
+
+        level = level[1][token_id]
 
 def get_rows(trie, rootkey, switch_parameter):
     # iterative depth first traversal with a stack
-    key = rootkey
+    key = [rootkey]
     stack = [(0, key, trie)]
     while len(stack) > 0:
         level_num, key, level = stack.pop()
-        children = level.keys()
+        children = level[1].keys()
+        numleaves = [level[1][c][0] for c in children]
         if level_num >= switch_parameter:
-            yield key, b''.join(map(tken, children)), pickle.dumps(level, protocol=5) # highest protocol for best efficiency. supported by python 3.8
+            yield key, children, numleaves, level # highest protocol for best efficiency. supported by python 3.8
         else:
             for child in children:
-                stack.append((level_num + 1, key + tken(child), level[child]))
+                stack.append((level_num + 1, key + [child], level[1][child]))
             if len(children) > 0:
                 # skip adding empty keys to save space
-                yield key, b''.join(map(tken, children)), None
+                yield key, children, numleaves, None
 
 
 enroot = tken(root)
@@ -60,8 +80,8 @@ count = 0
 
 with psycopg.connect(postgres_connection, autocommit=False) as conn:
     with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE ctrie;")
-        with cur.copy("COPY ctrie (key, children, subtree) FROM STDIN WITH (FREEZE)") as copy:
+        cur.execute(f"TRUNCATE TABLE {table_name};")
+        with cur.copy(f"COPY {table_name} (key, children, numleaves, subtree) FROM STDIN WITH (FREEZE)") as copy:
             with bz2.BZ2File(fname, "rb") as bz2file:
                 with tqdm(total=total_rows) as pbar:
                     batch = {}
