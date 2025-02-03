@@ -26,10 +26,6 @@ Use the notebook `filter_props.ipynb`
 
 ## Verbalize the triples using the labels
 ```
-# TODO adapt to new label_mappings
-# TODO solve unicode problem
-# TODO keep description
-# TODO keep wikibase-shortdesc ?
 python verbalize_triples.py
 ```
 
