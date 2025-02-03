@@ -43,6 +43,7 @@ r'(?:<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>|"([^"]+)"@en)\s+\.')
 tqdm_params = {'total': int(total_number_of_triples)}
 
 added_shortdesc = set()
+added_desc = set()
 
 with tqdm(**tqdm_params) as pbar:
     with bz2.BZ2File(outfile, 'w') as outfd:
@@ -59,7 +60,7 @@ with tqdm(**tqdm_params) as pbar:
 
                         # short description for subject entity
                         sub_short_desc = ent_labels_wikipedia.get(sub_id, {}).get('short_desc')
-                        if sub_id not in added_shortdesc and sub_short_desc:
+                        if sub_short_desc and sub_id not in added_shortdesc:
                             added_shortdesc.add(sub_id)
                             outfd.write(f'<{v_sub}> <short description> <{sub_short_desc}> .\n'.encode('utf-8'))
 
@@ -70,11 +71,12 @@ with tqdm(**tqdm_params) as pbar:
                             # not in wikipedia --> use wikidata label (description)
                             v_sub = sub_wikidata[0]
                             if v_sub and sub_description:
-                                vsub = '{} ({})'.format(vsub, sub_description)
+                                vsub = '{} ({})'.format(v_sub, sub_description)
 
                         if v_sub:
                             # add description
-                            if sub_description:
+                            if sub_description and sub_id not in added_desc:
+                                added_desc.add(sub_id)
                                 outfd.write(f'<{v_sub}> <description> <{sub_description}> .\n'.encode('utf-8'))
 
                             v_prop = prop_labels.get('P'+prop, {}).get('label')
@@ -86,7 +88,7 @@ with tqdm(**tqdm_params) as pbar:
 
                                     # short description for object entity
                                     obj_short_desc = ent_labels_wikipedia.get(obj_id, {}).get('short_desc')
-                                    if obj_id not in added_shortdesc and obj_short_desc:
+                                    if obj_short_desc and obj_id not in added_shortdesc:
                                         added_shortdesc.add(obj_id)
                                         outfd.write(f'<{v_obj}> <short description> <{obj_short_desc}> .\n'.encode('utf-8'))
 
@@ -105,8 +107,9 @@ with tqdm(**tqdm_params) as pbar:
 
                                 if v_obj:
                                     # verify v_obj is not None or ''
-                                    if obj_description:
+                                    if obj_description and obj_id not in added_desc:
                                         # add description
+                                        added_desc.add(obj_id)
                                         outfd.write(f'<{v_obj}> <description> <{obj_description}> .\n'.encode('utf-8'))
 
                                     outfd.write(f'<{v_sub}> <{v_prop}> <{v_obj}> .\n'.encode('utf-8'))
