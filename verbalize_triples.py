@@ -38,7 +38,7 @@ with open(wikipedia_entity_mapping, 'rb') as fd:
 
 triple_regex = re.compile(r'<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>\s+'
 r'<http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)>\s+'
-r'(?:<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>|"([^"]+)"@en|"([^"]+)"^^<.+>)\s+\.')
+r'(?:<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>|"([^"]+)"@en|"([^"]+)"\^\^<.+>)\s+\.')
 
 tqdm_params = {'total': int(total_number_of_triples)}
 
