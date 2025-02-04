@@ -38,7 +38,7 @@ with open(wikipedia_entity_mapping, 'rb') as fd:
 
 triple_regex = re.compile(r'<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>\s+'
 r'<http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)>\s+'
-r'(?:<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>|"([^"]+)"@en)\s+\.')
+r'(?:<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>|"([^"]+)"@en|"([^"]+)"^^<.+>)\s+\.')
 
 tqdm_params = {'total': int(total_number_of_triples)}
 
@@ -52,7 +52,13 @@ with tqdm(**tqdm_params) as pbar:
                 line = bline.decode('unicode_escape') # correctly load unicode characters
                 match = triple_regex.match(line)
                 if match:
-                    sub, prop, obj_ent, obj_lit = match.groups()
+                    sub, prop, obj_ent, obj_lit_en, obj_lit_datatype = match.groups()
+
+                    obj_lit = None
+                    if obj_lit_en:
+                        obj_lit = obj_lit_en
+                    elif obj_lit_datatype:
+                        obj_lit = obj_lit_datatype
 
                     if sub.isnumeric():
                         sub_id = int(sub)
