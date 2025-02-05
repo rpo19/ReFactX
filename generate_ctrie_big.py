@@ -34,7 +34,8 @@ import pdb
 
 #model_name = "microsoft/Phi-3-mini-128k-instruct"
 model_name = sys.argv[1]
-outfile = sys.argv[2]
+verbalized_path = sys.argv[2]
+outfile = sys.argv[3]
 
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -46,7 +47,6 @@ import torch
 # -
 
 # load the triples
-verbalized_path = '/workspace/data/verbalized.latest-truthy.nt.bz2'
 
 with bz2.BZ2File(outfile, 'wb') as fout:
     with bz2.BZ2File(verbalized_path) as fd:

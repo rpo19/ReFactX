@@ -26,13 +26,13 @@ Use the notebook `filter_props.ipynb`
 
 ## Verbalize the triples using the labels
 ```
-python verbalize_triples.py
+python verbalize_triples.py props_mapping ents_labels_wikidata ents_mapping_wikipedia wikidump.bz2 outfile.bz2 [num of triples for tqdm]
 ```
 
 ## Tokenize
 Choose a model from huggingface for using its tokenizer, then run:
 ```
-python generate_ctrie_big.py model outfile
+python generate_ctrie_big.py model verbalized_triples.bz2 outfile.pickle
 ```
 
 ## Start postgres
