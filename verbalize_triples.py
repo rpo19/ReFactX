@@ -87,6 +87,7 @@ with tqdm(**tqdm_params) as pbar:
 
                             v_prop = prop_labels.get('P'+prop, {}).get('label')
                             if v_sub and v_prop:
+                                obj_description = None
                                 if obj_ent and obj_ent.isnumeric():
                                     # obj is entity
                                     obj_id = int(obj_ent)
