@@ -36,6 +36,7 @@ import pdb
 model_name = sys.argv[1]
 verbalized_path = sys.argv[2]
 outfile = sys.argv[3]
+total = int(sys.argv[4]) if len(sys.argv) > 4 else None
 
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -50,7 +51,7 @@ import torch
 
 with bz2.BZ2File(outfile, 'wb') as fout:
     with bz2.BZ2File(verbalized_path) as fd:
-        with tqdm(total=20065556) as pbar:
+        with tqdm(total=total) as pbar:
             for count, bline in enumerate(fd):
                 line = bline.decode()
                 if line[-1] == '\n':
