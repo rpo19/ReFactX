@@ -1,8 +1,9 @@
 # CREATE TABLE ctrieV2 (
-#     id BIGINT GENERATED ALWAYS AS IDENTITY -- later make PRIMARY KEY
+#     id BIGINT GENERATED ALWAYS AS IDENTITY, -- later make PRIMARY KEY
 #     key INT[] NOT NULL,
 #     children INT[],
-#     numleaves INT[],
+#     numleaves INT,
+#     childrenleaves INT[],
 #     subtree JSONB
 # );
 
@@ -11,6 +12,7 @@ import bz2
 import psycopg
 from tqdm import tqdm
 import sys
+import json
 
 fname = sys.argv[1]
 postgres_connection = sys.argv[2] # 'postgres://postgres:secret@host:5432/postgres'
@@ -19,16 +21,6 @@ root = int(sys.argv[4]) # number that not collides with the vocab (check max voc
 batch_size = int(sys.argv[5])
 switch_parameter = int(sys.argv[6]) # after N token save all the branch to the leaf
 total_rows = int(sys.argv[7]) if len(sys.argv) > 7 else None
-
-def tken(token):
-    # token encode
-    encoded = token.to_bytes(2, byteorder='big', signed=False)
-    return encoded
-
-def tkde(bbytes):
-    # token decode
-    decoded = int.from_bytes(bbytes, byteorder='big', signed=False)
-    return decoded
 
 # {
 #     'A': (3,
@@ -49,7 +41,7 @@ def batch_append(trie, token_ids):
     level = trie # (leaves_count, child_tree)
     for token_id in token_ids:
         if token_id not in level[1]:
-            level[1][token_id] = (0, {}) # (leaves_count, child_tree)
+            level[1][token_id] = [0, {}] # (leaves_count, child_tree)
 
         # increment count of current level
         level[0] += 1
@@ -62,29 +54,28 @@ def get_rows(trie, rootkey, switch_parameter):
     stack = [(0, key, trie)]
     while len(stack) > 0:
         level_num, key, level = stack.pop()
-        children = level[1].keys()
-        numleaves = [level[1][c][0] for c in children]
+        children = list(level[1].keys())
+        childrenleaves = [level[1][c][0] for c in children]
         if level_num >= switch_parameter:
-            yield key, children, numleaves, level # highest protocol for best efficiency. supported by python 3.8
+            yield key, children, level[0], childrenleaves, json.dumps(level[1])
         else:
             for child in children:
                 stack.append((level_num + 1, key + [child], level[1][child]))
             if len(children) > 0:
                 # skip adding empty keys to save space
-                yield key, children, numleaves, None
+                yield key, children, level[0], childrenleaves, None
 
 
-enroot = tken(root)
 tbar_update = batch_size
 count = 0
 
 with psycopg.connect(postgres_connection, autocommit=False) as conn:
     with conn.cursor() as cur:
         cur.execute(f"TRUNCATE TABLE {table_name};")
-        with cur.copy(f"COPY {table_name} (key, children, numleaves, subtree) FROM STDIN WITH (FREEZE)") as copy:
+        with cur.copy(f"COPY {table_name} (key, children, numleaves, childrenleaves, subtree) FROM STDIN WITH (FREEZE)") as copy:
             with bz2.BZ2File(fname, "rb") as bz2file:
                 with tqdm(total=total_rows) as pbar:
-                    batch = {}
+                    batch = [0, {}]
 
                     while True:
                         try:
@@ -97,10 +88,10 @@ with psycopg.connect(postgres_connection, autocommit=False) as conn:
 
                             if count % batch_size == 0:
                                 # batch on number or rows processed
-                                for row in get_rows(batch, enroot, switch_parameter):
+                                for row in get_rows(batch, root, switch_parameter):
                                     copy.write_row(row)
                                 # reset batch
-                                batch = {}
+                                batch = [0, {}]
 
                             if count % tbar_update == 0:
                                 pbar.n = count

@@ -1,0 +1,4 @@
+Size estimation (in bytes) of the subtrees at different levels.                                                                                                         
+Level Min Max Mean ['Quantile0.75', 'Q0.9', 'Q0.99']
+5 1488 27346020 25719.014159448183 [ 32936.  59968. 146540.]
+6 1164 27345668 17826.70726118082 [ 17416.  47672. 116032.]
