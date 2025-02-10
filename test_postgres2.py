@@ -1,26 +1,34 @@
-# CREATE TABLE my_table (
-#     id BIGINT, -- later make it PRIMARY KEY
-#     key BYTEA NOT NULL,
-#     child BYTEA NOT NULL,
-#     child_id BIGINT NOT NULL
+# CREATE TABLE ctrieV2 (
+#     id BIGINT GENERATED ALWAYS AS IDENTITY, -- later make PRIMARY KEY
+#     key INT[] NOT NULL,
+#     children INT[],
+#     numleaves INT,
+#     childrenleaves INT[],
+#     subtree BYTEA
 # );
 
 import psycopg
 import pickle
-from mergedeep import merge
 from transformers import AutoTokenizer
 import sys
 import random
 import time
 import json
+import pickle
+
+sys.path.insert(0, '.')
+from mergedeep import merge
+
 
 print('Start.')
 
 postgres_connection = sys.argv[1] # 'postgres://postgres:secret@host:5432/postgres'
-model_name = sys.argv[2]
-initial_tokens = sys.argv[3] if len(sys.argv) > 3 else ''
-if initial_tokens == 'json' and len(sys.argv) > 4:
-    initial_tokens = json.loads(sys.argv[4])
+table_name = sys.argv[2]
+rootkey = int(sys.argv[3])
+model_name = sys.argv[4]
+initial_tokens = sys.argv[5] if len(sys.argv) > 5 else ''
+if initial_tokens == 'json' and len(sys.argv) > 6:
+    initial_tokens = json.loads(sys.argv[6])
     assert isinstance(initial_tokens, list)
 
 class TimeMeasure:
@@ -46,88 +54,79 @@ class TimeMeasure:
 with TimeMeasure(tag='Loading tokenizer', verbose=True) as tm:
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
+def merge(dst, src):
+    for key in src:
+        if key in dst:
+            # sum numleaves
+            dst[key][0] += src[key][0]
+            merge(dst[key][1], src[key][1])
+        else:
+            # If the key exists only in `src`, the value from the `src` object will be used.
+            dst[key] = src[key]
+
+
 def choose(children, initial_tokens):
     if len(initial_tokens) > 0:
         choice = initial_tokens.pop(0)
-        if isinstance(choice, bytes) and isinstance(next(iter(children)), int):
-            choice = tkde(choice)
         assert choice in children
     else:
         choice = random.choice(children)
     return choice
 
-def tken(token):
-    # token encode
-    encoded = token.to_bytes(2, byteorder='big', signed=False)
-    return encoded
-
-def tkde(bbytes):
-    # token decode
-    decoded = int.from_bytes(bbytes, byteorder='big', signed=False)
-    return decoded
-
 if isinstance(initial_tokens, str):
     initial_tokens = tokenizer(initial_tokens)['input_ids']
-
-initial_tokens = list(map(tken, initial_tokens))
 
 conn = psycopg.connect(postgres_connection, autocommit=False)
 cur = conn.cursor()
 
-rootkey = 60000
-enroot = tken(rootkey)
-
-sentence = [enroot]
+sentence = [rootkey]
 
 while True:
     with TimeMeasure(tag=f'Query {len(sentence)}', verbose=True) as tm:
-        cur.execute('SELECT children, subtree FROM ctrie WHERE key = %s;', (b''.join(sentence),))
+        cur.execute(f'SELECT children, subtree, numleaves, childrenleaves FROM {table_name} WHERE key = %s;', (sentence,))
         res = cur.fetchall()
 
     if len(res) > 0:
         exploded_children = set()
         map_subtree = {}
-        for i, children in enumerate(res):
-            children = children[0]
-            splitted_children = set(children[i:i+2] for i in range(0, len(children), 2))
-            for child in splitted_children:
+        for i, (children, subtree, numleaves, childrenleaves) in enumerate(res):
+            assert numleaves == sum(childrenleaves)
+            children = set(children)
+            for child in children:
                 if child not in map_subtree:
                     map_subtree[child] = set()
                 map_subtree[child].add(i)
-            exploded_children.update(splitted_children)
+            exploded_children.update(children)
 
         next_token = choose(list(exploded_children), initial_tokens)
 
         sentence.append(next_token)
 
-        print(list(map(tkde,sentence)))
-
         corresponding_rows = map_subtree[next_token]
         merged_subtree = {}
-        for _, bsubtree in [res[i] for i in corresponding_rows]:
+        for _, subtree, numleaves, _ in [res[i] for i in corresponding_rows]:
             # if the chosen token has the subtree in the db
             # load the subtree in memory and go on
-            if bsubtree is not None:
-                subtree = pickle.loads(bsubtree)
+            if subtree is not None:
+                subtree = pickle.loads(subtree)
+                assert numleaves == sum(num for num,_ in subtree.values())
                 merge(merged_subtree, subtree)
 
         if len(merged_subtree) > 0:
             with TimeMeasure(tag=f'Subtree generation', verbose=True) as tm:
                  # continue the generation from the subtree
-                 # from now on the token_ids are already int. no need to tkde
-                 desentence = list(map(tkde,sentence))
-                 print(tokenizer.decode(desentence))
+                 print(tokenizer.decode(sentence))
                  print('.\nReached the switch level at len {}. Proceeding with the in-memory sub-tree.\n'.format(len(sentence)))
-                 level = merged_subtree[tkde(next_token)]
-                 children = list(level.keys())
+                 level = merged_subtree[next_token]
+                 children = list(level[1].keys())
                  while len(children) > 0:
                      next_token = choose(children, initial_tokens)
-                     level = level[next_token]
-                     children = list(level.keys())
+                     level = level[1][next_token]
+                     children = list(level[1].keys())
 
-                     desentence.append(next_token)
+                     sentence.append(next_token)
 
-                     print(desentence)
+                     print(sentence)
 
                  print('+')
                  break
@@ -136,7 +135,7 @@ while True:
         print('.')
         break
 
-print(tokenizer.decode(desentence))
+print(tokenizer.decode(sentence))
 
 
 

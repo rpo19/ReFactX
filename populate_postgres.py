@@ -1,10 +1,10 @@
-# CREATE TABLE ctrieV2 (
+# CREATE TABLE ctriev2 (
 #     id BIGINT GENERATED ALWAYS AS IDENTITY, -- later make PRIMARY KEY
 #     key INT[] NOT NULL,
 #     children INT[],
 #     numleaves INT,
 #     childrenleaves INT[],
-#     subtree JSONB
+#     subtree BYTEA
 # );
 
 import pickle
@@ -12,7 +12,7 @@ import bz2
 import psycopg
 from tqdm import tqdm
 import sys
-import json
+import pickle
 
 fname = sys.argv[1]
 postgres_connection = sys.argv[2] # 'postgres://postgres:secret@host:5432/postgres'
@@ -23,18 +23,18 @@ switch_parameter = int(sys.argv[6]) # after N token save all the branch to the l
 total_rows = int(sys.argv[7]) if len(sys.argv) > 7 else None
 
 # {
-#     'A': (3,
+#     13: (3,
 #     {
-#         'B1': (1, {'C1': (1,{})}),
-#         'B2': (2,
+#         15: (1, {17: (1,{})}),
+#         16: (2,
 #         {
-#             'C2': (1, {}),
-#             'C3': (1, {})
+#             18: (1, {}),
+#             19: (1, {})
 #         })
 #     }),
-#     'A1': (1,
+#     20: (1,
 #     {
-#         'B3': (1, {'C4': (1, {})}
+#         21: (1, {22: (1, {})}
 #     )}
 # )}
 def batch_append(trie, token_ids):
@@ -57,7 +57,7 @@ def get_rows(trie, rootkey, switch_parameter):
         children = list(level[1].keys())
         childrenleaves = [level[1][c][0] for c in children]
         if level_num >= switch_parameter:
-            yield key, children, level[0], childrenleaves, json.dumps(level[1])
+            yield key, children, level[0], childrenleaves, pickle.dumps(level[1])
         else:
             for child in children:
                 stack.append((level_num + 1, key + [child], level[1][child]))
@@ -103,3 +103,5 @@ with psycopg.connect(postgres_connection, autocommit=False) as conn:
     conn.commit()
 
 # CREATE INDEXes and PKEY
+# CREATE INDEX idx_key_btree ON ctriev2test2 USING BTREE (key);
+
