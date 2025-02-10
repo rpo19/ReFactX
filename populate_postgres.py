@@ -12,6 +12,7 @@ import bz2
 import psycopg
 from tqdm import tqdm
 import sys
+sys.setrecursionlimit(10000) # increase recursion limit for pickling nested trees
 import pickle
 
 fname = sys.argv[1]
@@ -100,6 +101,9 @@ with psycopg.connect(postgres_connection, autocommit=False) as conn:
                         except EOFError:
                             print('Reached end of file.')
                             break  # End of file reached
+                        except Exception as e:
+                            print(f'Encountered exception at {count}')
+                            raise e
     conn.commit()
 
 # CREATE INDEXes and PKEY
