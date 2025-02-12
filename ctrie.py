@@ -2,7 +2,6 @@ from transformers.generation.logits_process import LogitsProcessor
 from transformers import StoppingCriteria
 import torch
 import pickle
-from mergedeep import merge
 from psycopg import sql
 
 class PostgresTrieIndex:
@@ -11,24 +10,13 @@ class PostgresTrieIndex:
         self.postgresql_connection = postgresql_connection
         self.switch_parameter = switch_parameter+1 # counting the rootkey
         self.table_name = table_name
-        self.select_query = sql.SQL('SELECT children, subtree FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
-
-    def tken(self, token):
-        # token encode
-        encoded = token.to_bytes(2, byteorder='big', signed=False)
-        return encoded
-
-    def tkde(self, bbytes):
-        # token decode
-        decoded = int.from_bytes(bbytes, byteorder='big', signed=False)
-        return decoded
+        self.select_query = sql.SQL('SELECT children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
 
     def next_tokens(self, current_seq):
         current_seq = [self.rootkey] + current_seq
         postgres_seq = current_seq[:self.switch_parameter] # max length of sequences indexed in postgres
 
-        postgres_byte_seq = b''.join(map(self.tken, postgres_seq))
-        _next_tokens, subtree = self._next_tokens_from_postgresql(postgres_byte_seq)
+        _next_tokens, subtree = self._next_tokens_from_postgresql(postgres_seq)
 
         if len(current_seq) >= self.switch_parameter:
             # continue in the subtree
@@ -48,40 +36,44 @@ class PostgresTrieIndex:
             if current_token not in start:
                 start = {}
                 break
-            start = start[current_token]
+            start = start[current_token][1]
 
-        return set(start.keys())
+        _next_tokens = {k:v[0] for k,v in start.items()}
 
-    def _load_merge_subtrees(self, subtrees_list):
-        merged_subtree = {}
-        for bsubtree in subtrees_list:
-            if bsubtree is not None:
-                subtree = pickle.loads(bsubtree)
-                merge(merged_subtree, subtree)
-        return merged_subtree
+        return _next_tokens
 
-    def _next_tokens_from_postgresql(self, byte_sequence):
+    def _merge(self, dst, src):
+        for key in src:
+            if key in dst:
+                # sum numleaves
+                dst[key][0] += src[key][0]
+                self._merge(dst[key][1], src[key][1])
+            else:
+                # If the key exists only in `src`, the value from the `src` object will be used.
+                dst[key] = src[key]
+
+    def _next_tokens_from_postgresql(self, sequence):
         """
         The next possible tokens that will progress the trie, given the current sequence of tokens in `current_seq`.
         """
         with self.postgresql_connection.cursor() as cursor:
-            cursor.execute(self.select_query, (byte_sequence,))
+            cursor.execute(self.select_query, (sequence,))
             query_result = cursor.fetchall()
 
-        exploded_children = set()
+        _next_tokens = {}
         merged_subtree = {}
         subtrees_list = []
         if len(query_result) > 0:
-            for children, subtree in query_result:
-                splitted_children = set(children[i:i+2] for i in range(0, len(children), 2))
-                exploded_children.update(splitted_children)
+            for children, subtree, numleaves, childrenleaves in query_result:
+                for child, childleaves in zip(children, childrenleaves):
+                    if child not in _next_tokens:
+                        _next_tokens[child] = 0
+                    _next_tokens[child] += childleaves
                 if subtree:
-                    subtrees_list.append(subtree)
+                    subtree = pickle.loads(subtree)
+                    self._merge(merged_subtree, subtree)
 
-        merged_subtree = self._load_merge_subtrees(subtrees_list)
-        children_token_ids = set(map(self.tkde, exploded_children))
-
-        return children_token_ids, merged_subtree
+        return _next_tokens, merged_subtree
 
 class ConstrainedLogitsProcessor(LogitsProcessor):
     def __init__(self, index, switch_pattern, end_token, tokenizer=None):
@@ -145,7 +137,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             #     # normal generation
             #     # scores are not altered
             #     pass
-            
+
             if self.tokenizer:
                 print(i, constrained, [self.tokenizer.convert_ids_to_tokens(t) for t in scores[i].argsort(descending=True)[:10].tolist()])
 
@@ -154,13 +146,13 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
     def constrained_generation(self, input_sequence, scores: torch.FloatTensor):
 
         possible_tokens = self.index.next_tokens(input_sequence)
+        possible_tokens = list(possible_tokens.keys()) # TODO
 
         if len(possible_tokens) == 0:
             # end of constrained generation
             # send end of string
             possible_tokens = [self.end_token]
 
-        possible_tokens = list(possible_tokens)
         possible_scores = scores[:, possible_tokens]
 
         scores[:,:] = -float('inf')
