@@ -9,7 +9,39 @@ class Index():
         pass
 
     def next_tokens(self, sequence, **kwargs):
-        return set()
+        token = 0
+        num_leaves = 10
+        return {token: numleaves,}
+
+class DictIndex(Index):
+    def __init__(self, trie = {}):
+        self.trie = trie
+
+    def add(self, sequence):
+        start = self.trie
+
+        for current_token in sequence:
+            if current_token not in start:
+                start[current_token] = [0, {}] # initialize with zero visit
+
+            start[current_token][0] += 1 # increment visits
+            start = start[current_token][1]
+
+    def next_tokens(self, sequence):
+        """
+        The next possible tokens that will progress the trie, given the current sequence of tokens in `sequence`.
+        """
+        start = self.trie
+
+        for current_token in sequence:
+            if current_token not in start:
+                start = {}
+                break
+            start = start[current_token][1]
+
+        _next_tokens = {k:v[0] for k,v in start.items()}
+
+        return _next_tokens
 
 class PostgresTrieIndex(Index):
     def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name):
@@ -40,6 +72,7 @@ class PostgresTrieIndex(Index):
         return _next_tokens
 
     def _next_tokens_from_subtree(self, subtree, subtree_seq):
+        # TODO use the DictIndex instead. maybe also for merge and other operations
         """
         The next possible tokens that will progress the trie, given the current sequence of tokens in `sequence`.
         """
@@ -165,6 +198,7 @@ class ConstrainedState():
         self.cursor = other.cursor
 
     def update(self, new_token):
+        rollback = False
         state = self.state
         self.cursor += 1
         if self.state == self.NORMAL_GENERATION:
@@ -179,13 +213,16 @@ class ConstrainedState():
                 if self.cursor == len(self.begin_pattern) - 1:
                     state = self.CONSTRAINED_GENERATION
             else:
-                self._rollback()
+                rollback = True
 
         elif self.state == self.CONSTRAINED_GENERATION:
             if new_token == self.end_pattern:
                 state = self.NORMAL_GENERATION
 
-        self._update_state(state)
+        if rollback:
+            self._rollback()
+        else:
+            self._update_state(state)
 
     def _update_state(self, state, initial_cursor = 0):
         if state != self.state:
@@ -209,6 +246,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         self.end_token = end_token
         self.states = states
         self.first_call = True
+        self.cache_index = DictIndex() # TODO simplify getting all the generated triples (now visit the tree)
 
         self.tokenizer=tokenizer # for debugging
 
@@ -237,19 +275,35 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             #     pass
 
             if self.tokenizer:
-                print(i, constrained, [self.tokenizer.convert_ids_to_tokens(t) for t in scores[i].argsort(descending=True)[:10].tolist()])
+                print(i, self.states[i].state, self.states[i].is_constrained(), [self.tokenizer.convert_ids_to_tokens(t) for t in scores[i].argsort(descending=True)[:3].tolist()])
 
         return scores
+
+    def subtract_tokens(self, tokens_a, tokens_b):
+        for token in list(tokens_a.keys()):
+            if token in tokens_b:
+                diff = tokens_a[token] - tokens_b[token] # TODO transform subtract tokens in a prob modifier
+                tokens_a[token] = diff
+                if diff == 0:
+                    # branch completely visited
+                    # forbid generating again same triple
+                    del tokens_a[token]
 
     def constrained_generation(self, input_sequence, scores: torch.FloatTensor, **kwargs):
 
         possible_tokens = self.index.next_tokens(input_sequence)
-        possible_tokens = list(possible_tokens.keys()) # TODO
+        visited_tokens = self.cache_index.next_tokens(input_sequence)
+
+        self.subtract_tokens(possible_tokens, visited_tokens)
+
+        possible_tokens = list(possible_tokens.keys()) # TODO transform subtract tokens in a prob modifier
 
         if len(possible_tokens) == 0:
             # end of constrained generation
             # send end of string
             possible_tokens = [self.end_token]
+            generated_triple = input_sequence + [self.end_token]
+            self.cache_index.add(generated_triple)
 
         possible_scores = scores[:, possible_tokens]
 
