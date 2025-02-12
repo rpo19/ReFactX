@@ -32,13 +32,16 @@ sys.settrace(None)
 import pdb
 # -
 
-#model_name = "microsoft/Phi-3-mini-128k-instruct"
 model_name = sys.argv[1]
 verbalized_path = sys.argv[2]
 outfile = sys.argv[3]
-total = int(sys.argv[4]) if len(sys.argv) > 4 else None
+prefix = sys.argv[4]
+endoftriple = sys.argv[5]
+batchsize = int(sys.argv[6])
+total = int(sys.argv[7]) if len(sys.argv) > 7 else None
 
 tokenizer = AutoTokenizer.from_pretrained(model_name)
+assert tokenizer.is_fast
 
 # +
 from typing import List
@@ -52,14 +55,25 @@ import torch
 with bz2.BZ2File(outfile, 'wb') as fout:
     with bz2.BZ2File(verbalized_path) as fd:
         with tqdm(total=total) as pbar:
+            batch = []
             for count, bline in enumerate(fd):
                 line = bline.decode()
                 if line[-1] == '\n':
                     line = line[:-1]
-                ids = tokenizer(line)['input_ids']
 
-                pickle.dump(ids, fout)
-    
-                if count % 10000 == 0:
+                if not line.endswith(endoftriple):
+                    print(f'WARNING: {line} w/o end-of-triple {endoftriple}')
+                    line = line + endoftriple
+
+                line = prefix + line
+
+                batch.append(line)
+
+                if len(batch) > batchsize:
+                    ids = tokenizer(batch)['input_ids']
+                    batch = []
+                    pickle.dump(ids, fout)
+
+                if count % batchsize == 0:
                     pbar.n = count
                     pbar.refresh()

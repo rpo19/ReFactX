@@ -38,16 +38,17 @@ total_rows = int(sys.argv[7]) if len(sys.argv) > 7 else None
 #         21: (1, {22: (1, {})}
 #     )}
 # )}
-def batch_append(trie, token_ids):
+def batch_append(trie, nested_token_ids):
     level = trie # (leaves_count, child_tree)
-    for token_id in token_ids:
-        if token_id not in level[1]:
-            level[1][token_id] = [0, {}] # (leaves_count, child_tree)
+    for token_ids in nested_token_ids:
+        for token_id in token_ids:
+            if token_id not in level[1]:
+                level[1][token_id] = [0, {}] # (leaves_count, child_tree)
 
-        # increment count of current level
-        level[0] += 1
+            # increment count of current level
+            level[0] += 1
 
-        level = level[1][token_id]
+            level = level[1][token_id]
 
 def get_rows(trie, rootkey, switch_parameter):
     # iterative depth first traversal with a stack
