@@ -4,6 +4,13 @@ import torch
 import pickle
 from psycopg import sql
 import marisa_trie
+
+class EmptyIndexException(Exception):
+    pass
+
+class TripleNotFoundException(Exception):
+    pass
+
 class Index():
     def __init__(self) -> None:
         pass
@@ -14,34 +21,213 @@ class Index():
         return {token: numleaves,}
 
 class DictIndex(Index):
-    def __init__(self, trie = {}):
-        self.trie = trie
+    def __init__(self, tree = None):
+        if tree is None:
+            self.tree = [0, []]
 
     def add(self, sequence):
-        start = self.trie
+        level = self.tree
+        cursor = 0
+        level_cursor = 0
+        prev_levels = [] # need to keep track to increase numleaves
+        while cursor < len(sequence):
+            if level[0] == 0:
+                level[0] = 1
+                level[1] = sequence[cursor:]
+                break # nothing more to do
+            # elif isinstance(level[1], list):
+            else:
+                if isinstance(level[1][level_cursor], dict):
+                    # found a branch
+                    if sequence[cursor] in level[1][level_cursor]:
+                        # go on with this branch
+                        prev_levels.append(level)
+                        level = level[1][level_cursor][sequence[cursor]]
+                        level_cursor = 0
+                    else: # new branch
 
-        for current_token in sequence:
-            if current_token not in start:
-                start[current_token] = [0, {}] # initialize with zero visit
+                        # found another leaf
+                        # increment all prev levels
+                        prev_levels.append(level)
+                        for level in prev_levels:
+                            level[0] += 1
 
-            start[current_token][0] += 1 # increment visits
-            start = start[current_token][1]
+                        new_branch = [0, []]
+                        level[1][level_cursor][sequence[cursor]] = new_branch
+                        level = new_branch # continue with new branch: same as == 0
+                        level_cursor = 0
+                else: # is int
+                    if sequence[cursor] != level[1][level_cursor]:
+                        # divide in 2 branches
+                        new_branch = [0, []]
+                        level[1][level_cursor] = {
+                            level[1][level_cursor]: [level[0], level[1][level_cursor + 1:]], # previous branch
+                            sequence[cursor]: new_branch
+                        }
+
+                        # found another leaf
+                        # increment all prev levels
+                        prev_levels.append(level)
+                        for level in prev_levels:
+                            level[0] += 1
+
+                        del level[1][level_cursor + 1:]
+                        level = new_branch # continue with new branch: same as == 0
+                        level_cursor = 0
+                    else:
+                        level_cursor += 1
+            cursor += 1
 
     def next_tokens(self, sequence):
-        """
-        The next possible tokens that will progress the trie, given the current sequence of tokens in `sequence`.
-        """
-        start = self.trie
+        level = self.tree
+        cursor = 0
+        level_cursor = 0
 
-        for current_token in sequence:
-            if current_token not in start:
-                start = {}
-                break
-            start = start[current_token][1]
+        if level[0] == 0:
+            raise EmptyIndexException()
 
-        _next_tokens = {k:v[0] for k,v in start.items()}
+        # visit the tree following sequence
+        while cursor < len(sequence):
+            if isinstance(level[1][level_cursor], dict):
+                # found a branch
+                if sequence[cursor] in level[1][level_cursor]:
+                    # go on with this branch
+                    level = level[1][level_cursor][sequence[cursor]]
+                    level_cursor = 0
+                else: # new branch
+                    raise TripleNotFoundException()
+            else: # is int
+                if sequence[cursor] != level[1][level_cursor]:
+                    raise TripleNotFoundException()
+                else:
+                    level_cursor += 1
+            cursor += 1
+
+        # get next_tokens
+        if level_cursor >= len(level[1]):
+            # end of triple
+            _next_tokens = {}
+        elif isinstance(level[1][level_cursor], dict):
+            # multiple children
+            _next_tokens = {k:v[0] for k,v in level[1][level_cursor].items()}
+        else: # is int
+            _next_tokens = {level[1][level_cursor]: level[0]}
 
         return _next_tokens
+
+    def merge(self, tree):
+        # iterative depth first traversal with a stack
+        # gets all the leaves from src and add each of them to dest
+        key = []
+        stack = [(key, tree)]
+        while len(stack) > 0:
+            key, level = stack.pop()
+            if len(level[1]) > 0: # otherwise nothing to do
+                if level[0] == 1: # 1 leaf -> children is the sequence to the end of triple
+                    self.add(key + level[1])
+                else:
+                    if isinstance(level[1][0], dict):
+                        # branch here
+                        children = list(level[1][0].keys())
+                        childrenleaves = [level[1][0][c][0] for c in children]
+                        next_levels = [level[1][0][child] for child in children]
+                    else: # is int -> only 1 child
+                        children = [level[1][0]]
+                        childrenleaves = [level[0]] # same numleaves as parent
+                        next_levels = [[level[0], level[1][1:]]]
+
+                    for child, next_level in zip(children, next_levels):
+                        stack.append((key + [child], next_level))
+
+class DictIndexCache(DictIndex):
+    '''
+    Supports adding partial subtrees with specific numleaves
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def add_cache(self, sequence, children, numleaves, childrenleaves):
+        '''
+        We assume the cache is added left to right
+        '''
+        level = self.tree
+        cursor = 0
+        level_cursor = 0
+
+        while cursor < len(sequence):
+            if level[0] == 0:
+                level[0] = numleaves
+                level[1] = sequence[cursor:]
+                level[1].append({child:[num, []] for child, num in zip(chilren, numleaves)})
+                break # nothing more to do
+            # elif isinstance(level[1], list):
+            else:
+                if isinstance(level[1][level_cursor], dict):
+                    # found a branch
+                    if sequence[cursor] in level[1][level_cursor]:
+                        # go on with this branch
+                        prev_levels.append(level)
+                        level = level[1][level_cursor][sequence[cursor]]
+                        level_cursor = 0
+                    else: # new branch
+
+                        # found another leaf
+                        # increment all prev levels
+                        prev_levels.append(level)
+                        for level in prev_levels:
+                            if level[0] < numleaves:
+                                level[0] = numleaves
+
+                        new_branch = [0, []]
+                        level[1][level_cursor][sequence[cursor]] = new_branch
+                        level = new_branch # continue with new branch: same as == 0
+                        level_cursor = 0
+                else: # is int
+                    if sequence[cursor] != level[1][level_cursor]:
+                        # divide in 2 branches
+                        new_branch = [0, []]
+                        level[1][level_cursor] = {
+                            level[1][level_cursor]: [level[0], level[1][level_cursor + 1:]], # previous branch
+                            sequence[cursor]: new_branch
+                        }
+
+                        # found another leaf
+                        # increment all prev levels
+                        prev_levels.append(level)
+                        for level in prev_levels:
+                            if level[0] < numleaves:
+                                level[0] = numleaves
+
+                        del level[1][level_cursor + 1:]
+                        level = new_branch # continue with new branch: same as == 0
+                        level_cursor = 0
+                    else:
+                        level_cursor += 1
+            cursor += 1
+
+    def merge_cache(self, tree):
+        # iterative depth first traversal with a stack
+        # gets all the leaves from src and add each of them to dest
+        key = []
+        stack = [(key, tree)]
+        while len(stack) > 0:
+            key, level = stack.pop()
+            if len(level[1]) > 0: # otherwise nothing to do
+                if level[0] == 1: # 1 leaf -> children is the sequence to the end of triple
+                    self.add(key + level[1])
+                else:
+                    if isinstance(level[1][0], dict):
+                        # branch here
+                        children = list(level[1][0].keys())
+                        childrenleaves = [level[1][0][c][0] for c in children]
+                        next_levels = [level[1][0][child] for child in children]
+                    else: # is int -> only 1 child
+                        children = [level[1][0]]
+                        childrenleaves = [level[0]] # same numleaves as parent
+                        next_levels = [[level[0], level[1][1:]]]
+
+                    for child, next_level in zip(children, next_levels):
+                        stack.append((key + [child], next_level))
 
 class PostgresTrieIndex(Index):
     def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name):
@@ -54,22 +240,34 @@ class PostgresTrieIndex(Index):
 
     def next_tokens(self, sequence, **kwargs):
         sequence = [self.rootkey] + sequence
-        postgres_seq = sequence[:self.switch_parameter] # max length of sequences indexed in postgres
 
-        _next_tokens, subtree = self._next_tokens_from_postgresql(postgres_seq)
+        _next_tokens = None
+        try:
+            _next_tokens = self.cache.next_tokens(sequence)
+        except EmptyIndexException:
+            pass
+        except TripleNotFoundException:
+            pass
 
-        if len(_next_tokens) == 0 and sequence[-1] != self.end_of_triple:
-            # end of triple must match end_of_triple
-            # otherwise the triple is not valid
-            raise KeyError('Triple not found.', sequence)
+        if _next_tokens is None:
+            postgres_seq = sequence[:self.switch_parameter] # max length of sequences indexed in postgres
 
-        if len(sequence) >= self.switch_parameter:
-            # continue in the subtree
-            subtree_seq = sequence[self.switch_parameter:]
+            _next_tokens, subtree, cached_next_tokens = self._next_tokens_from_postgresql(postgres_seq)
 
-            _next_tokens = self._next_tokens_from_subtree(subtree, subtree_seq)
+            assert subtree is None or len(cached_next_tokens) == 0
 
-        return _next_tokens
+            if len(_next_tokens) == 0 and sequence[-1] != self.end_of_triple:
+                # end of triple must match end_of_triple
+                # otherwise the triple is not valid
+                raise KeyError('Triple not found.', sequence)
+
+            if len(sequence) >= self.switch_parameter:
+                # continue in the subtree
+                subtree_seq = sequence[self.switch_parameter:]
+
+                _next_tokens = self._next_tokens_from_subtree(subtree, subtree_seq)
+
+            return _next_tokens, cached_next_tokens
 
     def _next_tokens_from_subtree(self, subtree, subtree_seq):
         # TODO use the DictIndex instead. maybe also for merge and other operations
@@ -88,20 +286,52 @@ class PostgresTrieIndex(Index):
 
         return _next_tokens
 
-    def _merge(self, dst, src):
+    def _merge_dict(self, dst, src):
         for key in src:
             if key in dst:
                 # sum numleaves
                 dst[key][0] += src[key][0]
-                self._merge(dst[key][1], src[key][1])
+                self.merge(dst[key][1], src[key][1])
             else:
                 # If the key exists only in `src`, the value from the `src` object will be used.
                 dst[key] = src[key]
 
+    def _merge(self, dst, src):
+        '''
+        Assumption: no duplicates
+        TODO: check for duplicates
+        '''
+        cursor = 0
+        while True:
+            if isinstance(dst[1][cursor], dict) or isinstance(src[1][cursor], dict):
+                if not isinstance(src[1][cursor], dict):
+                    src[1][cursor] = {
+                        src[1][cursor]: [src[0], src[1][cursor + 1:]], # src branch
+                    }
+                if not isinstance(dst[1][cursor], dict):
+                    dst[1][cursor] = {
+                        dst[1][cursor]: [dst[0], dst[1][cursor + 1:]], # dst branch
+                    }
+                # now both are dict
+                self._merge_dict(dst[1][cursor], src[1][cursor])
+                break
+            else:
+                # int int
+                if dst[1][cursor] != src[1][cursor]:
+                    # divide in 2 branches
+                    dst[1][cursor] = = {
+                        dst[1][cursor]: [dst[0], dst[1][cursor + 1:]], # dst branch
+                        src[1][cursor]: [src[0], src[1][cursor + 1:]] # src branch
+                    }
+                    break
+                # else:
+                #     pass # go on with the loop
+
+            cursor += 1
+
+        dst[0] += src[0] # not in the loop
+
     def _next_tokens_from_postgresql(self, sequence):
-        """
-        The next possible tokens that will progress the trie, given the current sequence of tokens in `sequence`.
-        """
         with self.postgresql_connection.cursor() as cursor:
             cursor.execute(self.select_query, (sequence,))
             query_result = cursor.fetchall()
@@ -109,17 +339,25 @@ class PostgresTrieIndex(Index):
         _next_tokens = {}
         merged_subtree = {}
         subtrees_list = []
+        cached_next_tokens = []
         if len(query_result) > 0:
             for children, subtree, numleaves, childrenleaves in query_result:
-                for child, childleaves in zip(children, childrenleaves):
-                    if child not in _next_tokens:
-                        _next_tokens[child] = 0
-                    _next_tokens[child] += childleaves
-                if subtree:
-                    subtree = pickle.loads(subtree)
-                    self._merge(merged_subtree, subtree)
+                if numleaves == 1:
+                    # triple finish
+                    # children is the entire triple
+                    _next_tokens = [children[0]]
+                    # save the rest in cache
+                    cached_next_tokens = children[1:]
+                else:
+                    for child, childleaves in zip(children, childrenleaves):
+                        if child not in _next_tokens:
+                            _next_tokens[child] = 0
+                        _next_tokens[child] += childleaves
+                    if subtree:
+                        subtree = pickle.loads(subtree)
+                        self._merge(subtree, prefix)
 
-        return _next_tokens, merged_subtree
+        return _next_tokens, merged_subtree, cached_next_tokens
 
 class ConstrainedStateList():
     def __init__(self, number, *args, **kwargs):
@@ -163,6 +401,8 @@ class ConstrainedState():
         self.history = () # (prev_state, prev_cursor)
 
         self.cursor = 0 # how many tokens since last change in state
+
+        self.cached_next_tokens = []
 
     def is_constrained(self):
         return self.state % 2 == self.CONSTRAINED_GENERATION
@@ -231,6 +471,8 @@ class ConstrainedState():
             self.state = state
             self.cursor = initial_cursor
 
+            self.cached_next_tokens = []
+
     def get_cursor(self):
         return self.cursor
 
@@ -267,8 +509,8 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             if self.states[i].is_constrained(): # odd number means constrained generation
                 # constrained generation
                 constrain_generation_sequence = input_sequence[len(input_sequence) - self.states[i].get_cursor():]
-                scores[[i],:] = self.constrained_generation(
-                    constrain_generation_sequence, scores[[i],:])
+                scores[[i],:], cached_next_tokens = self.constrained_generation(
+                    constrain_generation_sequence, scores[[i],:], state=self.states[i])
             # else:
             #     # normal generation
             #     # scores are not altered
@@ -289,9 +531,13 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                     # forbid generating again same triple
                     del tokens_a[token]
 
-    def constrained_generation(self, input_sequence, scores: torch.FloatTensor, **kwargs):
+    def constrained_generation(self, input_sequence, scores: torch.FloatTensor, state):
 
-        possible_tokens = self.index.next_tokens(input_sequence)
+        if len(state.cached_next_tokens) > 0:
+            possible_tokens = {state.cached_next_tokens.pop(0): 1}
+        else:
+            possible_tokens, cached_next_tokens = self.index.next_tokens(input_sequence)
+
         visited_tokens = self.cache_index.next_tokens(input_sequence)
 
         self.subtract_tokens(possible_tokens, visited_tokens)
@@ -310,7 +556,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         scores[:,:] = -float('inf')
         scores[:, possible_tokens] = possible_scores
 
-        return scores
+        return scores, cached_next_tokens
 
 class GetAnswer(StoppingCriteria):
     # strategy=all strategy=any. strategy can be all or any python functions

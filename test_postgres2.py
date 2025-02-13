@@ -16,8 +16,7 @@ import time
 import json
 import pickle
 
-sys.path.insert(0, '.')
-from mergedeep import merge
+from ctrie import PostgresTrieIndex
 
 
 print('Start.')
@@ -25,10 +24,12 @@ print('Start.')
 postgres_connection = sys.argv[1] # 'postgres://postgres:secret@host:5432/postgres'
 table_name = sys.argv[2]
 rootkey = int(sys.argv[3])
-model_name = sys.argv[4]
-initial_tokens = sys.argv[5] if len(sys.argv) > 5 else ''
-if initial_tokens == 'json' and len(sys.argv) > 6:
-    initial_tokens = json.loads(sys.argv[6])
+end_of_triple = sys.argv[4]
+model_name = sys.argv[5]
+switch_parameter = int(sys.argv[6])
+initial_tokens = sys.argv[7] if len(sys.argv) > 7 else ''
+if initial_tokens == 'json' and len(sys.argv) > 8:
+    initial_tokens = json.loads(sys.argv[8])
     assert isinstance(initial_tokens, list)
 
 class TimeMeasure:
@@ -77,60 +78,25 @@ if isinstance(initial_tokens, str):
     initial_tokens = tokenizer(initial_tokens)['input_ids']
 
 conn = psycopg.connect(postgres_connection, autocommit=False)
-cur = conn.cursor()
 
-sentence = [rootkey]
+index = PostgresTrieIndex(rootkey=rootkey,
+                            postgresql_connection=conn,
+                            switch_parameter=switch_parameter,
+                            table_name=table_name,
+                            end_of_triple=end_of_triple)
+
+
+sentence = []
 
 while True:
     with TimeMeasure(tag=f'Query {len(sentence)}', verbose=True) as tm:
-        cur.execute(f'SELECT children, subtree, numleaves, childrenleaves FROM {table_name} WHERE key = %s;', (sentence,))
-        res = cur.fetchall()
+        possible_tokens = index.next_tokens(sentence)
 
-    if len(res) > 0:
-        exploded_children = set()
-        map_subtree = {}
-        for i, (children, subtree, numleaves, childrenleaves) in enumerate(res):
-            assert numleaves == sum(childrenleaves)
-            children = set(children)
-            for child in children:
-                if child not in map_subtree:
-                    map_subtree[child] = set()
-                map_subtree[child].add(i)
-            exploded_children.update(children)
+    possible_tokens = list(possible_tokens.keys())
 
-        next_token = choose(list(exploded_children), initial_tokens)
-
+    if len(possible_tokens) > 0:
+        next_token = choose(possible_tokens, initial_tokens)
         sentence.append(next_token)
-
-        corresponding_rows = map_subtree[next_token]
-        merged_subtree = {}
-        for _, subtree, numleaves, _ in [res[i] for i in corresponding_rows]:
-            # if the chosen token has the subtree in the db
-            # load the subtree in memory and go on
-            if subtree is not None:
-                subtree = pickle.loads(subtree)
-                assert numleaves == sum(num for num,_ in subtree.values())
-                merge(merged_subtree, subtree)
-
-        if len(merged_subtree) > 0:
-            with TimeMeasure(tag=f'Subtree generation', verbose=True) as tm:
-                 # continue the generation from the subtree
-                 print(tokenizer.decode(sentence))
-                 print('.\nReached the switch level at len {}. Proceeding with the in-memory sub-tree.\n'.format(len(sentence)))
-                 level = merged_subtree[next_token]
-                 children = list(level[1].keys())
-                 while len(children) > 0:
-                     next_token = choose(children, initial_tokens)
-                     level = level[1][next_token]
-                     children = list(level[1].keys())
-
-                     sentence.append(next_token)
-
-                     print(sentence)
-
-                 print('+')
-                 break
-
     else:
         print('.')
         break
