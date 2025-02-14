@@ -92,7 +92,7 @@ while True:
     with TimeMeasure(tag=f'Query {len(sentence)}', verbose=True) as tm:
         possible_tokens = index.next_tokens(sentence)
 
-    possible_tokens = list(possible_tokens.keys())
+    possible_tokens = list(possible_tokens.keys()) if possible_tokens else []
 
     if len(possible_tokens) > 0:
         next_token = choose(possible_tokens, initial_tokens)

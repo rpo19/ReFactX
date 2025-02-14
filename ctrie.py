@@ -119,19 +119,19 @@ class DictIndex(Index):
 
     def to_dict(self, sequence, numleaves=1, children=[], childrenleaves=[], subtree=[]):
         if subtree:
-            sequence += [subtree]
+            sequence = sequence + [subtree]
         elif children:
-            sequence += [{child:[num, []] for child, num in zip(chilren, childrenleaves)}]
+            sequence = sequence + [{child:[num, []] for child, num in zip(children, childrenleaves)}]
 
         return [numleaves, sequence]
 
-    def merge_dict(self, dst, src, update_numleaves=True):
+    def merge_dict(self, src, dst, update_numleaves=True):
         for key in src:
             if key in dst:
                 # sum numleaves
                 if update_numleaves:
                     dst[key][0] += src[key][0]
-                self.merge(src[key][1], dst[key][1], update_numleaves)
+                self.merge(src[key], dst[key], update_numleaves)
             else:
                 # If the key exists only in `src`, the value from the `src` object will be used.
                 dst[key] = src[key]
@@ -144,37 +144,40 @@ class DictIndex(Index):
         '''
         if dst is None:
             dst = self.tree
-        cursor = 0
-        while cursor < len(src[1]):
-            if cursor == len(dst[1]):
-                dst[1][cursor:] = src[1][cursor:]
-            elif isinstance(dst[1][cursor], dict) or isinstance(src[1][cursor], dict):
-                if not isinstance(src[1][cursor], dict):
-                    src[1][cursor] = {
-                        src[1][cursor]: [src[0], src[1][cursor + 1:]], # src branch
-                    }
-                if not isinstance(dst[1][cursor], dict):
-                    dst[1][cursor] = {
-                        dst[1][cursor]: [dst[0], dst[1][cursor + 1:]], # dst branch
-                    }
-                # now both are dict
-                self.merge_dict(src[1][cursor], dst[1][cursor], update_numleaves)
-                break
-            else:
-                # int int
-                if dst[1][cursor] != src[1][cursor]:
-                    # divide in 2 branches
-                    dst[1][cursor] = = {
-                        dst[1][cursor]: [dst[0], dst[1][cursor + 1:]], # dst branch
-                        src[1][cursor]: [src[0], src[1][cursor + 1:]] # src branch
-                    }
-                    break
-                # else:
-                #     pass # go on with the loop
+        if len(src) > 0:
+            cursor = 0
+            while cursor < len(src[1]):
+                if cursor == len(dst[1]):
+                    dst[1][cursor:] = src[1][cursor:]
+                    break # no more to do
 
-            cursor += 1
-        if update_numleaves:
-            dst[0] += src[0] # not in the loop
+                elif isinstance(dst[1][cursor], dict) or isinstance(src[1][cursor], dict):
+                    if not isinstance(src[1][cursor], dict):
+                        src[1][cursor] = {
+                            src[1][cursor]: [src[0], src[1][cursor + 1:]], # src branch
+                        }
+                    if not isinstance(dst[1][cursor], dict):
+                        dst[1][cursor] = {
+                            dst[1][cursor]: [dst[0], dst[1][cursor + 1:]], # dst branch
+                        }
+                    # now both are dict
+                    self.merge_dict(src[1][cursor], dst[1][cursor], update_numleaves)
+                    break
+                else:
+                    # int int
+                    if dst[1][cursor] != src[1][cursor]:
+                        # divide in 2 branches
+                        dst[1][cursor] = {
+                            dst[1][cursor]: [dst[0], dst[1][cursor + 1:]], # dst branch
+                            src[1][cursor]: [src[0], src[1][cursor + 1:]] # src branch
+                        }
+                        break
+                    # else:
+                    #     pass # go on with the loop
+
+                cursor += 1
+            if update_numleaves or dst[0] == 0: # always initialize if 0
+                dst[0] += src[0] # not in the loop
 
 class PostgresTrieIndex(Index):
     def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name):
@@ -200,7 +203,7 @@ class PostgresTrieIndex(Index):
         if _next_tokens is None:
             postgres_seq = sequence[:self.switch_parameter] # max length of sequences indexed in postgres
 
-            _next_tokens, subtree = self._next_tokens_from_postgresql(postgres_seq)
+            _next_tokens = self._next_tokens_from_postgresql(postgres_seq)
 
             if len(_next_tokens) == 0 and sequence[-1] != self.end_of_triple:
                 # end of triple must match end_of_triple
@@ -245,18 +248,23 @@ class PostgresTrieIndex(Index):
                 if numleaves == 1:
                     # triple finish
                     # children is the entire triple
-                    _next_tokens = [children[0]]
+                    child = children[0]
+                    if child not in _next_tokens:
+                        _next_tokens[child] = 0
+                    _next_tokens[child] += 1
                     # save the rest in cache
-                    current_tree = self.to_dict(sequence + children, numleaves)
+                    current_tree = self.cache.to_dict(sequence + children, numleaves)
                 else:
-                    current_tree = self.to_dict(sequence, children, numleaves, childrenleaves, subtree)
+                    if subtree:
+                        subtree = pickle.loads(subtree)
+                    current_tree = self.cache.to_dict(sequence, numleaves, children, childrenleaves, subtree)
 
                     for child, childleaves in zip(children, childrenleaves):
                         if child not in _next_tokens:
                             _next_tokens[child] = 0
                         _next_tokens[child] += childleaves
 
-                self.cache.merge(current_tree, merged_tree)
+                self.cache.merge(current_tree, merged_tree) # TODO check merge
 
             self.cache.merge(merged_tree, update_numleaves=False)
 
