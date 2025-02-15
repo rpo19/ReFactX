@@ -224,23 +224,6 @@ class PostgresTrieIndex(Index):
 
         return _next_tokens
 
-    def _next_tokens_from_subtree(self, subtree, subtree_seq):
-        # TODO use the DictIndex instead. maybe also for merge and other operations
-        """
-        The next possible tokens that will progress the trie, given the current sequence of tokens in `sequence`.
-        """
-        start = subtree
-
-        for current_token in subtree_seq:
-            if current_token not in start:
-                start = {}
-                break
-            start = start[current_token][1]
-
-        _next_tokens = {k:v[0] for k,v in start.items()}
-
-        return _next_tokens
-
     def _next_tokens_from_postgresql(self, sequence):
         with self.postgresql_connection.cursor() as cursor:
             cursor.execute(self.select_query, (sequence,))
@@ -272,14 +255,14 @@ class PostgresTrieIndex(Index):
 
                 self.cache.merge(current_tree, merged_tree) # TODO check merge
             self.cache.merge(merged_tree, update_numleaves=False)
+            # TODO probably better not saving all in cache (slow) but only subtrees.
+            # TODO verify leaves count
 
         return _next_tokens
 
 class ConstrainedStateList():
-    def __init__(self, number, *args, **kwargs):
-        self.states = []
-        for i in range(number):
-            self.states.append(ConstrainedState(*args, **kwargs))
+    def __init__(self, states):
+        self.states = states
 
         self.beam_idx = [] # place to save beam indexes permutation
 
@@ -300,7 +283,7 @@ class ConstrainedStateList():
                 state.load(copies[beam_i], copy=True)
 
 class ConstrainedState():
-    def __init__(self, begin_pattern, end_pattern, state=0) -> None:
+    def __init__(self, begin_pattern, end_pattern, cache_index, state=0) -> None:
 
         self.NORMAL_GENERATION = 0 # even numbers for normal
         self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
@@ -317,6 +300,8 @@ class ConstrainedState():
         self.history = () # (prev_state, prev_cursor)
 
         self.cursor = 0 # how many tokens since last change in state
+
+        self.cache_index = cache_index
 
     def is_constrained(self):
         return self.state % 2 == self.CONSTRAINED_GENERATION
@@ -400,7 +385,6 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         self.end_token = end_token
         self.states = states
         self.first_call = True
-        self.cache_index = DictIndex() # TODO simplify getting all the generated triples (now visit the tree)
 
         self.tokenizer=tokenizer # for debugging
 
@@ -446,10 +430,15 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
     def constrained_generation(self, input_sequence, scores: torch.FloatTensor, state):
 
         possible_tokens = self.index.next_tokens(input_sequence)
-
-        visited_tokens = self.cache_index.next_tokens(input_sequence)
-
-        self.subtract_tokens(possible_tokens, visited_tokens)
+        try:
+            visited_tokens = state.cache_index.next_tokens(input_sequence)
+            self.subtract_tokens(possible_tokens, visited_tokens)
+        except EmptyIndexException:
+            # ignore when the cache index is empty
+            pass
+        except TripleNotFoundException:
+            # ignore if triple not in cache index
+            pass
 
         possible_tokens = list(possible_tokens.keys()) # TODO transform subtract tokens in a prob modifier
 
@@ -458,7 +447,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             # send end of string
             possible_tokens = [self.end_token]
             generated_triple = input_sequence + [self.end_token]
-            self.cache_index.add(generated_triple)
+            state.cache_index.add(generated_triple)
 
         possible_scores = scores[:, possible_tokens]
 

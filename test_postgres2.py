@@ -21,6 +21,8 @@ from ctrie import PostgresTrieIndex
 
 print('Start.')
 
+# TODO use click
+
 postgres_connection = sys.argv[1] # 'postgres://postgres:secret@host:5432/postgres'
 table_name = sys.argv[2]
 rootkey = int(sys.argv[3])
