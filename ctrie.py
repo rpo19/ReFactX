@@ -222,7 +222,7 @@ class PostgresTrieIndex(Index):
 
                 _next_tokens = self.cache.next_tokens(sequence)
 
-            return _next_tokens
+        return _next_tokens
 
     def _next_tokens_from_subtree(self, subtree, subtree_seq):
         # TODO use the DictIndex instead. maybe also for merge and other operations
@@ -262,7 +262,6 @@ class PostgresTrieIndex(Index):
                     current_tree = self.cache.to_dict(sequence + children, numleaves)
                 else:
                     if subtree:
-                        print('subtree')
                         subtree = pickle.loads(subtree)
                     current_tree = self.cache.to_dict(sequence, numleaves, children, childrenleaves, subtree)
 
@@ -272,7 +271,6 @@ class PostgresTrieIndex(Index):
                         _next_tokens[child] += childleaves
 
                 self.cache.merge(current_tree, merged_tree) # TODO check merge
-            print('.')
             self.cache.merge(merged_tree, update_numleaves=False)
 
         return _next_tokens
