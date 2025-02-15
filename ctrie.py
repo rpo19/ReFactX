@@ -21,9 +21,10 @@ class Index():
         return {token: numleaves,}
 
 class DictIndex(Index):
-    def __init__(self, tree = None):
+    def __init__(self, end_of_triple, tree = None):
         if tree is None:
             self.tree = [0, []]
+        self.end_of_triple = end_of_triple
 
     def add(self, sequence):
         # could be replaced with to_dict and merge
@@ -115,11 +116,16 @@ class DictIndex(Index):
         else: # is int
             _next_tokens = {level[1][level_cursor]: level[0]}
 
+        if len(_next_tokens) == 0 and sequence[-1] != self.end_of_triple:
+            # end of triple must match end_of_triple
+            # otherwise the triple is not valid
+            raise TripleNotFoundException(sequence)
+
         return _next_tokens
 
     def to_dict(self, sequence, numleaves=1, children=[], childrenleaves=[], subtree=[]):
         if subtree:
-            sequence = sequence + [subtree]
+            sequence = sequence + subtree
         elif children:
             sequence = sequence + [{child:[num, []] for child, num in zip(children, childrenleaves)}]
 
@@ -186,8 +192,8 @@ class PostgresTrieIndex(Index):
         self.postgresql_connection = postgresql_connection
         self.switch_parameter = switch_parameter+1 # counting the rootkey
         self.table_name = table_name
-        self.select_query = sql.SQL('SELECT children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
-        self.cache = DictIndex()
+        self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
+        self.cache = DictIndex(self.end_of_triple)
 
     def next_tokens(self, sequence, **kwargs):
         sequence = [self.rootkey] + sequence
@@ -244,7 +250,7 @@ class PostgresTrieIndex(Index):
         merged_tree = [0, []]
         subtrees_list = []
         if len(query_result) > 0:
-            for children, subtree, numleaves, childrenleaves in query_result:
+            for query_id, children, subtree, numleaves, childrenleaves in query_result:
                 if numleaves == 1:
                     # triple finish
                     # children is the entire triple
@@ -256,6 +262,7 @@ class PostgresTrieIndex(Index):
                     current_tree = self.cache.to_dict(sequence + children, numleaves)
                 else:
                     if subtree:
+                        print('subtree')
                         subtree = pickle.loads(subtree)
                     current_tree = self.cache.to_dict(sequence, numleaves, children, childrenleaves, subtree)
 
@@ -265,7 +272,7 @@ class PostgresTrieIndex(Index):
                         _next_tokens[child] += childleaves
 
                 self.cache.merge(current_tree, merged_tree) # TODO check merge
-
+            print('.')
             self.cache.merge(merged_tree, update_numleaves=False)
 
         return _next_tokens

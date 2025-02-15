@@ -27,10 +27,13 @@ rootkey = int(sys.argv[3])
 end_of_triple = sys.argv[4]
 model_name = sys.argv[5]
 switch_parameter = int(sys.argv[6])
-initial_tokens = sys.argv[7] if len(sys.argv) > 7 else ''
-if initial_tokens == 'json' and len(sys.argv) > 8:
-    initial_tokens = json.loads(sys.argv[8])
+random_seed = int(sys.argv[7])
+initial_tokens = sys.argv[8] if len(sys.argv) > 8 else ''
+if initial_tokens == 'json' and len(sys.argv) > 9:
+    initial_tokens = json.loads(sys.argv[9])
     assert isinstance(initial_tokens, list)
+
+random.seed(random_seed)
 
 class TimeMeasure:
     def __init__(self, tag='default', verbose=False, outfile=sys.stderr):
@@ -96,6 +99,7 @@ while True:
 
     if len(possible_tokens) > 0:
         next_token = choose(possible_tokens, initial_tokens)
+        print(tokenizer.decode(next_token))
         sentence.append(next_token)
     else:
         print('.')
