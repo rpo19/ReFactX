@@ -3,7 +3,6 @@ from transformers import StoppingCriteria
 import torch
 import pickle
 from psycopg import sql
-import marisa_trie
 
 class EmptyIndexException(Exception):
     pass
@@ -22,9 +21,12 @@ class Index():
 
 class DictIndex(Index):
     def __init__(self, end_of_triple, tree = None):
+        self.reset(tree)
+        self.end_of_triple = end_of_triple
+
+    def reset(self, tree = None):
         if tree is None:
             self.tree = [0, []]
-        self.end_of_triple = end_of_triple
 
     def add(self, sequence):
         # could be replaced with to_dict and merge
@@ -90,7 +92,7 @@ class DictIndex(Index):
             raise EmptyIndexException()
 
         # visit the tree following sequence
-        while cursor < len(sequence):
+        while cursor < len(sequence) and level_cursor < len(level[1]):
             if isinstance(level[1][level_cursor], dict):
                 # found a branch
                 if sequence[cursor] in level[1][level_cursor]:
@@ -123,12 +125,9 @@ class DictIndex(Index):
 
         return _next_tokens
 
-    def to_dict(self, sequence, numleaves=1, children=[], childrenleaves=[], subtree=[]):
+    def to_dict(self, sequence, numleaves, subtree=[]):
         if subtree:
-            sequence = sequence + subtree
-        elif children:
-            sequence = sequence + [{child:[num, []] for child, num in zip(children, childrenleaves)}]
-
+            sequence = [*sequence, *subtree]
         return [numleaves, sequence]
 
     def merge_dict(self, src, dst, update_numleaves=True):
@@ -230,10 +229,11 @@ class PostgresTrieIndex(Index):
             query_result = cursor.fetchall()
 
         _next_tokens = {}
-        merged_tree = [0, []]
-        subtrees_list = []
         if len(query_result) > 0:
+            totalnumleaves = 0
+            merged_tree = [0, []]
             for query_id, children, subtree, numleaves, childrenleaves in query_result:
+                totalnumleaves += numleaves
                 if numleaves == 1:
                     # triple finish
                     # children is the entire triple
@@ -242,21 +242,22 @@ class PostgresTrieIndex(Index):
                         _next_tokens[child] = 0
                     _next_tokens[child] += 1
                     # save the rest in cache
-                    current_tree = self.cache.to_dict(sequence + children, numleaves)
+                    current_tree = self.cache.to_dict([*sequence, *children], numleaves)
                 else:
-                    if subtree:
-                        subtree = pickle.loads(subtree)
-                    current_tree = self.cache.to_dict(sequence, numleaves, children, childrenleaves, subtree)
-
                     for child, childleaves in zip(children, childrenleaves):
                         if child not in _next_tokens:
                             _next_tokens[child] = 0
                         _next_tokens[child] += childleaves
 
-                self.cache.merge(current_tree, merged_tree) # TODO check merge
+                    if subtree:
+                        subtree = pickle.loads(subtree)
+                        current_tree = self.cache.to_dict(sequence, numleaves, subtree)
+                        self.cache.merge(current_tree, merged_tree, update_numleaves=True)
+
+            sequence_tree = self.cache.to_dict(sequence, totalnumleaves)
+            self.cache.merge(sequence_tree, update_numleaves=False)
             self.cache.merge(merged_tree, update_numleaves=False)
-            # TODO probably better not saving all in cache (slow) but only subtrees.
-            # TODO verify leaves count
+
 
         return _next_tokens
 
