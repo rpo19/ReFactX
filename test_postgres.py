@@ -42,6 +42,9 @@ def merge(dst, src):
 def choose(children, initial_tokens):
     if len(initial_tokens) > 0:
         choice = initial_tokens.pop(0)
+        # if not choice in children:
+        #     import pdb
+        #     pdb.set_trace()
         assert choice in children
     else:
         choice = random.choice(children)
@@ -95,7 +98,13 @@ def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, sw
 
     while True:
         with TimeMeasure(tag=f'Query {len(sentence)}', verbose=True) as tm:
+            print(sentence)
+            # if sentence == [366, 60704, 29, 366]:
+            #     import pdb
+            #     pdb.set_trace()
             possible_tokens = index.next_tokens(sentence)
+
+
 
         possible_tokens = list(possible_tokens.keys()) if possible_tokens else []
 
