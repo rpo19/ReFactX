@@ -49,6 +49,31 @@ class DictIndex(Index):
             length = self.tree[0]
         return length
 
+    def _repr_tree_dict(self, tree_dict, level=0, spacer='\t'):
+        _repr = '{'
+        for key, value in tree_dict.items():
+            _repr += '\n{}{}: {}'.format(spacer * level, key, self._repr_tree(value, level+1))
+        _repr += '}'
+        return _repr
+
+    def _repr_tree(self, tree, level=0, spacer='\t'):
+        if not tree:
+            return None.__repr__()
+        cursor = 0
+        _repr_dict = ''
+        while cursor < len(tree[1]):
+            if isinstance(tree[1][cursor], dict):
+                if cursor > 0:
+                    _repr_dict += ', '
+                _repr_dict += self._repr_tree_dict(tree[1][cursor], level+1)
+                break
+            cursor += 1
+        _repr = '{}[{}, [{}{}]]'.format(spacer * level, tree[0], ', '.join(map(str, tree[1][:cursor])), _repr_dict)
+        return _repr
+
+    def __repr__(self):
+        return self._repr_tree(self.tree)
+
     def copy(self):
         copy_of_index = DictIndex(self.end_of_triple, tree=copy.deepcopy(self.tree))
         return copy_of_index

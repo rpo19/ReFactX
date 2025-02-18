@@ -61,6 +61,42 @@ class TestCtrie(unittest.TestCase):
 
     def test_add(self):
         self.index.reset()
+        self.assertEqual(len(self.index), 0)
+
+        # add new leaf
+        self.index.add([10,9,8,7,6])
+        self.assertEqual(len(self.index), 1)
+
+        # add existing leaf
+        self.index.add([10,9,8,7,6])
+        self.assertEqual(len(self.index), 1)
+
+        # add longer leaf
+        self.index.add([10,9,8,7,6,4,3,2,1])
+        self.assertEqual(len(self.index), 1)
+
+        # create branch
+        self.index.add([10,9,8,7,6,999999,3,2,1])
+        self.assertEqual(len(self.index), 2)
+
+        # add longer leaf
+        self.index.add([10,9,8,7,6,999999,3,2,1,50,20])
+        self.assertEqual(len(self.index), 2)
+
+        # create branch
+        self.index.add([10,9,8,7,6,12343,3,2,1])
+        self.assertEqual(len(self.index), 3)
+
+        # create deep brancg
+        self.index.add([10,9,8,7,6,12343,3,99992,18,4])
+        self.assertEqual(len(self.index), 4)
+
+        # create end branch
+        self.index.add([10,9,8,7,6,12343,3,7777])
+        self.assertEqual(len(self.index), 5)
+
+    def test_add_w_duplicates(self):
+        self.index.reset()
         self.index.merge(self.tree1)
         self.index.merge(self.tree2)
         self.index.merge(self.tree3)
@@ -96,6 +132,11 @@ class TestCtrie(unittest.TestCase):
 
         # check actual num leaves w/o duplicates
         self.assertEqual(self.index.count_leaves(), 22)
+
+    def test_repr(self):
+        self.index.reset()
+        self.index.tree = [5, [10, 9, 8, 7, 6, {4: [1, [3, 2, 1]], 999999: [1, [3, 2, 1, 50, 20]], 12343: [3, [3, {2: [1, [1]], 99992: [1, [18, 4]], 7777: [1, []]}]]}]]
+        self.assertEqual(repr(self.index), '[5, [10, 9, 8, 7, 6, {\n\t4: \t\t[1, [3, 2, 1]]\n\t999999: \t\t[1, [3, 2, 1, 50, 20]]\n\t12343: \t\t[3, [3, {\n\t\t\t2: \t\t\t\t[1, [1]]\n\t\t\t99992: \t\t\t\t[1, [18, 4]]\n\t\t\t7777: \t\t\t\t[1, []]}]]}]]')
 
 if __name__ == "__main__":
     unittest.main()
