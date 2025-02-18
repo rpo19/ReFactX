@@ -6,7 +6,7 @@ class Index():
         self.postgresql_url = 'postgres://postgres:secret@10.0.0.118:5432/postgres'
         self.autocommit = True
         self.postgresql_connection = psycopg.connect(self.postgresql_url, autocommit = self.autocommit)
-        self.postgresql_table = "ctrieV3"
+        self.postgresql_table = "ctriev3"
         self.switch_parameter = 6
         self.rootkey = 150000
         self.end_of_triple = 662

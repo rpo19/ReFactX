@@ -62,7 +62,7 @@ def choose(children, initial_tokens):
 @click.option("--json-tokens", required=False, help="JSON tokens")
 def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, switch_parameter, random_seed, initial_tokens, json_tokens):
     if json_tokens:
-        assert initial_tokens is None, 'ERROR: specify either intitial tokens or json tokens. Not both.'
+        assert not initial_tokens, 'ERROR: specify either intitial tokens or json tokens. Not both.'
         initial_tokens = json.loads(json_tokens)
         assert isinstance(initial_tokens, list)
 

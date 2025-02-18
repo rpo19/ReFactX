@@ -62,9 +62,10 @@ with open(output_file, 'w') as output_fd:
 
     assert index.rootkey > max(model.tokenizer.vocab.values())
 
+    num_states = model.batch_size * model.generate_args.get('num_beams', 1)
     states = ConstrainedStateList(
-        [ConstrainedState(index.switch_pattern, model.newline_token,
-                        DictIndex(end_of_triple=index.end_of_triple)) for _ in range(model.generate_args.get('num_beams', 1))])
+        [ConstrainedState(model.switch_pattern, model.newline_token,
+                        DictIndex(end_of_triple=index.end_of_triple)) for _ in range(num_states)])
 
     constrained_processor = ConstrainedLogitsProcessor(
         index=index.index,
@@ -119,6 +120,7 @@ with open(output_file, 'w') as output_fd:
                 **model.generate_args,
                 use_cache=True,
                 past_key_values=past_key_values,
+                kwargs = {'constrained_state': states}, # passing state
             )
 
             for question, prompted_question, output_i in zip(batch, prompted_batch, output):
