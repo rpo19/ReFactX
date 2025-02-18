@@ -129,6 +129,8 @@ with open(output_file, 'w') as output_fd:
                     question=question,
                     answer_complete=answer_complete,
                     prediction=answer,
-                    full_prediction=model.tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):]))
+                    full_prediction=model.tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):]),
+                    prompt=model.tokenizer.decode(output_i[:len(batch_inputs.input_ids[0])]),
+                    full_sample=model.tokenizer.decode(output_i))
                 output_fd.write(json.dumps(sample))
                 output_fd.write('\n')

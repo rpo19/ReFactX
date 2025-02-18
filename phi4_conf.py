@@ -74,7 +74,8 @@ Answer: Mont Blanc.
             # only prompt for caching
             return self.tokenizer.apply_chat_template(self.prompt_template, tokenize=False, add_generation_prompt=False)
         else:
-            return self.tokenizer.apply_chat_template(self.prompt_template + [question], tokenize=False, add_generation_prompt=True)
+            question_w_role = {'role':'user', 'content': question}
+            return self.tokenizer.apply_chat_template(self.prompt_template + [question_w_role], tokenize=False, add_generation_prompt=True)
 
     def tokenize_fun(self, questions):
         return self.tokenizer(
