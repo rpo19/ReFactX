@@ -355,6 +355,75 @@ class PostgresTrieIndex(Index):
 
         return _next_tokens
 
+class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
+    '''
+    Use only for ingest time
+    '''
+    def __init__(self, rootkey : int, switch_parameter : int, table_name):
+        end_of_triple = -1 # only needed during inference
+        postgresql_connection = '' # inference
+        PostgresTrieIndex.__init__(self, rootkey, end_of_triple, postgresql_connection, switch_parameter, table_name)
+        DictIndex.__init__(self, end_of_triple)
+
+        self.create_table_query = sql.SQL('''CREATE TABLE IF NOT EXISTS {} (
+            id BIGINT GENERATED ALWAYS AS IDENTITY,
+            key INT[] NOT NULL,
+            children INT[],
+            numleaves INT,
+            childrenleaves INT[],
+            subtree BYTEA
+        );''').format(sql.Identifier(self.table_name))
+        self.create_pkey_query = sql.SQL('ALTER TABLE {} ADD PRIMARY KEY (id);').format(
+            sql.Identifier(self.table_name))
+        self.create_index = sql.SQL('CREATE INDEX idx_key_btree_{} ON {} USING BTREE (key);').format(
+            sql.Identifier(self.table_name), sql.Identifier(self.table_name))
+        self.drop_pkey_query = sql.SQL('ALTER TABLE {} DROP CONSTRAINT IF EXISTS {}_pkey;').format(
+            sql.Identifier(self.table_name), sql.Identifier(self.table_name))
+        self.drop_index_query = sql.SQL('DROP INDEX IF EXISTS idx_key_btree_{};').format(
+            sql.Identifier(self.table_name))
+        self.check_indexes_query = sql.SQL("SELECT count(*) FROM pg_indexes WHERE tablename = '{}';").format(
+            sql.Identifier(self.table_name))
+
+        self.truncate_query = sql.SQL("TRUNCATE TABLE {};").format(sql.Identifier(self.table_name))
+
+        self.copy_query = sql.SQL('''COPY {} (key, children, numleaves, childrenleaves, subtree)
+            FROM STDIN WITH (FREEZE)''').format(sql.Identifier(self.table_name))
+
+    def get_rows(self):
+        # iterative depth first traversal with a stack
+        # level[0] is numleaves
+        key = [self.rootkey]
+        stack = [(0, key, self.tree)]
+        while len(stack) > 0:
+            level_num, key, level = stack.pop()
+            if len(level[1]) > 0: # otherwise nothing to do
+                if level[0] == 1: # 1 leaf -> children is the sequence to the end of triple
+                    children = level[1]
+                    childrenleaves = []
+                    if len(children) > 0:
+                        yield key, children, level[0], childrenleaves, None
+                else:
+                    if isinstance(level[1][0], dict):
+                        # branch here
+                        children = list(level[1][0].keys())
+                        childrenleaves = [level[1][0][child][0] for child in children]
+                        next_levels = [level[1][0][child] for child in children]
+                    else: # is int -> only 1 child
+                        children = [level[1][0]]
+                        childrenleaves = [level[0]] # same numleaves as parent
+                        next_levels = [[level[0], level[1][1:]]]
+
+                    if level_num >= self.switch_parameter:
+                        yield key, children, level[0], childrenleaves, pickle.dumps(level[1])
+                    else:
+                        for child, next_level in zip(children, next_levels):
+                            stack.append((level_num + 1, key + [child], next_level))
+                        if len(children) > 0:
+                            # skip adding empty keys to save space
+                            yield key, children, level[0], childrenleaves, None
+            else:
+                print('Found empty tree.')
+
 class ConstrainedStateList():
     def __init__(self, states):
         self.states = states
