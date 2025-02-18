@@ -83,6 +83,10 @@ def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, sw
     with TimeMeasure(tag='Loading tokenizer', verbose=True) as tm:
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
+    if initial_tokens:
+        print('Initial tokens:', initial_tokens)
+        print(tokenizer.decode(initial_tokens))
+
     if isinstance(initial_tokens, str):
         initial_tokens = tokenizer(initial_tokens)['input_ids']
 
@@ -99,6 +103,7 @@ def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, sw
     while True:
         with TimeMeasure(tag=f'Query {len(sentence)}', verbose=True) as tm:
             print(sentence)
+            print(tokenizer.decode(sentence))
             # if sentence == [366, 60704, 29, 366]:
             #     import pdb
             #     pdb.set_trace()
