@@ -49,30 +49,36 @@ class DictIndex(Index):
             length = self.tree[0]
         return length
 
-    def _repr_tree_dict(self, tree_dict, level=0, spacer='\t'):
-        _repr = '{'
+    def _str_tree_dict(self, tree_dict, level=0, spacer='\t'):
+        _str = '{'
         for key, value in tree_dict.items():
-            _repr += '\n{}{}: {}'.format(spacer * level, key, self._repr_tree(value, level+1))
-        _repr += '}'
-        return _repr
+            _str += '\n{}{}: {}'.format(spacer * level, key, self._str_tree(value, level+1))
+        _str += '}'
+        return _str
 
-    def _repr_tree(self, tree, level=0, spacer='\t'):
+    def _str_tree(self, tree, level=0, spacer='\t'):
         if not tree:
-            return None.__repr__()
+            return None.__str__()
         cursor = 0
-        _repr_dict = ''
+        _str_dict = ''
         while cursor < len(tree[1]):
             if isinstance(tree[1][cursor], dict):
                 if cursor > 0:
-                    _repr_dict += ', '
-                _repr_dict += self._repr_tree_dict(tree[1][cursor], level+1)
+                    _str_dict += ', '
+                _str_dict += self._str_tree_dict(tree[1][cursor], level+1)
                 break
             cursor += 1
-        _repr = '{}[{}, [{}{}]]'.format(spacer * level, tree[0], ', '.join(map(str, tree[1][:cursor])), _repr_dict)
-        return _repr
+        _str = '{}[{}, [{}{}]]'.format(spacer * level, tree[0], ', '.join(map(str, tree[1][:cursor])), _str_dict)
+        return _str
+
+    def __str__(self):
+        return self._str_tree(self.tree)
 
     def __repr__(self):
-        return self._repr_tree(self.tree)
+        return '{}\n{}'.format(super().__repr__(), self.__str__())
+
+    def __short_repr__(self):
+        return super().__repr__()
 
     def copy(self):
         copy_of_index = DictIndex(self.end_of_triple, tree=copy.deepcopy(self.tree))
@@ -286,8 +292,6 @@ class PostgresTrieIndex(Index):
         self.switch_parameter = switch_parameter+1 # counting the rootkey
         self.table_name = table_name
         self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
-        self.subtree_cache = DictIndex(self.end_of_triple)
-        self.oneleaf_cache = DictIndex(self.end_of_triple)
 
     def _merge_next_tokens(self, src, dst):
         if src is not None:
@@ -298,11 +302,14 @@ class PostgresTrieIndex(Index):
                     dst[key] = src[key]
 
     def next_tokens(self, sequence, **kwargs):
+        subtree_cache = kwargs['state'].subtree_cache
+        oneleaf_cache = kwargs['state'].oneleaf_cache
+
         sequence = [self.rootkey] + sequence
 
         _next_tokens_cache = None
         try:
-            _next_tokens_cache = self.oneleaf_cache.next_tokens(sequence)
+            _next_tokens_cache = oneleaf_cache.next_tokens(sequence)
         except EmptyIndexException:
             pass
         except TripleNotFoundException:
@@ -312,7 +319,7 @@ class PostgresTrieIndex(Index):
         if len(sequence) <= self.switch_parameter:
             postgres_seq = sequence[:self.switch_parameter] # max length of sequences indexed in postgres
 
-            _next_tokens = self._next_tokens_from_postgresql(postgres_seq)
+            _next_tokens = self._next_tokens_from_postgresql(postgres_seq, subtree_cache, oneleaf_cache)
         else:
             # continue in the subtree
             # subtree_seq = sequence[self.switch_parameter:]
@@ -321,7 +328,7 @@ class PostgresTrieIndex(Index):
             # probably doesnt change much
 
             try:
-                _next_tokens = self.subtree_cache.next_tokens(sequence)
+                _next_tokens = subtree_cache.next_tokens(sequence)
             except EmptyIndexException:
                 pass
 
@@ -329,8 +336,8 @@ class PostgresTrieIndex(Index):
 
         if len(_next_tokens) == 0:
             if sequence[-1] == self.end_of_triple:
-                self.oneleaf_cache.reset()
-                self.subtree_cache.reset()
+                oneleaf_cache.reset()
+                subtree_cache.reset()
             else:
                 # end of triple must match end_of_triple
                 # otherwise the triple is not valid
@@ -338,7 +345,7 @@ class PostgresTrieIndex(Index):
 
         return _next_tokens
 
-    def _next_tokens_from_postgresql(self, sequence):
+    def _next_tokens_from_postgresql(self, sequence, subtree_cache, oneleaf_cache):
         with self.postgresql_connection.cursor() as cursor:
             cursor.execute(self.select_query, (sequence,))
             query_result = cursor.fetchall()
@@ -356,8 +363,8 @@ class PostgresTrieIndex(Index):
                         _next_tokens[child] = 0
                     _next_tokens[child] += 1
                     # save the rest in cache
-                    current_tree = self.oneleaf_cache.to_dict([*sequence, *children], numleaves)
-                    merge_numleaves = self.oneleaf_cache.merge(current_tree, update_numleaves=True)
+                    current_tree = oneleaf_cache.to_dict([*sequence, *children], numleaves)
+                    merge_numleaves = oneleaf_cache.merge(current_tree, update_numleaves=True)
 
                 else:
                     for child, childleaves in zip(children, childrenleaves):
@@ -367,10 +374,10 @@ class PostgresTrieIndex(Index):
 
                     if subtree:
                         subtree = pickle.loads(subtree)
-                        current_tree = self.subtree_cache.to_dict(sequence, numleaves, subtree)
-                        # if not numleaves == self.subtree_cache.count_leaves(current_tree):
+                        current_tree = subtree_cache.to_dict(sequence, numleaves, subtree)
+                        # if not numleaves == subtree_cache.count_leaves(current_tree):
                         #     pass
-                        merge_numleaves = self.subtree_cache.merge(current_tree, update_numleaves=True)
+                        merge_numleaves = subtree_cache.merge(current_tree, update_numleaves=True)
                         numleaves_diff = numleaves - merge_numleaves
                         if numleaves_diff != 0:
                             # TODO debug
@@ -472,7 +479,7 @@ class ConstrainedStateList():
                 state.load(copies[beam_i], copy=True)
 
 class ConstrainedState():
-    def __init__(self, begin_pattern, end_pattern, cache_index, state=0) -> None:
+    def __init__(self, begin_pattern, end_pattern, cache_index, subtree_cache, oneleaf_cache, state=0) -> None:
 
         self.NORMAL_GENERATION = 0 # even numbers for normal
         self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
@@ -493,6 +500,9 @@ class ConstrainedState():
         self.cache_index = cache_index
         self.generated_triples = []
 
+        self.subtree_cache = subtree_cache
+        self.oneleaf_cache = oneleaf_cache
+
     def cache_add(self, sequence):
         self.cache_index.add(sequence, new_leaf=True)
         self.generated_triples.append(sequence)
@@ -504,23 +514,36 @@ class ConstrainedState():
         self.state = 0
         self.history = ()
         self.cursor = 0
+        self.generated_triples = []
+        self.cache_index.reset()
+        self.subtree_cache.reset()
+        self.oneleaf_cache.reset()
 
     def dump(self, copy=True):
         return {
-            "begin_pattern": self.begin_pattern,
-            "end_pattern": self.end_pattern,
-            "state": self.state,
-            "history": self.history,
-            "cursor": self.cursor,
+            'begin_pattern': self.begin_pattern,
+            'end_pattern': self.end_pattern,
+            'state': self.state,
+            'history': self.history,
+            'cursor': self.cursor,
+            'generated_triples': self.generated_triples.copy() if copy else self.generated_triples,
+            'cache_index': self.cache_index.copy() if copy else self.cache_index,
+            'oneleaf_cache': self.oneleaf_cache.copy() if copy else self.oneleaf_cache,
+            'subtree_cache': self.subtree_cache.copy() if copy else self.subtree_cache,
         }
 
     def load(self, data, copy=True):
-        self.begin_pattern = data["begin_pattern"]
-        self.end_pattern = data["end_pattern"]
-        self.state = data["state"]
+        self.begin_pattern = data['begin_pattern']
+        self.end_pattern = data['end_pattern']
+        self.state = data['state']
 
-        self.history = data["history"]
-        self.cursor = data["cursor"]
+        self.history = data['history']
+        self.cursor = data['cursor']
+
+        self.generated_triples = data['generated_triples'].copy() if copy else data['generated_triples']
+        self.cache_index = data['cache_index'].copy() if copy else data['cache_index']
+        self.subtree_cache = data['subtree_cache'].copy() if copy else data['subtree_cache']
+        self.oneleaf_cache = data['oneleaf_cache'].copy() if copy else data['oneleaf_cache']
 
     def copy(self, other):
         self.begin_pattern = other.begin_pattern
@@ -623,7 +646,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
     def constrained_generation(self, input_sequence, scores: torch.FloatTensor, state):
 
-        possible_tokens = self.index.next_tokens(input_sequence)
+        possible_tokens = self.index.next_tokens(input_sequence, state = state)
         # print(possible_tokens, end=' - ')
         try:
             visited_tokens = state.cache_index.next_tokens(input_sequence)

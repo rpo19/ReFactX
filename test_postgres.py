@@ -7,7 +7,7 @@ import time
 import json
 import pickle
 import click
-from ctrie import PostgresTrieIndex
+from ctrie import PostgresTrieIndex, ConstrainedState, DictIndex
 
 class TimeMeasure:
     def __init__(self, tag='default', verbose=False, outfile=sys.stdout):
@@ -75,8 +75,10 @@ def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, sw
     click.echo(f"Random Seed: {random_seed}")
     click.echo(f"Initial Tokens: {initial_tokens}")
 
-    if random_seed is not None:
-        random.seed(random_seed)
+    if random_seed is None:
+        random_seed = random.randint(0, 2**32)
+    random.seed(random_seed)
+    print('Seed:', random_seed)
 
     print('Start.')
 
@@ -98,16 +100,24 @@ def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, sw
                                 table_name=table_name,
                                 end_of_triple=end_of_triple)
 
-    sentence = []
+    state = ConstrainedState(
+                begin_pattern = [],
+                end_pattern = [],
+                cache_index = DictIndex(end_of_triple=index.end_of_triple),
+                subtree_cache = DictIndex(end_of_triple=index.end_of_triple),
+                oneleaf_cache = DictIndex(end_of_triple=index.end_of_triple)
+            )
+
+    sequence = []
 
     while True:
-        with TimeMeasure(tag=f'Query {len(sentence)}', verbose=True) as tm:
-            print(sentence)
-            print(tokenizer.decode(sentence))
-            # if sentence == [366, 60704, 29, 366]:
+        with TimeMeasure(tag=f'Query {len(sequence)}', verbose=True) as tm:
+            print(sequence)
+            print(tokenizer.decode(sequence))
+            # if sequence == [366, 791, 10425, 315, 279, 47380]:
             #     import pdb
             #     pdb.set_trace()
-            possible_tokens = index.next_tokens(sentence)
+            possible_tokens = index.next_tokens(sequence, state=state)
 
 
 
@@ -115,12 +125,12 @@ def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, sw
 
         if len(possible_tokens) > 0:
             next_token = choose(possible_tokens, initial_tokens)
-            sentence.append(next_token)
+            sequence.append(next_token)
         else:
             print('.')
             break
 
-    print(tokenizer.decode(sentence))
+    print(tokenizer.decode(sequence))
 
 
 if __name__ == "__main__":

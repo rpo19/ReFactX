@@ -64,8 +64,13 @@ with open(output_file, 'w') as output_fd:
 
     num_states = model.batch_size * model.generate_args.get('num_beams', 1)
     states = ConstrainedStateList(
-        [ConstrainedState(model.switch_pattern, model.newline_token,
-                        DictIndex(end_of_triple=index.end_of_triple)) for _ in range(num_states)])
+        [ConstrainedState(
+                begin_pattern = model.switch_pattern,
+                end_pattern = model.newline_token,
+                cache_index = DictIndex(end_of_triple=index.end_of_triple),
+                subtree_cache = DictIndex(end_of_triple=index.end_of_triple),
+                oneleaf_cache = DictIndex(end_of_triple=index.end_of_triple),
+            ) for _ in range(num_states)])
 
     constrained_processor = ConstrainedLogitsProcessor(
         index=index.index,

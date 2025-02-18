@@ -136,7 +136,10 @@ class TestCtrie(unittest.TestCase):
     def test_repr(self):
         self.index.reset()
         self.index.tree = [5, [10, 9, 8, 7, 6, {4: [1, [3, 2, 1]], 999999: [1, [3, 2, 1, 50, 20]], 12343: [3, [3, {2: [1, [1]], 99992: [1, [18, 4]], 7777: [1, []]}]]}]]
-        self.assertEqual(repr(self.index), '[5, [10, 9, 8, 7, 6, {\n\t4: \t\t[1, [3, 2, 1]]\n\t999999: \t\t[1, [3, 2, 1, 50, 20]]\n\t12343: \t\t[3, [3, {\n\t\t\t2: \t\t\t\t[1, [1]]\n\t\t\t99992: \t\t\t\t[1, [18, 4]]\n\t\t\t7777: \t\t\t\t[1, []]}]]}]]')
+        self.assertEqual(str(self.index), '[5, [10, 9, 8, 7, 6, {\n\t4: \t\t[1, [3, 2, 1]]\n\t999999: \t\t[1, [3, 2, 1, 50, 20]]\n\t12343: \t\t[3, [3, {\n\t\t\t2: \t\t\t\t[1, [1]]\n\t\t\t99992: \t\t\t\t[1, [18, 4]]\n\t\t\t7777: \t\t\t\t[1, []]}]]}]]')
+        # print('__str__', self.index.__str__())
+        # print(self.index.__repr__())
+        # print(self.index.__short_repr__())
 
 if __name__ == "__main__":
     unittest.main()
