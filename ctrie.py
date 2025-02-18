@@ -3,6 +3,7 @@ from transformers import StoppingCriteria
 import torch
 import pickle
 from psycopg import sql
+import copy
 
 class EmptyIndexException(Exception):
     pass
@@ -42,18 +43,30 @@ class DictIndex(Index):
     def __ne__(self, other):
         return not self == other
 
+    def __len__(self):
+        length = 0
+        if self.tree:
+            length = self.tree[0]
+        return length
+
+    def copy(self):
+        copy_of_index = DictIndex(self.end_of_triple, tree=copy.deepcopy(self.tree))
+        return copy_of_index
+
     def add(self, sequence, new_leaf=False):
         # could be replaced with to_dict and merge
         # but could be useful to avoid recursion
+        # supports duplicates
         level = self.tree
         cursor = 0
-        level_cursor = 0
+        level_cursor = 0 # necessary to avoid recursion
         prev_levels = [] # need to keep track to increase numleaves
         while cursor < len(sequence):
-            if level[0] == 0:
+            if level_cursor == len(level[1]):
                 # level[0] = 1 # increment in the end
-                level[1] = sequence[cursor:]
-                new_leaf = True
+                level[1][level_cursor:] = sequence[cursor:]
+                if level[0] == 0:
+                    new_leaf = True
                 break # nothing more to do
             # elif isinstance(level[1], list):
             else:
@@ -65,15 +78,14 @@ class DictIndex(Index):
                         level = level[1][level_cursor][sequence[cursor]]
                         level_cursor = 0
                     else: # new branch
-
                         # found another leaf
-                        # increment all prev levels
+                        # save prev levels for final increment
                         prev_levels.append(level)
                         new_leaf = True
 
                         new_branch = [0, []]
                         level[1][level_cursor][sequence[cursor]] = new_branch
-                        level = new_branch # continue with new branch: same as == 0
+                        level = new_branch # continue with new branch: end in == 0
                         level_cursor = 0
                 else: # is int
                     if sequence[cursor] != level[1][level_cursor]:
@@ -85,12 +97,12 @@ class DictIndex(Index):
                         }
 
                         # found another leaf
-                        # increment all prev levels
+                        # save prev levels for final increment
                         prev_levels.append(level)
                         new_leaf = True
 
                         del level[1][level_cursor + 1:]
-                        level = new_branch # continue with new branch: same as == 0
+                        level = new_branch # continue with new branch: ends in == 0
                         level_cursor = 0
                     else:
                         level_cursor += 1

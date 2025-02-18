@@ -34,6 +34,7 @@ class TestCtrie(unittest.TestCase):
         self.assertEqual(self.index.count_leaves(self.tree3), 18)
 
     def test_merge(self):
+        self.index.reset()
         numleaves1 = self.index.merge(self.tree1)
         other1 = ctrie.DictIndex(end_of_triple=0, tree=self.tree1)
         self.assertEqual(self.index, other1)
@@ -57,6 +58,44 @@ class TestCtrie(unittest.TestCase):
         numleaves5 = self.index.merge([1, [150000, 366, 36, 3168, 301, 22703, 29, 366, 8846, 4096, 29, 366, 96924, 389, 279, 56690, 409, 21725, 304, 12366, 11, 9822, 29, 662]])
         self.assertEqual(numleaves5, 21)
         self.assertEqual(numleaves5, self.index.count_leaves())
+
+    def test_add(self):
+        self.index.reset()
+        self.index.merge(self.tree1)
+        self.index.merge(self.tree2)
+        self.index.merge(self.tree3)
+
+        self.assertEqual(len(self.index), 20)
+
+        # add new leaf
+        self.index.add([10,9,8,7,6])
+        self.assertEqual(len(self.index), 21)
+
+        # add existing leaf
+        self.index.add([10,9,8,7,6])
+        self.assertEqual(len(self.index), 21)
+
+        # add force duplicate
+        prev_index = self.index.copy()
+        self.assertEqual(len(prev_index), 21)
+        self.index.add([10,9,8,7,6], new_leaf=True)
+        self.assertEqual(len(self.index), 22)
+        self.assertEqual(len(prev_index), 21) # unchanged
+
+        # add longer leaf
+        self.index.add([10,9,8,7,6,4,3,2,1])
+        self.assertEqual(len(self.index), 22)
+
+        # force duplicate
+        self.index.add([10,9,8,7,6,4,3,2,1,6,7], new_leaf=True)
+        self.assertEqual(len(self.index), 23)
+
+        # create branch
+        self.index.add([10,9,8,7,6,999999,3,2,1])
+        self.assertEqual(len(self.index), 24)
+
+        # check actual num leaves w/o duplicates
+        self.assertEqual(self.index.count_leaves(), 22)
 
 if __name__ == "__main__":
     unittest.main()
