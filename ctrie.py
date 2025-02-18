@@ -164,23 +164,26 @@ class DictIndex(Index):
             tree[0] = numleaves
         return numleaves
 
-    def merge_dict(self, src, dst, update_numleaves=True):
-        new_numleaves = 0
+    def merge_dict(self, src, dst, dst_numleaves=None, update_numleaves=True):
+        if dst_numleaves is None:
+            dst_numleaves = sum(map(lambda x: x[0], dst.values()))
         for key in src:
             if key in dst:
                 # sum numleaves
-                branch_numleaves = self.merge(src[key], dst[key], update_numleaves)
+                old_numleaves = dst[key][0]
+                new_numleaves = self.merge(src[key], dst[key], update_numleaves)
 
                 if update_numleaves:
-                    new_numleaves += branch_numleaves
+                    dst_numleaves = dst_numleaves - old_numleaves + new_numleaves
+                    # assert dst_numleaves >= 0
             else:
                 # If the key exists only in `src`, the value from the `src` object will be used.
                 # found new branch to add
                 dst[key] = src[key]
                 if update_numleaves:
-                    new_numleaves += src[key][0]
+                    dst_numleaves += src[key][0]
 
-        return new_numleaves
+        return dst_numleaves
 
 
     def merge(self, src, dst=None, update_numleaves=True):
@@ -215,7 +218,7 @@ class DictIndex(Index):
                         }
                         del dst[1][cursor + 1:]
                     # now both are dict
-                    new_numleaves = self.merge_dict(src[1][cursor], dst[1][cursor], update_numleaves)
+                    new_numleaves = self.merge_dict(src[1][cursor], dst[1][cursor], dst_numleaves=dst[0], update_numleaves=update_numleaves)
                     if update_numleaves:
                         dst[0] = new_numleaves
                     return dst[0]
