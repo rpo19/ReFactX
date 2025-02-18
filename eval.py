@@ -6,7 +6,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, TextStreamer, DynamicCache, StoppingCriteriaList
 from transformers.generation.logits_process import LogitsProcessorList
 import psycopg
-from ctrie import ConstrainedLogitsProcessor, GetAnswer
+from ctrie import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex, GetAnswer
 
 # TODO tokenize and load batch
 # TODO stopping criteria and get answer
@@ -62,10 +62,14 @@ with open(output_file, 'w') as output_fd:
 
     assert index.rootkey > max(model.tokenizer.vocab.values())
 
+    states = ConstrainedStateList(
+        [ConstrainedState(index.switch_pattern, model.newline_token,
+                        DictIndex(end_of_triple=index.end_of_triple)) for _ in range(model.generate_args.get('num_beams', 1))])
+
     constrained_processor = ConstrainedLogitsProcessor(
-        index = index.index,
-        switch_pattern = model.switch_pattern,
-        end_token = model.newline_token)
+        index=index.index,
+        end_token=model.newline_token,
+        states=states)
     logits_processor_list = LogitsProcessorList([
         constrained_processor
     ])
@@ -82,7 +86,7 @@ with open(output_file, 'w') as output_fd:
 
         prompt_cache = DynamicCache()
         inputs_prompt_begin = model.tokenizer(
-            [model.prompt_template[0]] * model.batch_size * model.generate_args.get('num_beams', 1),
+            [model.apply_prompt_template()] * model.batch_size * model.generate_args.get('num_beams', 1),
             return_tensors='pt',
             padding=False)
         inputs_prompt_begin.to(model.model.device)

@@ -16,12 +16,6 @@ class QADataset(Dataset):
 
         self.skip_serialize = set(['skip_serialize','dataset'])
 
-    def __iter__(self):
-        keys = set(self.__dict__.keys())
-        keys.difference_update(self.skip_serialize)
-        for key in keys:
-            yield (key, self.__dict__[key])
-
     def __len__(self):
         return len(self.dataset)
 
@@ -30,3 +24,9 @@ class QADataset(Dataset):
         sample = self.dataset[idx]
         question = sample['question']
         return question
+
+    def __iter__(self):
+        keys = set(self.__dict__.keys())
+        keys.difference_update(self.skip_serialize)
+        for key in keys:
+            yield (key, self.__dict__[key])
