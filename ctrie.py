@@ -52,7 +52,7 @@ class DictIndex(Index):
     def _str_tree_dict(self, tree_dict, level=0, spacer='\t'):
         _str = '{'
         for key, value in tree_dict.items():
-            _str += '\n{}{}: {}'.format(spacer * level, key, self._str_tree(value, level+1))
+            _str += '\n{}{}: {},'.format(spacer * level, key, self._str_tree(value, level+1))
         _str += '}'
         return _str
 
@@ -164,7 +164,7 @@ class DictIndex(Index):
                     raise TripleNotFoundException()
             else: # is int
                 if sequence[cursor] != level[1][level_cursor]:
-                    raise TripleNotFoundException()
+                    raise TripleNotFoundException(sequence)
                 else:
                     level_cursor += 1
             cursor += 1
@@ -601,7 +601,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         self.index = index
         self.end_token = end_token
         self.states = states
-        self.first_call = True
+        self.first_call = 0
 
         self.tokenizer=tokenizer # for debugging
 
@@ -613,8 +613,9 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         for i in range(input_ids.shape[0]):
             input_sequence = input_ids[i].tolist()
 
-            if self.first_call:
-                self.first_call = False
+            if self.first_call < input_ids.shape[0]:
+                # still first call in the beam
+                self.first_call += 1
             else:
                 last_token = input_sequence[-1]
                 self.states[i].update(last_token)
@@ -647,19 +648,16 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
     def constrained_generation(self, input_sequence, scores: torch.FloatTensor, state):
 
         possible_tokens = self.index.next_tokens(input_sequence, state = state)
-        # print(possible_tokens, end=' - ')
         try:
             visited_tokens = state.cache_index.next_tokens(input_sequence)
             # print(visited_tokens, end=' = ')
-            #self.subtract_tokens(possible_tokens, visited_tokens)
+            self.subtract_tokens(possible_tokens, visited_tokens)
             # print(possible_tokens)
         except EmptyIndexException:
             # ignore when the cache index is empty
-            # print()
             pass
         except TripleNotFoundException:
             # ignore if triple not in cache index
-            # print()
             pass
 
         possible_tokens = list(possible_tokens.keys()) # TODO transform subtract tokens in a prob modifier

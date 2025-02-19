@@ -104,7 +104,14 @@ with open(output_file, 'w') as output_fd:
             ).past_key_values
 
         for batch_number, batch in enumerate(tqdm(dataloader)):
+            # if batch_number == 0:
+            #     continue
+            print(f'Batch {batch_number}:')
+            for question in batch:
+                print(question)
             prompted_batch = list(map(model.apply_prompt_template, batch))
+
+            states.reset() # reset caches
 
             batch_inputs = model.tokenize_fun(prompted_batch)
 
@@ -128,14 +135,21 @@ with open(output_file, 'w') as output_fd:
                 kwargs = {'constrained_state': states}, # passing state
             )
 
-            for question, prompted_question, output_i in zip(batch, prompted_batch, output):
+            state_idx_generator = range(0, num_states, model.generate_args.get('num_beams', 1))
+            for question, prompted_question, output_i, state_idx in zip(batch, prompted_batch, output, state_idx_generator):
                 answer_complete, answer = getanswer.get_answer(output_i, return_answer=True)
+                # TODO also save worse beams
+
+                state = states[state_idx]
+
                 sample = dict(
-                    question=question,
-                    answer_complete=answer_complete,
-                    prediction=answer,
-                    full_prediction=model.tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):]),
-                    prompt=model.tokenizer.decode(output_i[:len(batch_inputs.input_ids[0])]),
-                    full_sample=model.tokenizer.decode(output_i))
+                        question=question,
+                        answer_complete=answer_complete,
+                        prediction=answer,
+                        full_prediction=model.tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):]),
+                        prompt=model.tokenizer.decode(output_i[:len(batch_inputs.input_ids[0])]),
+                        full_sample=model.tokenizer.decode(output_i),
+                        triples=state.generated_triples
+                    )
                 output_fd.write(json.dumps(sample))
                 output_fd.write('\n')

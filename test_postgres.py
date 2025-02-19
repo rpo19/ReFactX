@@ -60,7 +60,10 @@ def choose(children, initial_tokens):
 @click.option("--random-seed", type=int, required=False, help="Random seed")
 @click.option("--initial-tokens", default='', help="Initial tokens")
 @click.option("--json-tokens", required=False, help="JSON tokens")
-def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, switch_parameter, random_seed, initial_tokens, json_tokens):
+@click.option("--dump-subtree-cache", required=False, default=False, is_flag=True, help="Dump subtree cache")
+@click.option("--dump-oneleaf-cache", required=False, default=False, is_flag=True, help="Dump oneleaf cache")
+def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, switch_parameter,
+        random_seed, initial_tokens, json_tokens, dump_subtree_cache, dump_oneleaf_cache):
     if json_tokens:
         assert not initial_tokens, 'ERROR: specify either intitial tokens or json tokens. Not both.'
         initial_tokens = json.loads(json_tokens)
@@ -117,14 +120,21 @@ def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, sw
             # if sequence == [366, 791, 10425, 315, 279, 47380]:
             #     import pdb
             #     pdb.set_trace()
-            possible_tokens = index.next_tokens(sequence, state=state)
+            possible_tokens_dict = index.next_tokens(sequence, state=state)
 
+        if dump_subtree_cache and len(state.subtree_cache) > 0:
+            print('DUMP - subtree cache:')
+            print(state.subtree_cache)
 
+        if dump_oneleaf_cache and len(state.oneleaf_cache) > 0:
+            print('DUMP - oneleaf cache:')
+            print(state.oneleaf_cache)
 
-        possible_tokens = list(possible_tokens.keys()) if possible_tokens else []
+        possible_tokens = list(possible_tokens_dict.keys()) if possible_tokens_dict else []
 
         if len(possible_tokens) > 0:
             next_token = choose(possible_tokens, initial_tokens)
+            print('choosing {}: numleaves: {}'.format(next_token, possible_tokens_dict[next_token]))
             sequence.append(next_token)
         else:
             print('.')

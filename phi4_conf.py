@@ -65,7 +65,7 @@ Answer: Mont Blanc.
             # top_k = 3,
             max_new_tokens = 400,
             )
-        self.batch_size = 3
+        self.batch_size = 1
 
         self.skip_serialize = set(['skip_serialize','tokenizer', 'model', 'index'])
 
