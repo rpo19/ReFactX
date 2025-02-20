@@ -459,8 +459,13 @@ class ConstrainedStateList():
 
         self.beam_idx = [] # place to save beam indexes permutation
 
-    def __getitem__(self, arg):
-        return self.states[arg]
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return ConstrainedStateList(self.states[key])  # Return a new instance with sliced data
+        elif isinstance(key, int):
+            return self.states[key]  # Return a single item
+        else:
+            raise TypeError(f"Invalid argument type: {type(key)}")
 
     def __len__(self):
         return len(self.states)
