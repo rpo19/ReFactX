@@ -22,11 +22,14 @@ Refer to the readme in services/mariadb: [Readme.md](services/mariadb/Readme.md)
 Go to https://hay.toolforge.org/propbrowse/ and Download all properties as JSON.
 
 ## Filter the properties
-Use the notebook `filter_props.ipynb`
+Replace `input_props.json` with the file you just downloaded and run:
+```
+python filter_props.py input_props.json filtered_props.pickle
+```
 
 ## Verbalize the triples using the labels
 ```
-python verbalize_triples.py props_mapping ents_labels_wikidata ents_mapping_wikipedia wikidump.bz2 verbalized_triples.bz2 [num_triples_for_tqdm]
+python verbalize_triples.py --props-mapping props_mapping --wikidata-labels wikidata_labels --wikipedia-entity-mapping wikipedia_entity_mapping wikidump.bz2 verbalized_triples.bz2 [--total-number-of-triples number]
 ```
 
 ## Tokenize
