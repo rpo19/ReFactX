@@ -35,7 +35,7 @@ python verbalize_triples.py --props-mapping props_mapping --wikidata-labels wiki
 ## Tokenize
 Choose a model from huggingface for using its tokenizer, then run:
 ```
-python tokenize_triples.py model verbalized_triples.bz2 tokenized_triples.pickle.bz2 prefix endoftriple batch_size [num_triples]
+python tokenize_triples.py --model-name model_name --prefix " " --end-of-triple "." --batchsize 10000 verbalized_triples.bz2 tokenized_triples.pickle.bz2 [--total-number-of-triples number]
 ```
 
 ## Start postgres
