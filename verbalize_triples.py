@@ -18,6 +18,33 @@ import bz2
 import re
 import click
 
+def verbalize_property(prop_id: int, prop_labels):
+    return prop_labels.get('P'+prop_id, {}).get('label')
+
+def verbalize_entity(entity_id: int, ent_labels_wikidata, ent_labels_wikipedia, output=None, added_shortdesc=None, added_desc=None):
+    # -> unique_title, short descr, description
+    unique_title = None # None when not in wikipedia and no description in wikidata
+
+    wikipedia_title = ent_labels_wikipedia.get(entity_id, {}).get('title')
+    wikipedia_short_desc = ent_labels_wikipedia.get(entity_id, {}).get('short_desc')
+    wikidata_label, wikidata_alt_labels, wikidata_description = ent_labels_wikidata.get(entity_id, ['',set(),'']) #label, altlabels, description
+
+    if wikipedia_title:
+        unique_title = wikipedia_title
+    elif wikidata_label and wikidata_description:
+        unique_title = f'{wikidata_label} ({wikidata_description})'
+
+    if output:
+        # avoid duplicate descriptions (same entity is part of several triples)
+        if wikipedia_short_desc and entity_id not in added_shortdesc:
+            added_shortdesc.add(entity_id)
+            output.write(f'<{unique_title}> <short description> <{wikipedia_short_desc}> .\n'.encode('utf-8'))
+        if wikidata_description and entity_id not in added_desc:
+            added_desc.add(entity_id)
+            output.write(f'<{unique_title}> <description> <{wikidata_description}> .\n'.encode('utf-8'))
+
+    return unique_title
+
 @click.command()
 @click.option("--props-mapping", required=True, help="Path to the filtered properties pickle file.")
 @click.option("--wikidata-labels", required=True, help="Path to the Wikidata labels pickle file.")
@@ -62,63 +89,35 @@ def main(props_mapping, wikidata_labels, wikipedia_entity_mapping, wiki_dump, ou
 
                         if sub.isnumeric():
                             sub_id = int(sub)
-                            v_sub = ent_labels_wikipedia.get(sub_id, {}).get('title')
-
-                            # short description for subject entity
-                            sub_short_desc = ent_labels_wikipedia.get(sub_id, {}).get('short_desc')
-                            if sub_short_desc and sub_id not in added_shortdesc:
-                                added_shortdesc.add(sub_id)
-                                outfd.write(f'<{v_sub}> <short description> <{sub_short_desc}> .\n'.encode('utf-8'))
-
-                            sub_wikidata = ent_labels_wikidata.get(sub_id, ['',set(),'']) #label, altlabels, description
-                            sub_description = sub_wikidata[2]
-
-                            if not v_sub:
-                                # not in wikipedia --> use wikidata label (description)
-                                v_sub = sub_wikidata[0]
-                                if v_sub and sub_description:
-                                    vsub = '{} ({})'.format(v_sub, sub_description)
+                            v_sub = verbalize_entity(
+                                        entity_id = sub_id,
+                                        ent_labels_wikidata = ent_labels_wikidata,
+                                        ent_labels_wikipedia = ent_labels_wikipedia,
+                                        output = outfd,
+                                        added_shortdesc = added_shortdesc,
+                                        added_desc = added_desc)
 
                             if v_sub:
-                                # add description
-                                if sub_description and sub_id not in added_desc:
-                                    added_desc.add(sub_id)
-                                    outfd.write(f'<{v_sub}> <description> <{sub_description}> .\n'.encode('utf-8'))
+                                v_prop = verbalize_property(prop, prop_labels)
 
-                                v_prop = prop_labels.get('P'+prop, {}).get('label')
                                 if v_sub and v_prop:
-                                    obj_description = None
                                     if obj_ent and obj_ent.isnumeric():
                                         # obj is entity
                                         obj_id = int(obj_ent)
                                         v_obj = ent_labels_wikipedia.get(obj_id, {}).get('title')
-
-                                        # short description for object entity
-                                        obj_short_desc = ent_labels_wikipedia.get(obj_id, {}).get('short_desc')
-                                        if obj_short_desc and obj_id not in added_shortdesc:
-                                            added_shortdesc.add(obj_id)
-                                            outfd.write(f'<{v_obj}> <short description> <{obj_short_desc}> .\n'.encode('utf-8'))
-
-                                        obj_wikidata = ent_labels_wikidata.get(obj_id, ['',set(),''])
-                                        obj_description = obj_wikidata[2]
-
-                                        if not v_obj:
-                                            # not in wikipedia --> use wikidata label (description)
-                                            v_obj = obj_wikidata[0]
-                                            if v_obj and obj_description:
-                                                v_obj = '{} ({})'.format(v_obj, obj_description)
+                                        v_obj = verbalize_entity(
+                                                    entity_id = obj_id,
+                                                    ent_labels_wikidata = ent_labels_wikidata,
+                                                    ent_labels_wikipedia = ent_labels_wikipedia,
+                                                    output = outfd,
+                                                    added_shortdesc = added_shortdesc,
+                                                    added_desc = added_desc)
 
                                     if obj_lit:
                                         # obj is literal
                                         v_obj = obj_lit
 
                                     if v_obj:
-                                        # verify v_obj is not None or ''
-                                        if obj_description and obj_id not in added_desc:
-                                            # add description
-                                            added_desc.add(obj_id)
-                                            outfd.write(f'<{v_obj}> <description> <{obj_description}> .\n'.encode('utf-8'))
-
                                         outfd.write(f'<{v_sub}> <{v_prop}> <{v_obj}> .\n'.encode('utf-8'))
 
                         # else:
