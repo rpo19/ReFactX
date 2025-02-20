@@ -161,7 +161,7 @@ class DictIndex(Index):
                     level = level[1][level_cursor][sequence[cursor]]
                     level_cursor = 0
                 else: # new branch
-                    raise TripleNotFoundException()
+                    raise TripleNotFoundException(sequence)
             else: # is int
                 if sequence[cursor] != level[1][level_cursor]:
                     raise TripleNotFoundException(sequence)
@@ -322,14 +322,11 @@ class PostgresTrieIndex(Index):
             _next_tokens = self._next_tokens_from_postgresql(postgres_seq, subtree_cache, oneleaf_cache)
         else:
             # continue in the subtree
-            # subtree_seq = sequence[self.switch_parameter:]
-
-            # TODO really need to reset subtree_cache all the time
-            # probably doesnt change much
-
             try:
                 _next_tokens = subtree_cache.next_tokens(sequence)
             except EmptyIndexException:
+                pass
+            except TripleNotFoundException:
                 pass
 
         self._merge_next_tokens(_next_tokens_cache, _next_tokens)
