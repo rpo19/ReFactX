@@ -289,7 +289,7 @@ class PostgresTrieIndex(Index):
         self.rootkey = rootkey
         self.end_of_triple = end_of_triple # e.g. "." to ensure the triple is ended and valid
         self.postgresql_connection = postgresql_connection
-        self.switch_parameter = switch_parameter+1 # counting the rootkey
+        self.switch_parameter = switch_parameter
         self.table_name = table_name
         self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
 
@@ -404,12 +404,12 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
         );''').format(sql.Identifier(self.table_name))
         self.create_pkey_query = sql.SQL('ALTER TABLE {} ADD PRIMARY KEY (id);').format(
             sql.Identifier(self.table_name))
-        self.create_index = sql.SQL('CREATE INDEX idx_key_btree_{} ON {} USING BTREE (key);').format(
-            sql.Identifier(self.table_name), sql.Identifier(self.table_name))
-        self.drop_pkey_query = sql.SQL('ALTER TABLE {} DROP CONSTRAINT IF EXISTS {}_pkey;').format(
-            sql.Identifier(self.table_name), sql.Identifier(self.table_name))
-        self.drop_index_query = sql.SQL('DROP INDEX IF EXISTS idx_key_btree_{};').format(
-            sql.Identifier(self.table_name))
+        self.create_index_query = sql.SQL('CREATE INDEX {} ON {} USING BTREE (key);').format(
+            sql.Identifier('idx_key_btree_' + self.table_name), sql.Identifier(self.table_name))
+        self.drop_pkey_query = sql.SQL('ALTER TABLE {} DROP CONSTRAINT IF EXISTS {};').format(
+            sql.Identifier(self.table_name), sql.Identifier(self.table_name + '_pkey'))
+        self.drop_index_query = sql.SQL('DROP INDEX IF EXISTS {};').format(
+            sql.Identifier('idx_key_btree_' + self.table_name))
         self.check_indexes_query = sql.SQL("SELECT count(*) FROM pg_indexes WHERE tablename = '{}';").format(
             sql.Identifier(self.table_name))
 
@@ -422,9 +422,9 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
         # iterative depth first traversal with a stack
         # level[0] is numleaves
         key = [self.rootkey]
-        stack = [(0, key, self.tree)]
+        stack = [(key, self.tree)]
         while len(stack) > 0:
-            level_num, key, level = stack.pop()
+            key, level = stack.pop()
             if len(level[1]) > 0: # otherwise nothing to do
                 if level[0] == 1: # 1 leaf -> children is the sequence to the end of triple
                     children = level[1]
@@ -442,11 +442,11 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
                         childrenleaves = [level[0]] # same numleaves as parent
                         next_levels = [[level[0], level[1][1:]]]
 
-                    if level_num >= self.switch_parameter:
+                    if len(key) >= self.switch_parameter:
                         yield key, children, level[0], childrenleaves, pickle.dumps(level[1])
                     else:
                         for child, next_level in zip(children, next_levels):
-                            stack.append((level_num + 1, key + [child], next_level))
+                            stack.append((key + [child], next_level))
                         if len(children) > 0:
                             # skip adding empty keys to save space
                             yield key, children, level[0], childrenleaves, None

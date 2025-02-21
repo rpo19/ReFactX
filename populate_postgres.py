@@ -7,7 +7,7 @@ from ctrie import PostgresIngestIndex
 import click
 
 @click.command()
-@click.option('--fname', type=click.Path(exists=True), required=True, help='Path to the input file')
+@click.argument('fname', type=click.Path(exists=True))
 @click.option('--postgres-connection', type=str, required=True, help='PostgreSQL connection string')
 @click.option('--table-name', type=str, required=True, help='Database table name')
 @click.option('--rootkey', type=int, required=True, help='Root key value')
@@ -32,11 +32,9 @@ def main(fname, postgres_connection, table_name, rootkey, batch_size, switch_par
                 switch_parameter=switch_parameter,
                 table_name=table_name)
 
-    def batch_append(tree, nested_token_ids, index):
+    def batch_append(nested_token_ids, index):
         for sequence in nested_token_ids:
-            # print(tree, '+', sequence)
-            index.add(tree, sequence)
-            # print('=', tree)
+            index.add(sequence)
 
     tbar_update = batch_size
     count = 0
@@ -58,23 +56,20 @@ def main(fname, postgres_connection, table_name, rootkey, batch_size, switch_par
             with cur.copy(index.copy_query) as copy:
                 with bz2.BZ2File(fname, "rb") as bz2file:
                     with tqdm(total=total_rows) as pbar:
-                        batch = [0, []]
-
                         while True:
                             try:
-
                                 # Load each pickled object from the bz2 file
                                 array = pickle.load(bz2file)
-                                batch_append(batch, array, index)
+                                batch_append(array, index)
 
                                 count += 1
 
                                 if count % batch_size == 0:
                                     # batch on number or rows processed
-                                    for row in index.get_rows(batch, rootkey, switch_parameter):
+                                    for row in index.get_rows():
                                         copy.write_row(row)
                                     # reset batch
-                                    batch = [0, []]
+                                    index.reset()
 
                                 if count % tbar_update == 0:
                                     pbar.n = count
@@ -91,9 +86,9 @@ def main(fname, postgres_connection, table_name, rootkey, batch_size, switch_par
 
             print('Ingestion finished.')
             print('Creating index.')
-            cur.execute(create_index)
+            cur.execute(index.create_index_query)
             print('Creating primary key.')
-            cur.execute(create_pkey)
+            cur.execute(index.create_pkey_query)
             conn.commit()
 
 if __name__ == "__main__":
