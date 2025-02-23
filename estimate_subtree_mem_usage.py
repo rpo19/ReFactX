@@ -78,7 +78,7 @@ def print_sizes(levelnum, sizes):
 
 def calc_size_by_level(root):
     stack = [root]
-    levelnum = 0
+    levelnum = 1
     sizes = {}
     while len(stack) > 0:
         new_stack = []
