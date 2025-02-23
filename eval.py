@@ -13,11 +13,9 @@ import click
 def logrotate(file_name):
     idx = 0
     while True:
-        if not os.path.isfile(f'{file_name}.{idx}'):
+        if not os.path.isfile(file_name):
             break
         idx += 1
-
-    if idx > 0:
         file_name = f'{file_name}.{idx}'
 
     return file_name
@@ -84,6 +82,8 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
             constrained_processor
         ])
 
+        # TODO getanswer does not work
+        # consider that phi4 is generally ending correctly with eos
         getanswer = GetAnswer(model.answer_tokens, model.eofanswer, all)
         stopping_criteria = StoppingCriteriaList([
             getanswer
