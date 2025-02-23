@@ -6,10 +6,10 @@ class Index():
         self.postgresql_url = 'postgres://postgres:secret@10.0.0.118:5432/postgres'
         self.autocommit = True
         self.postgresql_connection = psycopg.connect(self.postgresql_url, autocommit = self.autocommit)
-        self.postgresql_table = "ctriev3"
-        self.switch_parameter = 6
-        self.rootkey = 150000
-        self.end_of_triple = 662
+        self.postgresql_table = "ctriev3qwen"
+        self.switch_parameter = 7
+        self.rootkey = 200000 # decided at injestion time
+        self.end_of_triple = 659 # each triple must finish with the same token (e.g. "." after space)
         self.index = PostgresTrieIndex(
             rootkey = self.rootkey,
             postgresql_connection = self.postgresql_connection,

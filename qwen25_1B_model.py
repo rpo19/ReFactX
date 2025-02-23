@@ -1,28 +1,25 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from ctrie import ConstrainedLogitsProcessor
 import torch
 
 class Model():
     def __init__(self):
-        self.model_name =  'microsoft/phi-4'
+        self.model_name =  'Qwen/Qwen2.5-1.5B-Instruct'
         print(f'Loading {self.model_name}')
         self.device = 'cuda:0'
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.tokenizer.pad_token = 'Ċ' # use padding right with newline as padding token
-        self.quantization_config = dict(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type='nf4',
-            bnb_4bit_compute_dtype='bfloat16')
+        # self.quantization_config = dict(
+        #     load_in_4bit=True,
+        #     bnb_4bit_use_double_quant=True,
+        #     bnb_4bit_quant_type='nf4',
+        #     bnb_4bit_compute_dtype='bfloat16')
         self.model = AutoModelForCausalLM.from_pretrained(self.model_name,
-            trust_remote_code=True,
-            quantization_config=BitsAndBytesConfig(**self.quantization_config),
-            low_cpu_mem_usage=True,
             # attn_implementation="flash_attention_2"
             ).to(self.device)
-        self.switch_pattern = [17873, 25] # "Fact:" after newline
+        self.switch_pattern = [17417, 25] # "Fact:" after newline
         self.newline_token = 198
-        self.answer_tokens = [16533, 25]
+        self.answer_tokens = [16141, 25] # "Answer:" after newline
         self.eofanswer = [self.newline_token, self.tokenizer.eos_token_id]
 
         self.prompt_template = [

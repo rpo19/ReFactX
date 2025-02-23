@@ -5,7 +5,7 @@ venv
 *.zip
 __pycache__
 .ipynb_checkpoints
-*.out
+*.out.?
 *.log
 *.lprof
 *.backup
