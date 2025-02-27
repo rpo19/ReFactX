@@ -20,6 +20,17 @@ class Index():
         numleaves = 10
         return {token: numleaves,}
 
+    def subtract_tokens(self, tokens_a, tokens_b):
+        for token in list(tokens_a.keys()):
+            if token in tokens_b:
+                diff = tokens_a[token] - tokens_b[token] # TODO transform subtract tokens in a prob modifier
+                if diff <= 0:
+                    # branch completely visited
+                    # forbid generating again same triple
+                    del tokens_a[token]
+                else:
+                    tokens_a[token] = diff
+
 class DictIndex(Index):
     def __init__(self, end_of_triple, tree = None):
         self.tree = None
@@ -297,7 +308,7 @@ class PostgresTrieIndex(Index):
         if src is not None:
             for key in src:
                 if key in dst:
-                    pass # keep value in dst
+                    dst[key] += src[key]
                 else:
                     dst[key] = src[key]
 
@@ -333,8 +344,7 @@ class PostgresTrieIndex(Index):
 
         if len(_next_tokens) == 0:
             if sequence[-1] == self.end_of_triple:
-                oneleaf_cache.reset()
-                subtree_cache.reset()
+                kwargs['state'].end_of_triple_reset()
             else:
                 # end of triple must match end_of_triple
                 # otherwise the triple is not valid
@@ -512,14 +522,17 @@ class ConstrainedState():
     def is_constrained(self):
         return self.state % 2 == self.CONSTRAINED_GENERATION
 
+    def end_of_triple_reset(self):
+        self.subtree_cache.reset()
+        self.oneleaf_cache.reset()
+
     def reset(self):
         self.state = 0
         self.history = ()
         self.cursor = 0
         self.generated_triples = []
         self.cache_index.reset()
-        self.subtree_cache.reset()
-        self.oneleaf_cache.reset()
+        self.end_of_triple_reset()
 
     def dump(self, copy=True):
         return {
@@ -608,23 +621,25 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         self.tokenizer=tokenizer # for debugging
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
-        assert input_ids.shape[0] == len(self.states), 'Error: number of states should match `batch_size * num_beams`'
+        assert input_ids.shape[0] == len(self.states), \
+            'Error: number of states ({}) should match `batch_size * num_beams` ({})'.format(
+                    input_ids.shape[0], len(self.states))
 
         self.states.beam_permutation()
 
         for i in range(input_ids.shape[0]):
-            input_sequence = input_ids[i].tolist()
+            sequence = input_ids[i].tolist()
 
             if self.first_call < input_ids.shape[0]:
                 # still first call in the beam
                 self.first_call += 1
             else:
-                last_token = input_sequence[-1]
+                last_token = sequence[-1]
                 self.states[i].update(last_token)
 
             if self.states[i].is_constrained(): # odd number means constrained generation
                 # constrained generation
-                constrain_generation_sequence = input_sequence[len(input_sequence) - self.states[i].get_cursor():]
+                constrain_generation_sequence = sequence[len(sequence) - self.states[i].get_cursor():]
                 scores[[i],:] = self.constrained_generation(
                     constrain_generation_sequence, scores[[i],:], state=self.states[i])
             # else:
@@ -633,27 +648,18 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             #     pass
 
             if self.tokenizer:
-                print(i, self.states[i].state, self.states[i].is_constrained(), [self.tokenizer.convert_ids_to_tokens(t) for t in scores[i].argsort(descending=True)[:3].tolist()])
+                pass
+                #print(i, self.states[i].state, self.states[i].is_constrained(), [self.tokenizer.convert_ids_to_tokens(t) for t in scores[i].argsort(descending=True)[:3].tolist()])
 
         return scores
 
-    def subtract_tokens(self, tokens_a, tokens_b):
-        for token in list(tokens_a.keys()):
-            if token in tokens_b:
-                diff = tokens_a[token] - tokens_b[token] # TODO transform subtract tokens in a prob modifier
-                tokens_a[token] = diff
-                if diff == 0:
-                    # branch completely visited
-                    # forbid generating again same triple
-                    del tokens_a[token]
+    def constrained_generation(self, sequence, scores: torch.FloatTensor, state):
 
-    def constrained_generation(self, input_sequence, scores: torch.FloatTensor, state):
-
-        possible_tokens = self.index.next_tokens(input_sequence, state = state)
+        possible_tokens = self.index.next_tokens(sequence, state = state)
         try:
-            visited_tokens = state.cache_index.next_tokens(input_sequence)
+            visited_tokens = state.cache_index.next_tokens(sequence)
             # print(visited_tokens, end=' = ')
-            self.subtract_tokens(possible_tokens, visited_tokens)
+            state.cache_index.subtract_tokens(possible_tokens, visited_tokens)
             # print(possible_tokens)
         except EmptyIndexException:
             # ignore when the cache index is empty
@@ -667,9 +673,13 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         if len(possible_tokens) == 0:
             # end of constrained generation
             # send end of string
+            if sequence[-1] != self.index.end_of_triple:
+                raise TripleNotFoundException(sequence)
             possible_tokens = [self.end_token]
-            generated_triple = input_sequence + [self.end_token]
+            generated_triple = sequence + [self.end_token]
             state.cache_add(generated_triple)
+            # ensure to reset after eof triple
+            state.end_of_triple_reset()
 
         possible_scores = scores[:, possible_tokens]
 
