@@ -612,11 +612,15 @@ class ConstrainedState():
         self.cursor = prev_cursor + self.cursor
 
 class ConstrainedLogitsProcessor(LogitsProcessor):
-    def __init__(self, index, end_token, states, tokenizer=None):
+    def __init__(self, index, end_token, states, tokenizer=None, error_strategy=0):
         self.index = index
         self.end_token = end_token
         self.states = states
         self.first_call = 0
+        self.error_strategy = error_strategy
+
+        self.ERROR_STRATEGY_WARN = 0
+        self.ERROR_STRATEGY_FAIL = 1
 
         self.tokenizer=tokenizer # for debugging
 
@@ -674,7 +678,10 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             # end of constrained generation
             # send end of string
             if sequence[-1] != self.index.end_of_triple:
-                raise TripleNotFoundException(sequence)
+                if self.error_strategy == self.ERROR_STRATEGY_FAIL: 
+                    raise TripleNotFoundException(sequence)
+                elif self.error_strategy == self.ERROR_STRATEGY_WARN:
+                    print('WARNING:', TripleNotFoundException(sequence))
             possible_tokens = [self.end_token]
             generated_triple = sequence + [self.end_token]
             state.cache_add(generated_triple)
