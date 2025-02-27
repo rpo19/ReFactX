@@ -1,10 +1,10 @@
 import psycopg
+import redis
 from transformers import AutoTokenizer
 import sys
 import random
 import time
 import json
-import pickle
 import click
 from ctrie import PostgresTrieIndex, ConstrainedState, DictIndex, TripleNotFoundException, EmptyIndexException
 
@@ -54,7 +54,8 @@ def choose(children, initial_tokens):
     return choice
 
 @click.command()
-@click.option("--postgres-connection", required=True, help="Postgres connection string")
+@click.option("--postgres-url", required=True, help="Postgres connection URL")
+@click.option("--redis-url", required=False, default=None, help="Postgres connection URL")
 @click.option("--table-name", required=True, help="Table name")
 @click.option("--rootkey", type=int, required=True, help="Root key")
 @click.option("--end-of-triple", type=int, required=True, help="End of triple")
@@ -66,23 +67,13 @@ def choose(children, initial_tokens):
 @click.option("--dump-subtree-cache", required=False, default=False, is_flag=True, help="Dump subtree cache")
 @click.option("--dump-oneleaf-cache", required=False, default=False, is_flag=True, help="Dump oneleaf cache")
 @click.option("--verbose", required=False, default=False, is_flag=True, help="Verbose mode")
-@click.option("--max-generations", required=False, default=1, help="Max number of triples to generate")
-def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, switch_parameter,
-        random_seed, initial_tokens, json_tokens, dump_subtree_cache, dump_oneleaf_cache, verbose, max_generations):
+@click.option("--generations", required=False, default=1, help="Number of triples to generate")
+def main(postgres_url, redis_url, table_name, rootkey, end_of_triple, model_name, switch_parameter,
+        random_seed, initial_tokens, json_tokens, dump_subtree_cache, dump_oneleaf_cache, verbose, generations):
     if json_tokens:
         assert not initial_tokens, 'ERROR: specify either intitial tokens or json tokens. Not both.'
         initial_tokens = json.loads(json_tokens)
         assert isinstance(initial_tokens, list)
-
-    if verbose:
-        click.echo(f"Postgres Connection: {postgres_connection}")
-        click.echo(f"Table Name: {table_name}")
-        click.echo(f"Root Key: {rootkey}")
-        click.echo(f"End of Triple: {end_of_triple}")
-        click.echo(f"Model Name: {model_name}")
-        click.echo(f"Switch Parameter: {switch_parameter}")
-        click.echo(f"Random Seed: {random_seed}")
-        click.echo(f"Initial Tokens: {initial_tokens}")
 
     if random_seed is None:
         random_seed = random.randint(0, 2**32)
@@ -103,10 +94,12 @@ def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, sw
         print(tokenizer.decode(initial_tokens))
         print(initial_tokens)
 
-    conn = psycopg.connect(postgres_connection, autocommit=False)
+    postgres_connection = psycopg.connect(postgres_url, autocommit=False)
+    redis_connection = redis.Redis().from_url(redis_url) if redis_url else None
 
     index = PostgresTrieIndex(rootkey=rootkey,
-                                postgresql_connection=conn,
+                                postgresql_connection=postgres_connection,
+                                redis_connection=redis_connection,
                                 switch_parameter=switch_parameter,
                                 table_name=table_name,
                                 end_of_triple=end_of_triple)
@@ -121,13 +114,14 @@ def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, sw
 
     print_initial_tokens_numleaves = True
             
-    with TimeMeasure(tag=f'Total time (Max generations: {max_generations})', verbose=True) as tm:
-        for i in range(1, max_generations+1):
+    with TimeMeasure(tag=f'Total time (Max generations: {generations})', verbose=True) as tm:
+        for i in range(1, generations+1):
             print(i, '-'*30)
             sequence = []
             initial_tokens_run = initial_tokens.copy()
             while True:
-                with TimeMeasure(tag=f'Query {len(sequence)}', verbose=verbose) as tm:
+                n = len(sequence)
+                with TimeMeasure(tag=f'Query {n}', verbose=verbose) as tm:
                     if verbose:
                         print(sequence)
                         print(tokenizer.decode(sequence))
@@ -182,7 +176,7 @@ def main(postgres_connection, table_name, rootkey, end_of_triple, model_name, sw
                     state.end_of_triple_reset()
                     break
 
-            print(tokenizer.decode(sequence))
+            print('TPL:', tokenizer.decode(sequence))
 
 
 if __name__ == "__main__":

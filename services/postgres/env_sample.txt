@@ -1,2 +1,4 @@
+POSTGRES_PASSWORD=secret
+RESTART_POLICY=no
 POSTGRES_DATA=/path/to/data
 REDIS_DATA=/path/to/data
