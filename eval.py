@@ -46,8 +46,8 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         model = Model()
 
         dataset_module = importlib.import_module(dataset_config_path)
-        QADataset = getattr(dataset_module, 'QADataset')
-        dataset = QADataset()
+        QuestionsDataset = getattr(dataset_module, 'QuestionsDataset')
+        dataset = QuestionsDataset()
 
         metadata_plus = {
             'index_config_path': index_config_path,
@@ -57,7 +57,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
             'date': get_utc_date_and_time(),
             'index_config': dict(index),
             'model_config': dict(model),
-            'dataset_config': dict(dataset)
+            'dataset_config': dict(dataset.dump_config())
         }
         output_fd.write(json.dumps(metadata_plus))
         output_fd.write('\n')
@@ -154,7 +154,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                             full_prediction=model.tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):]),
                             prompt=model.tokenizer.decode(output_i[:len(batch_inputs.input_ids[0])]),
                             full_sample=model.tokenizer.decode(output_i),
-                            triples=state.generated_triples
+                            triples=list(map(model.tokenizer.decode, state.generated_triples)),
                         )
                     output_fd.write(json.dumps(sample))
                     output_fd.write('\n')

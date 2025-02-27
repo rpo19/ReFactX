@@ -58,7 +58,7 @@ Answer: Mont Blanc.
         self.generate_args = dict(
             num_beams = 3,
             num_return_sequences = 1,
-            # do_sample = True,
+            do_sample = False,
             # top_k = 3,
             max_new_tokens = 400,
             )
