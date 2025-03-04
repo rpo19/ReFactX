@@ -13,12 +13,11 @@ import click
 def logrotate(file_name):
     idx = 0
     while True:
-        if not os.path.isfile(file_name):
+        if not os.path.isfile(f'{file_name}.{idx}'):
             break
         idx += 1
-        file_name = f'{file_name}.{idx}'
 
-    return file_name
+    return f'{file_name}.{idx}'
 
 def get_utc_date_and_time():
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -72,12 +71,17 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                     cache_index = DictIndex(end_of_triple=index.end_of_triple),
                     subtree_cache = DictIndex(end_of_triple=index.end_of_triple),
                     oneleaf_cache = DictIndex(end_of_triple=index.end_of_triple),
-                ) for _ in range(num_states)])
+                ) for _ in range(num_states)],
+            num_beams=model.generate_args.get('num_beams', 1),
+            batch_size = model.batch_size,
+            pad_token_id = model.generate_args['pad_token_id'])
 
         constrained_processor = ConstrainedLogitsProcessor(
             index=index.index,
             end_token=model.newline_token,
-            states=states)
+            states=states,
+            tokenizer=model.tokenizer
+            )
         logits_processor_list = LogitsProcessorList([
             constrained_processor
         ])
@@ -124,7 +128,9 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                     assert batch_number == len(dataloader) - 1
                     # in this case do not use the cache
                     past_key_values = None
-                    constrained_processor.states = states[:batch_inputs.input_ids.shape[0] * model.generate_args.get('num_beams', 1)]
+                    states = states[:batch_inputs.input_ids.shape[0] * model.generate_args.get('num_beams', 1)]
+                    states.batch_size = batch_inputs.input_ids.shape[0]
+                    constrained_processor.states = states
                 else:
                     past_key_values = copy.deepcopy(prompt_cache)
 

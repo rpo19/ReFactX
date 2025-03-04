@@ -509,14 +509,22 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
                 print('Found empty tree.')
 
 class ConstrainedStateList():
-    def __init__(self, states):
+    def __init__(self, states, pad_token_id, num_beams = 1, batch_size = 1):
         self.states = states
-
+        self.num_beams = num_beams
+        self.batch_size = batch_size # TODO last batch could be different
+        self.beam_scores = []
+        self.beam_next_tokens = []
         self.beam_idx = [] # place to save beam indexes permutation
+        self.pad_token_id = pad_token_id
 
     def __getitem__(self, key):
         if isinstance(key, slice):
-            return ConstrainedStateList(self.states[key])  # Return a new instance with sliced data
+            return ConstrainedStateList(
+                self.states[key],
+                pad_token_id = self.pad_token_id,
+                num_beams = self.num_beams,
+                batch_size = self.batch_size)  # Return a new instance with sliced data
         elif isinstance(key, int):
             return self.states[key]  # Return a single item
         else:
@@ -529,11 +537,27 @@ class ConstrainedStateList():
         for state in self.states:
             state.reset()
 
+    def beam_is_done(self, i):
+        if len(self.beam_scores) == 0:
+            # not yet initialized
+            return False
+
+        _done = self.beam_scores[i] == 0 and \
+        self.beam_next_tokens[i] == self.pad_token_id and \
+        self.beam_idx[i] == 0
+
+        return _done
+
     def beam_permutation(self):
-        copies = [state.dump(copy=False) for state in self.states]
-        for i, (state, beam_i) in enumerate(zip(self.states, self.beam_idx)):
-            if i != beam_i:
-                state.load(copies[beam_i], copy=True)
+        if len(self.beam_idx) > 0: # ignore first call
+            assert len(self.beam_idx) == self.num_beams * self.batch_size, 'ERROR: beam_idx size unexpected.'
+            copies = [state.dump(copy=False) for state in self.states]
+            for i, (state, beam_i) in enumerate(zip(self.states, self.beam_idx)):
+                if not self.beam_is_done(i):
+                    assert i // self.num_beams == beam_i // self.num_beams, \
+                        f'ERROR: permutating between different batches! {beam_i} --> {i}, with num_beams {self.num_beams}'
+                    if i != beam_i:
+                        state.load(copies[beam_i], copy=True)
 
 class ConstrainedState():
     def __init__(self, begin_pattern, end_pattern, cache_index, subtree_cache, oneleaf_cache, state=0) -> None:
@@ -559,6 +583,15 @@ class ConstrainedState():
 
         self.subtree_cache = subtree_cache
         self.oneleaf_cache = oneleaf_cache
+
+        self._first_call = True
+
+    def first_call(self):
+        if self._first_call:
+            self._first_call = False
+            return True
+        else:
+            return False
 
     def cache_add(self, sequence):
         self.cache_index.add(sequence, new_leaf=True)
@@ -661,7 +694,6 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         self.index = index
         self.end_token = end_token
         self.states = states
-        self.first_call = 0
         self.error_strategy = error_strategy
 
         self.ERROR_STRATEGY_WARN = 0
@@ -677,28 +709,23 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         self.states.beam_permutation()
 
         for i in range(input_ids.shape[0]):
-            sequence = input_ids[i].tolist()
+            if not self.states.beam_is_done(i):
+                sequence = input_ids[i].tolist()
 
-            if self.first_call < input_ids.shape[0]:
-                # still first call in the beam
-                self.first_call += 1
-            else:
-                last_token = sequence[-1]
-                self.states[i].update(last_token)
+                if not self.states[i].first_call():
+                    last_token = sequence[-1]
+                    self.states[i].update(last_token)
 
-            if self.states[i].is_constrained(): # odd number means constrained generation
-                # constrained generation
-                constrain_generation_sequence = sequence[len(sequence) - self.states[i].get_cursor():]
-                scores[[i],:] = self.constrained_generation(
-                    constrain_generation_sequence, scores[[i],:], state=self.states[i])
-            # else:
-            #     # normal generation
-            #     # scores are not altered
-            #     pass
+                if self.states[i].is_constrained(): # odd number means constrained generation
+                    # constrained generation
+                    constrain_generation_sequence = sequence[len(sequence) - self.states[i].get_cursor():]
+                    scores[[i],:] = self.constrained_generation(
+                        constrain_generation_sequence, scores[[i],:], state=self.states[i])
 
-            if self.tokenizer:
-                pass
-                #print(i, self.states[i].state, self.states[i].is_constrained(), [self.tokenizer.convert_ids_to_tokens(t) for t in scores[i].argsort(descending=True)[:3].tolist()])
+                # else:
+                #     # normal generation
+                #     # scores are not altered
+                #     pass
 
         return scores
 
@@ -723,7 +750,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             # end of constrained generation
             # send end of string
             if sequence[-1] != self.index.end_of_triple:
-                if self.error_strategy == self.ERROR_STRATEGY_FAIL: 
+                if self.error_strategy == self.ERROR_STRATEGY_FAIL:
                     raise TripleNotFoundException(sequence)
                 elif self.error_strategy == self.ERROR_STRATEGY_WARN:
                     print('WARNING:', TripleNotFoundException(sequence))

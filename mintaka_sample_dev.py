@@ -22,11 +22,25 @@ class QADataset(Dataset):
     def __getitem__(self, idx):
         # Return a dictionary directly with tensor slices for the given index
         sample = self.dataset[idx]
-        question = sample['question']
-        return question
+        return sample
 
     def __iter__(self):
+        for sample in self.dataset:
+            yield sample
+
+    def dump_config(self):
         keys = set(self.__dict__.keys())
         keys.difference_update(self.skip_serialize)
         for key in keys:
             yield (key, self.__dict__[key])
+
+class QuestionsDataset(QADataset):
+    def __init__(self):
+        super().__init__()
+
+    def __getitem__(self, idx):
+        return super().__getitem__(idx)['question']
+
+    def __iter__(self):
+        for sample in super().__iter__():
+            yield sample['question']

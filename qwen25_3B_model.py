@@ -61,9 +61,11 @@ Answer: Mont Blanc.
             do_sample = False,
             temperature = 0,
             top_k = None,
+            top_p = None,
             max_new_tokens = 400,
+            pad_token_id = 151643 # eos
             )
-        self.batch_size = 1
+        self.batch_size = 3
 
         self.skip_serialize = set(['skip_serialize','tokenizer', 'model', 'index'])
 
