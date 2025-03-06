@@ -11,6 +11,9 @@ class EmptyIndexException(Exception):
 class TripleNotFoundException(Exception):
     pass
 
+class WrongNumleavesException(Exception):
+    pass
+
 class Index():
     def __init__(self) -> None:
         pass
@@ -61,10 +64,12 @@ class DictIndex(Index):
         return length
 
     def _str_tree_dict(self, tree_dict, level=0, spacer='\t'):
-        _str = '{'
-        for key, value in tree_dict.items():
-            _str += '\n{}{}: {},'.format(spacer * level, key, self._str_tree(value, level+1))
-        _str += '}'
+        if len(tree_dict) == 0:
+            _str = '{}'
+        else:
+            _str = '{\n'
+            _str += ',\n'.join('{}{}: {}'.format(spacer * level, key, self._str_tree(value, level+1)) for key, value in tree_dict.items())
+            _str += '}'
         return _str
 
     def _str_tree(self, tree, level=0, spacer='\t'):
@@ -202,7 +207,7 @@ class DictIndex(Index):
             sequence = [*sequence, *subtree]
         return [numleaves, sequence]
 
-    def count_leaves(self, tree=None, update_numleaves=False):
+    def count_leaves(self, tree=None, update_numleaves=False, fail_on_wrong_num=False):
         if tree is None:
             tree = self.tree
         numleaves = 0
@@ -214,6 +219,12 @@ class DictIndex(Index):
         if numleaves == 0 and len(tree[1]) > 0:
             # no dict found
             numleaves = 1
+        if numleaves != tree[0]:
+            msg = f'WrongNumleaves: tree {tree[0]} != count {numleaves}'
+            if fail_on_wrong_num:
+                raise WrongNumleavesException(msg)
+            else:
+                print(msg)
         if update_numleaves:
             tree[0] = numleaves
         return numleaves

@@ -29,11 +29,13 @@ class TestCtrie(unittest.TestCase):
                             4581: [1, [315, 279, 4101, 29, 366, 36, 3168, 301, 22703, 320, 35, 8458, 359, 352, 4101, 16401, 662]]}]]
 
     def test_count_leaves(self):
+        print('\ntest count leaves')
         self.assertEqual(self.index.count_leaves(self.tree1), 1)
         self.assertEqual(self.index.count_leaves(self.tree2), 2)
         self.assertEqual(self.index.count_leaves(self.tree3), 18)
 
     def test_merge(self):
+        print('\ntest merge')
         self.index.reset()
         numleaves1 = self.index.merge(self.tree1)
         other1 = ctrie.DictIndex(end_of_triple=0, tree=self.tree1)
@@ -60,6 +62,7 @@ class TestCtrie(unittest.TestCase):
         self.assertEqual(numleaves5, self.index.count_leaves())
 
     def test_add(self):
+        print('\ntest add')
         self.index.reset()
         self.assertEqual(len(self.index), 0)
 
@@ -96,6 +99,7 @@ class TestCtrie(unittest.TestCase):
         self.assertEqual(len(self.index), 5)
 
     def test_add_w_duplicates(self):
+        print('\ntest add with duplicates (Ignore WrongNumleaves warnings)')
         self.index.reset()
         self.index.merge(self.tree1)
         self.index.merge(self.tree2)
@@ -134,9 +138,10 @@ class TestCtrie(unittest.TestCase):
         self.assertEqual(self.index.count_leaves(), 22)
 
     def test_repr(self):
+        print('\ntest repr')
         self.index.reset()
         self.index.tree = [5, [10, 9, 8, 7, 6, {4: [1, [3, 2, 1]], 999999: [1, [3, 2, 1, 50, 20]], 12343: [3, [3, {2: [1, [1]], 99992: [1, [18, 4]], 7777: [1, []]}]]}]]
-        self.assertEqual(str(self.index), '[5, [10, 9, 8, 7, 6, {\n\t4: \t\t[1, [3, 2, 1]]\n\t999999: \t\t[1, [3, 2, 1, 50, 20]]\n\t12343: \t\t[3, [3, {\n\t\t\t2: \t\t\t\t[1, [1]]\n\t\t\t99992: \t\t\t\t[1, [18, 4]]\n\t\t\t7777: \t\t\t\t[1, []]}]]}]]')
+        self.assertEqual(str(self.index), '[5, [10, 9, 8, 7, 6, {\n\t4: \t\t[1, [3, 2, 1]],\n\t999999: \t\t[1, [3, 2, 1, 50, 20]],\n\t12343: \t\t[3, [3, {\n\t\t\t2: \t\t\t\t[1, [1]],\n\t\t\t99992: \t\t\t\t[1, [18, 4]],\n\t\t\t7777: \t\t\t\t[1, []]}]]}]]')
         # print('__str__', self.index.__str__())
         # print(self.index.__repr__())
         # print(self.index.__short_repr__())
