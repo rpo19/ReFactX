@@ -98,18 +98,21 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         model.model.eval()
         with torch.no_grad():
 
-            prompt_cache = DynamicCache()
-            inputs_prompt_begin = model.tokenizer(
-                [model.apply_prompt_template()] * model.batch_size * model.generate_args.get('num_beams', 1),
-                return_tensors='pt',
-                padding=False)
-            inputs_prompt_begin.to(model.model.device)
+            if model.generate_args.get('use_cache', False):
+                prompt_cache = DynamicCache()
+                inputs_prompt_begin = model.tokenizer(
+                    [model.apply_prompt_template()] * model.batch_size * model.generate_args.get('num_beams', 1),
+                    return_tensors='pt',
+                    padding=False)
+                inputs_prompt_begin.to(model.model.device)
 
-            prompt_cache = model.model(
-                    **inputs_prompt_begin,
-                    use_cache=True,
-                    past_key_values=prompt_cache,
-                ).past_key_values
+                prompt_cache = model.model(
+                        **inputs_prompt_begin,
+                        use_cache=True,
+                        past_key_values=prompt_cache,
+                    ).past_key_values
+            else:
+                prompt_cache = None
 
             for batch_number, batch in enumerate(tqdm(dataloader)):
                 print(f'Batch {batch_number}:')
@@ -123,23 +126,25 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
 
                 getanswer.set_prompt(batch_inputs.input_ids[0])
 
-                if inputs_prompt_begin.input_ids.shape[0] != batch_inputs.input_ids.shape[0] * model.generate_args.get('num_beams', 1):
-                    # last batch can mismatch in dimensions wrt the prompt cache
-                    assert batch_number == len(dataloader) - 1
-                    # in this case do not use the cache
-                    past_key_values = None
-                    states = states[:batch_inputs.input_ids.shape[0] * model.generate_args.get('num_beams', 1)]
-                    states.batch_size = batch_inputs.input_ids.shape[0]
-                    constrained_processor.states = states
+                if model.generate_args.get('use_cache', False):
+                    if inputs_prompt_begin.input_ids.shape[0] != batch_inputs.input_ids.shape[0] * model.generate_args.get('num_beams', 1):
+                        # last batch can mismatch in dimensions wrt the prompt cache
+                        assert batch_number == len(dataloader) - 1
+                        # in this case do not use the cache
+                        past_key_values = None
+                        states = states[:batch_inputs.input_ids.shape[0] * model.generate_args.get('num_beams', 1)]
+                        states.batch_size = batch_inputs.input_ids.shape[0]
+                        constrained_processor.states = states
+                    else:
+                        past_key_values = copy.deepcopy(prompt_cache)
                 else:
-                    past_key_values = copy.deepcopy(prompt_cache)
+                    past_key_values = None
 
                 output = model.model.generate(
                     **batch_inputs,
                     logits_processor=logits_processor_list,
                     stopping_criteria=stopping_criteria,
                     **model.generate_args,
-                    use_cache=True,
                     past_key_values=past_key_values,
                     kwargs = {'constrained_state': states}, # passing state
                 )

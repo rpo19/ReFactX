@@ -8,7 +8,7 @@ class Model():
         print(f'Loading {self.model_name}')
         self.device = 'cuda:0'
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.tokenizer.pad_token = 'Ċ' # use padding right with newline as padding token
+        # self.tokenizer.pad_token = 'Ċ' # use padding right with newline as padding token
         # self.quantization_config = dict(
         #     load_in_4bit=True,
         #     bnb_4bit_use_double_quant=True,
@@ -54,16 +54,20 @@ Long answer: Mont Blanc is 4,807 meters tall, while Mount Rainier is 4,389 meter
 Answer: Mont Blanc.
 '''
             }]
-
+        self.tokenizer_args = dict(
+            padding=True,
+            padding_side='left'
+        )
         self.generate_args = dict(
             num_beams = 3,
             num_return_sequences = 1,
             do_sample = False,
-            temperature = 0,
+            temperature = None,
             top_k = None,
             top_p = None,
             max_new_tokens = 400,
-            pad_token_id = 151643 # eos
+            pad_token_id = 151643, # eos
+            use_cache = False,
             )
         self.batch_size = 3
 
@@ -81,8 +85,7 @@ Answer: Mont Blanc.
         return self.tokenizer(
             questions,
             return_tensors='pt',
-            padding=True,
-            padding_side='right'
+            **self.tokenizer_args,
         ).to(self.model.device)
 
     def __iter__(self):
