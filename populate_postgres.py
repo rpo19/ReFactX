@@ -37,7 +37,7 @@ def main(fname, model_name, postgres_connection, table_name, prefix, end_of_trip
         for sequence in nested_token_ids:
             index.add(sequence)
 
-    tbar_update = tokenizer_batch_size
+    tbar_update = batch_size
     count = 0
 
     with psycopg.connect(postgres_connection, autocommit=False) as conn:
@@ -91,9 +91,6 @@ def main(fname, model_name, postgres_connection, table_name, prefix, end_of_trip
 
                                     # reset batch
                                     index.reset()
-
-                                    # debug
-                                    break
 
                                 if count % tbar_update == 0:
                                     pbar.n = count
