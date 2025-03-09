@@ -19,8 +19,9 @@ import click
 @click.option("--total-number-of-triples", type=int, default=None, help="Total number of items (optional).")
 @click.option("--count-leaves", is_flag=True, default=False, help="Count leaves to veify the count is correct (slower).")
 @click.option("--add-special-tokens", is_flag=True, default=False, help="Add special tokens when tokenizing.")
+@click.option("--debug", is_flag=True, default=False, help="Break after first batch for debugging.")
 def main(fname, model_name, postgres_connection, table_name, prefix, end_of_triple, rootkey,
-    tokenizer_batch_size, batch_size, switch_parameter, total_number_of_triples, count_leaves, remove_bos):
+    tokenizer_batch_size, batch_size, switch_parameter, total_number_of_triples, count_leaves, add_special_tokens, debug):
     """Command-line tool for processing data and storing it in a PostgreSQL database."""
 
     assert batch_size % tokenizer_batch_size == 0, f'ERROR: --batch-size ({batch_size}) must be multiple of --tokenizer-batch-size ({tokenizer_batch_size})'
@@ -95,6 +96,10 @@ def main(fname, model_name, postgres_connection, table_name, prefix, end_of_trip
 
                                     # reset batch
                                     index.reset()
+
+                                    if debug:
+                                        print('DEBUG! Breaking after first batch.')
+                                        break
 
                                 if count % tbar_update == 0:
                                     pbar.n = count

@@ -214,7 +214,7 @@ def main(index_module, postgres_url, redis_url, table_name, rootkey, end_of_trip
                     state.end_of_triple_reset()
                     break
 
-            print('TPL:', tokenizer.decode(sequence))
+            print('triple: "{}"'.format(tokenizer.decode(sequence)))
 
 
 if __name__ == "__main__":
