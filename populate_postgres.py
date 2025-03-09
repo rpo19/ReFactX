@@ -18,11 +18,15 @@ import click
 @click.option('--switch-parameter', type=int, required=True, help='Switch parameter value')
 @click.option("--total-number-of-triples", type=int, default=None, help="Total number of items (optional).")
 @click.option("--count-leaves", is_flag=True, default=False, help="Count leaves to veify the count is correct (slower).")
+@click.option("--add-special-tokens", is_flag=True, default=False, help="Add special tokens when tokenizing.")
 def main(fname, model_name, postgres_connection, table_name, prefix, end_of_triple, rootkey,
-    tokenizer_batch_size, batch_size, switch_parameter, total_number_of_triples, count_leaves):
+    tokenizer_batch_size, batch_size, switch_parameter, total_number_of_triples, count_leaves, remove_bos):
     """Command-line tool for processing data and storing it in a PostgreSQL database."""
 
     assert batch_size % tokenizer_batch_size == 0, f'ERROR: --batch-size ({batch_size}) must be multiple of --tokenizer-batch-size ({tokenizer_batch_size})'
+
+    if not end_of_triple.startswith(' '):
+        print(f'WARNING: --end-of-triple ("{end_of_triple}") does not start with " "')
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if not tokenizer.is_fast:
@@ -73,7 +77,7 @@ def main(fname, model_name, postgres_connection, table_name, prefix, end_of_trip
                                 tokenizer_batch.append(line)
 
                                 if len(tokenizer_batch) == tokenizer_batch_size:
-                                    ids = tokenizer(tokenizer_batch)['input_ids']
+                                    ids = tokenizer(tokenizer_batch, add_special_tokens=add_special_tokens)['input_ids']
                                     tokenizer_batch = []
 
                                     batch_append(ids, index)
