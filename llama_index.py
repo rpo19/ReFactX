@@ -4,16 +4,16 @@ import redis
 
 class Index():
     def __init__(self):
-        self.model_name = 'Qwen/Qwen2.5-1.5B-Instruct' # the db depends from the tokenizer
+        self.model_name = 'meta-llama/Llama-3.2-1B-Instruct' # the db depends from the tokenizer
         self.postgresql_url = 'postgres://postgres:secret@10.0.0.118:5432/postgres'
         self.autocommit = True
-        self.redis_url = 'redis://default:12345678@10.0.0.118:6379/1'
+        self.redis_url = 'redis://default:12345678@10.0.0.118:6379/2'
         self.redis_connection = redis.Redis().from_url(self.redis_url)
         self.postgresql_connection = psycopg.connect(self.postgresql_url, autocommit = self.autocommit)
-        self.postgresql_table = "ctriev3qwen"
+        self.postgresql_table = "ctriev5llama"
         self.switch_parameter = 7
         self.rootkey = 200000 # decided at injestion time
-        self.end_of_triple = 659 # each triple must finish with the same token (e.g. "." after space)
+        self.end_of_triple = 662 # each triple must finish with the same token (e.g. "." after space)
         self.index = PostgresTrieIndex(
             rootkey = self.rootkey,
             postgresql_connection = self.postgresql_connection,

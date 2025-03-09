@@ -4,7 +4,7 @@ import torch
 
 class Model():
     def __init__(self):
-        self.model_name =  'Qwen/Qwen2.5-1.5B-Instruct'
+        self.model_name = 'meta-llama/Llama-3.2-1B-Instruct'
         print(f'Loading {self.model_name}')
         self.device = 'cuda:0'
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
@@ -18,9 +18,9 @@ class Model():
         self.model = AutoModelForCausalLM.from_pretrained(self.model_name,
             # attn_implementation="flash_attention_2"
             ).to(self.device)
-        self.switch_pattern = [17417, 25] # "Fact:" after newline
+        self.switch_pattern = [17873, 25] # "Fact:" after newline
         self.newline_token = 198
-        self.answer_tokens = [16141, 25] # "Answer:" after newline
+        self.answer_tokens = [16533, 25] # "Answer:" after newline
         self.eofanswer = [self.newline_token, self.tokenizer.eos_token_id]
 
         self.prompt_template = [

@@ -8,6 +8,7 @@ class Model():
         print(f'Loading {self.model_name}')
         self.device = 'cuda:0'
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
         # self.tokenizer.pad_token = 'Ċ' # use padding right with newline as padding token
         # self.quantization_config = dict(
         #     load_in_4bit=True,
@@ -66,8 +67,8 @@ Answer: Mont Blanc.
             top_k = None,
             top_p = None,
             max_new_tokens = 400,
-            pad_token_id = 151643, # eos
-            use_cache = False,
+            pad_token_id = self.tokenizer.eos_token_id,
+            use_cache = True,
             )
         self.batch_size = 3
 
