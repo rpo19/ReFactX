@@ -320,7 +320,7 @@ class DictIndex(Index):
         return dst[0]
 
 class PostgresTrieIndex(Index):
-    def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name, redis_connection = None, return_state = False):
+    def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name, redis_connection = None, return_state = False, do_count_leaves=False):
         super().__init__(end_of_triple)
         self.rootkey = rootkey
         self.postgresql_connection = postgresql_connection
@@ -329,6 +329,7 @@ class PostgresTrieIndex(Index):
         self.redis_connection = redis_connection
         self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
         self.return_state = return_state
+        self.do_count_leaves = do_count_leaves # slower if true
 
     def _merge_next_tokens(self, src, dst):
         if src is not None:
@@ -450,16 +451,16 @@ class PostgresTrieIndex(Index):
                         if subtree:
                             subtree = pickle.loads(subtree)
                             current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
-                            # if not numleaves == subtree_cache.count_leaves(current_tree):
-                            #     pass
+                            if self.do_count_leaves and numleaves != subtree_cache.count_leaves(current_tree):
+                                print('WARNING: number of leaves does not match after COUNT LEAVES.')
+
                             merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
-                            numleaves_diff = numleaves - merge_numleaves
+                            numleaves_diff = totalnumleaves - merge_numleaves
                             if numleaves_diff != 0:
                                 # TODO debug
                                 # reduce all the upper numleaves by the difference
                                 # WORKAROUND to solve duplicates (or wrong count) problem
                                 print('WARNING: number of leaves does not match.')
-                                pass
 
             # TODO maybe do it only when there is no subtree cache to save space and bandwidth
             # (first calls are the slowest)
