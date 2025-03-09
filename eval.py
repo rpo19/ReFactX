@@ -98,7 +98,9 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         model.model.eval()
         with torch.no_grad():
 
-            if model.generate_args.get('use_cache', False):
+            if model.generate_args.get('use_cache', False) and (
+                    model.batch_size == 1 or model.tokenizer_args.padding_side='right'):
+                # only cache the prompt if padding_size is right
                 prompt_cache = DynamicCache()
                 inputs_prompt_begin = model.tokenizer(
                     [model.apply_prompt_template()] * model.batch_size * model.generate_args.get('num_beams', 1),
