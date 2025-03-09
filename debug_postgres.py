@@ -7,6 +7,7 @@ import time
 import json
 import click
 from ctrie import PostgresTrieIndex, ConstrainedState, DictIndex, TripleNotFoundException, EmptyIndexException
+import importlib
 
 class TimeMeasure:
     def __init__(self, tag='default', verbose=False, outfile=sys.stdout):
@@ -53,14 +54,34 @@ def choose(children, initial_tokens):
         choice = random.choice(children)
     return choice
 
+class IndexArgumentException(Exception):
+    def __init__(self, index_module, postgres_url, table_name, rootkey, switch_parameter, end_of_triple, model_name):
+        message = f'''ERROR: you must either set --index-module or manually set all the following:
+--postgres-url, --table-name, --rootkey, --switch-parameter, --end-of-triple, --model-name
+Actual values:
+--index-module {index_module}
+# or
+--postgres-url {postgres_url}
+--table-name {table_name}
+--rootkey {rootkey}
+--switch-parameter {switch_parameter}
+--end-of-triple {end_of_triple}
+--model-name {model_name}
+'''
+        super().__init__(message)
+    pass
+
 @click.command()
-@click.option("--postgres-url", required=True, help="Postgres connection URL")
+# db
+@click.option("--index-module", required=False, help="Index Module with index config")
+@click.option("--postgres-url", required=False, help="Postgres connection URL")
 @click.option("--redis-url", required=False, default=None, help="Postgres connection URL")
-@click.option("--table-name", required=True, help="Table name")
-@click.option("--rootkey", type=int, required=True, help="Root key")
-@click.option("--end-of-triple", type=int, required=True, help="End of triple")
-@click.option("--model-name", required=True, help="Model name")
-@click.option("--switch-parameter", type=int, required=True, help="Switch parameter")
+@click.option("--table-name", required=False, help="Table name")
+@click.option("--rootkey", type=int, required=False, help="Root key")
+@click.option("--switch-parameter", type=int, required=False, help="Switch parameter")
+@click.option("--end-of-triple", type=int, required=False, help="End of triple")
+@click.option("--model-name", required=False, help="Model name")
+#
 @click.option("--random-seed", type=int, required=False, help="Random seed")
 @click.option("--initial-tokens", default='', help="Initial tokens")
 @click.option("--json-tokens", required=False, help="JSON tokens")
@@ -68,8 +89,30 @@ def choose(children, initial_tokens):
 @click.option("--dump-oneleaf-cache", required=False, default=False, is_flag=True, help="Dump oneleaf cache")
 @click.option("--verbose", required=False, default=False, is_flag=True, help="Verbose mode")
 @click.option("--generations", required=False, default=1, help="Number of triples to generate")
-def main(postgres_url, redis_url, table_name, rootkey, end_of_triple, model_name, switch_parameter,
+def main(index_module, postgres_url, redis_url, table_name, rootkey, end_of_triple, model_name, switch_parameter,
         random_seed, initial_tokens, json_tokens, dump_subtree_cache, dump_oneleaf_cache, verbose, generations):
+    if index_module:
+        index_module = importlib.import_module(index_module)
+        Index = getattr(index_module, 'Index')
+        index_config = Index()
+        postgres_connection = index_config.postgresql_connection
+        redis_connection = index_config.redis_connection
+        end_of_triple = index_config.end_of_triple
+        index = index_config.index
+
+        model_name = index_config.model_name
+    elif any(map(lambda x: x is None, [postgres_url, table_name, rootkey, switch_parameter, end_of_triple, model_name])):
+        raise IndexArgumentException(index_module, postgres_url, table_name, rootkey, switch_parameter, end_of_triple, model_name)
+    else:
+        postgres_connection = psycopg.connect(postgres_url, autocommit=False)
+        redis_connection = redis.Redis().from_url(redis_url) if redis_url else None
+
+        index = PostgresTrieIndex(rootkey=rootkey,
+                                    postgresql_connection=postgres_connection,
+                                    redis_connection=redis_connection,
+                                    switch_parameter=switch_parameter,
+                                    table_name=table_name,
+                                    end_of_triple=end_of_triple)
     if json_tokens:
         assert not initial_tokens, 'ERROR: specify either intitial tokens or json tokens. Not both.'
         initial_tokens = json.loads(json_tokens)
@@ -93,16 +136,6 @@ def main(postgres_url, redis_url, table_name, rootkey, end_of_triple, model_name
     else:
         print(tokenizer.decode(initial_tokens))
         print(initial_tokens)
-
-    postgres_connection = psycopg.connect(postgres_url, autocommit=False)
-    redis_connection = redis.Redis().from_url(redis_url) if redis_url else None
-
-    index = PostgresTrieIndex(rootkey=rootkey,
-                                postgresql_connection=postgres_connection,
-                                redis_connection=redis_connection,
-                                switch_parameter=switch_parameter,
-                                table_name=table_name,
-                                end_of_triple=end_of_triple)
 
     state = ConstrainedState(
                 begin_pattern = [],
