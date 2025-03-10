@@ -113,7 +113,7 @@ def main(postgres_url, redis_url, table_name, rootkey, end_of_triple, model_name
             )
 
     print_initial_tokens_numleaves = True
-            
+
     with TimeMeasure(tag=f'Total time (Max generations: {generations})', verbose=True) as tm:
         for i in range(1, generations+1):
             print(i, '-'*30)
@@ -125,8 +125,10 @@ def main(postgres_url, redis_url, table_name, rootkey, end_of_triple, model_name
                     if verbose:
                         print(sequence)
                         print(tokenizer.decode(sequence))
-                    possible_tokens_dict = index.next_tokens(sequence, state=state)
+                    possible_tokens_dict, extra = index.next_tokens(sequence, state=state)
                     possible_tokens_dict_debug = possible_tokens_dict.copy()
+                    if verbose and extra and extra.get('found_subtree'):
+                        print('found_subtree')
                     try:
                         visited_tokens = state.cache_index.next_tokens(sequence)
                         # print(visited_tokens, end=' = ')
@@ -165,6 +167,9 @@ def main(postgres_url, redis_url, table_name, rootkey, end_of_triple, model_name
                     except InputTokenException as e:
                         print(e)
                         break
+
+                    if verbose and extra and extra.get('tokens_from_oneleaf', False) and next_token in extra.get('tokens_from_oneleaf', {}):
+                        print('chose token from oneleaf')
                 else:
                     if verbose:
                         print('.')

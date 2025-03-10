@@ -27,7 +27,8 @@ class Index():
     def next_tokens(self, sequence: list, **kwargs) -> dict:
         token = 0
         numleaves = 10
-        return {token: numleaves,}
+        extra = {}
+        return {token: numleaves,}, extra
 
     def subtract_tokens(self, tokens_a: list, tokens_b: list) -> None:
         for token in list(tokens_a.keys()):
@@ -212,7 +213,7 @@ class DictIndex(Index):
             # otherwise the triple is not valid
             raise TripleNotFoundException(sequence)
 
-        return _next_tokens
+        return _next_tokens, {}
 
     def to_dict(self, sequence, numleaves, subtree=[]):
         if subtree:
@@ -319,7 +320,7 @@ class DictIndex(Index):
         return dst[0]
 
 class PostgresTrieIndex(Index):
-    def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name, redis_connection = None):
+    def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name, redis_connection = None, return_state = False):
         super().__init__(end_of_triple)
         self.rootkey = rootkey
         self.postgresql_connection = postgresql_connection
@@ -327,6 +328,7 @@ class PostgresTrieIndex(Index):
         self.table_name = table_name
         self.redis_connection = redis_connection
         self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
+        self.return_state = return_state
 
     def _merge_next_tokens(self, src, dst):
         if src is not None:
@@ -343,7 +345,7 @@ class PostgresTrieIndex(Index):
 
         _next_tokens_cache = None
         try:
-            _next_tokens_cache = state.oneleaf_cache.next_tokens(sequence)
+            _next_tokens_cache, _ = state.oneleaf_cache.next_tokens(sequence)
         except EmptyIndexException:
             pass
         except TripleNotFoundException:
@@ -357,7 +359,7 @@ class PostgresTrieIndex(Index):
         else:
             # continue in the subtree
             try:
-                _next_tokens = state.subtree_cache.next_tokens(sequence)
+                _next_tokens, _ = state.subtree_cache.next_tokens(sequence)
             except EmptyIndexException:
                 pass
             except TripleNotFoundException:
@@ -373,7 +375,14 @@ class PostgresTrieIndex(Index):
                 # otherwise the triple is not valid
                 raise TripleNotFoundException(sequence)
 
-        return _next_tokens
+        extra = {
+            'found_subtree': len(sequence) > self.switch_parameter,
+            'tokens_from_oneleaf': _next_tokens_cache
+            }
+        if self.return_state:
+            extra['state'] = state
+
+        return _next_tokens, extra
 
     def _redis_encode_sequence(self, sequence):
         # TODO use base64 or similar for improve space efficiency
@@ -793,9 +802,9 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
     def constrained_generation(self, sequence, scores: torch.FloatTensor, state):
 
-        possible_tokens = self.index.next_tokens(sequence, state = state)
+        possible_tokens, _ = self.index.next_tokens(sequence, state = state)
         try:
-            visited_tokens = state.cache_index.next_tokens(sequence)
+            visited_tokens, _ = state.cache_index.next_tokens(sequence)
             # print(visited_tokens, end=' = ')
             state.cache_index.subtract_tokens(possible_tokens, visited_tokens)
             # print(possible_tokens)
