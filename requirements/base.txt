@@ -1,10 +1,6 @@
-requests
 tqdm
-psycopg[binary]
 torch
 git+https://github.com/rpo19/transformers # patched transformers for stateful constrained generation
-mergedeep
 bitsandbytes
 accelerate
 click
-redis

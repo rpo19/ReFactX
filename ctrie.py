@@ -3,7 +3,7 @@ from transformers import StoppingCriteria
 import torch
 import pickle
 from psycopg import sql
-import copy
+from copy import deepcopy
 
 class EmptyIndexException(Exception):
     pass
@@ -15,15 +15,21 @@ class WrongNumleavesException(Exception):
     pass
 
 class Index():
-    def __init__(self) -> None:
-        pass
+    def __init__(self, end_of_triple: int) -> None:
+        self.end_of_triple = end_of_triple # e.g. "." to ensure the triple is ended and valid
 
-    def next_tokens(self, sequence, **kwargs):
+    def config(self) -> dict:
+        return dict(end_of_triple=self.end_of_triple)
+
+    def triple_is_valid(self, sequence: list) -> bool:
+        return sequence[-1] == self.end_of_triple
+
+    def next_tokens(self, sequence: list, **kwargs) -> dict:
         token = 0
         numleaves = 10
         return {token: numleaves,}
 
-    def subtract_tokens(self, tokens_a, tokens_b):
+    def subtract_tokens(self, tokens_a: list, tokens_b: list) -> None:
         for token in list(tokens_a.keys()):
             if token in tokens_b:
                 diff = tokens_a[token] - tokens_b[token] # TODO transform subtract tokens in a prob modifier
@@ -36,9 +42,9 @@ class Index():
 
 class DictIndex(Index):
     def __init__(self, end_of_triple, tree = None):
+        super().__init__(end_of_triple)
         self.tree = None
         self.reset(tree)
-        self.end_of_triple = end_of_triple
 
     def reset(self, tree = None):
         if tree is None:
@@ -96,8 +102,14 @@ class DictIndex(Index):
     def __short_repr__(self):
         return super().__repr__()
 
+    def __json__(self, copy=True):
+        return {
+            'tree': deepcopy(self.tree) if copy else self.tree,
+            'end_of_triple': self.end_of_triple,
+        }
+
     def copy(self):
-        copy_of_index = DictIndex(self.end_of_triple, tree=copy.deepcopy(self.tree))
+        copy_of_index = DictIndex(self.end_of_triple, tree=deepcopy(self.tree))
         return copy_of_index
 
     def add(self, sequence, new_leaf=False):
@@ -195,7 +207,7 @@ class DictIndex(Index):
         else: # is int
             _next_tokens = {level[1][level_cursor]: level[0]}
 
-        if len(_next_tokens) == 0 and sequence[-1] != self.end_of_triple:
+        if len(_next_tokens) == 0 and not self.triple_is_valid(sequence):
             # end of triple must match end_of_triple
             # otherwise the triple is not valid
             raise TripleNotFoundException(sequence)
@@ -308,8 +320,8 @@ class DictIndex(Index):
 
 class PostgresTrieIndex(Index):
     def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name, redis_connection = None):
+        super().__init__(end_of_triple)
         self.rootkey = rootkey
-        self.end_of_triple = end_of_triple # e.g. "." to ensure the triple is ended and valid
         self.postgresql_connection = postgresql_connection
         self.switch_parameter = switch_parameter
         self.table_name = table_name
@@ -354,7 +366,7 @@ class PostgresTrieIndex(Index):
         self._merge_next_tokens(_next_tokens_cache, _next_tokens)
 
         if len(_next_tokens) == 0:
-            if sequence[-1] == self.end_of_triple:
+            if self.triple_is_valid(sequence):
                 state.end_of_triple_reset()
             else:
                 # end of triple must match end_of_triple
@@ -623,6 +635,39 @@ class ConstrainedState():
         self.cache_index.reset()
         self.end_of_triple_reset()
 
+    def __json__(self, copy=True):
+        return {
+            'begin_pattern': self.begin_pattern,
+            'end_pattern': self.end_pattern,
+            'state': self.state,
+            'history': self.history,
+            'cursor': self.cursor,
+            'generated_triples': self.generated_triples.copy() if copy else self.generated_triples,
+            'cache_index': self.cache_index.__json__(copy),
+            'oneleaf_cache': self.oneleaf_cache.__json__(copy),
+            'subtree_cache': self.subtree_cache.__json__(copy),
+        }
+
+    def from_json(self, data, copy=True):
+        self.begin_pattern = data['begin_pattern']
+        self.end_pattern = data['end_pattern']
+        self.state = data['state']
+
+        self.history = data['history']
+        self.cursor = data['cursor']
+
+        self.generated_triples = data['generated_triples'].copy() if copy else data['generated_triples']
+        if copy:
+            self.cache_index = DictIndex(end_of_triple=data['cache_index']['end_of_triple'], tree=deepcopy(data['cache_index']['tree']))
+            self.subtree_cache = DictIndex(end_of_triple=data['subtree_cache']['end_of_triple'], tree=deepcopy(data['subtree_cache']['tree']))
+            self.oneleaf_cache = DictIndex(end_of_triple=data['oneleaf_cache']['end_of_triple'], tree=deepcopy(data['oneleaf_cache']['tree']))
+        else:
+            self.cache_index = DictIndex(**data['cache_index'])
+            self.subtree_cache = DictIndex(**data['subtree_cache'])
+            self.oneleaf_cache = DictIndex(**data['oneleaf_cache'])
+
+        return self
+
     def dump(self, copy=True):
         return {
             'begin_pattern': self.begin_pattern,
@@ -645,17 +690,23 @@ class ConstrainedState():
         self.cursor = data['cursor']
 
         self.generated_triples = data['generated_triples'].copy() if copy else data['generated_triples']
-        self.cache_index = data['cache_index'].copy() if copy else data['cache_index']
-        self.subtree_cache = data['subtree_cache'].copy() if copy else data['subtree_cache']
-        self.oneleaf_cache = data['oneleaf_cache'].copy() if copy else data['oneleaf_cache']
+        self.cache_index = deepcopy(data['cache_index']) if copy else data['cache_index']
+        self.subtree_cache = deepcopy(data['subtree_cache']) if copy else data['subtree_cache']
+        self.oneleaf_cache = deepcopy(data['oneleaf_cache']) if copy else data['oneleaf_cache']
 
-    def copy(self, other):
+    def copy(self, other, copy=True):
         self.begin_pattern = other.begin_pattern
         self.end_pattern = other.end_pattern
         self.state = other.state
 
         self.history = other.history  # Assuming it's immutable or should be shallow copied
         self.cursor = other.cursor
+
+        self.generated_triples = other.generated_triples.copy() if copy else other.generated_triples
+        self.cache_index = deepcopy(other.cache_index) if copy else other.cache_index
+        self.subtree_cache = deepcopy(other.subtree_cache) if copy else other.subtree_cache
+        self.oneleaf_cache = deepcopy(other.oneleaf_cache) if copy else other.oneleaf_cache
+
 
     def update(self, new_token):
         rollback = False
@@ -760,7 +811,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         if len(possible_tokens) == 0:
             # end of constrained generation
             # send end of string
-            if sequence[-1] != self.index.end_of_triple:
+            if not self.index.triple_is_valid(sequence):
                 if self.error_strategy == self.ERROR_STRATEGY_FAIL:
                     raise TripleNotFoundException(sequence)
                 elif self.error_strategy == self.ERROR_STRATEGY_WARN:

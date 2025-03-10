@@ -1,5 +1,4 @@
 ## Download dumps
-- Go to
 - Go to https://dumps.wikimedia.org/wikidatawiki/entities/ and download `latest-truthy.nt.bz2`.
 - Go to https://dumps.wikimedia.org/enwiki/20241220/ and download `enwiki-20241220-page.sql.gz` and `enwiki-20241220-page_props.sql.gz`
 
@@ -7,6 +6,13 @@
 The output file only has triples with label, altLabel, and description as predicate.
 ```
 bzgrep -P '(http://www\\.w3\\.org/2000/01/rdf-schema#label|http://www\\.w3\\.org/2004/02/skos/core#altLabel|http://schema\\.org/description).*\\@en\s+.' latest-truthy.nt.bz2 | gzip -c > latest-truthy-labels-descriptions.nt.gz
+```
+
+## Create a virtualenv
+```
+python -m venv venv
+pip install -r requirements/base.txt
+pip install -r requirements/postgres.txt # for the postgres index
 ```
 
 ## Load labels and description into a pickle file

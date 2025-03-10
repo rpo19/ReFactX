@@ -1,9 +1,9 @@
-venv
+**/venv
 *.pickle
 *.gz
 *.bz2
 *.zip
-__pycache__
+**/__pycache__
 .ipynb_checkpoints
 *.out.?
 *.log
