@@ -1,0 +1,2 @@
+POSTGRES_BASE_URL=postgres://user:pwd@host:port/
+REDIS_BASE_URL=redis://user:pwd@host:port/

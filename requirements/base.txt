@@ -4,3 +4,4 @@ git+https://github.com/rpo19/transformers # patched transformers for stateful co
 bitsandbytes
 accelerate
 click
+python-dotenv

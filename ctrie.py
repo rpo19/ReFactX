@@ -1,5 +1,4 @@
 from transformers.generation.logits_process import LogitsProcessor
-from transformers import StoppingCriteria
 import torch
 import pickle
 from psycopg import sql
@@ -330,6 +329,9 @@ class PostgresTrieIndex(Index):
         self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
         self.return_state = return_state
         self.do_count_leaves = do_count_leaves # slower if true
+
+    def flush_redis(self, asynchronous=False):
+        self.redis_connection.flushdb(asynchronous)
 
     def _merge_next_tokens(self, src, dst):
         if src is not None:
@@ -775,8 +777,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
         assert input_ids.shape[0] == len(self.states), \
-            'Error: number of states ({}) should match `batch_size * num_beams` ({})'.format(
-                    input_ids.shape[0], len(self.states))
+            f'Error: number of states ({len(self.states)}) should match `batch_size * num_beams` ({input_ids.shape[0]})'
 
         self.states.beam_permutation()
 
@@ -838,47 +839,3 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         scores[:, possible_tokens] = possible_scores
 
         return scores
-
-class GetAnswer(StoppingCriteria):
-    # strategy=all strategy=any. strategy can be all or any python functions
-    def __init__(self, answer, eofanswer, strategy=all):
-        self.prompt = None
-        self.answer = answer
-        self.eofanswer = set(eofanswer)
-        self.strategy = strategy
-
-    def __call__(self, input_ids, scores, **kwargs):
-        outcome = self.strategy(
-            self.get_answer(input_ids[i].tolist(), return_answer=False) for i in range(input_ids.shape[0]))
-        return outcome
-
-    def set_prompt(self, prompt):
-        self.prompt = prompt
-
-    def get_answer(self, sequence, return_answer=True):
-        sequence = sequence[len(self.prompt):] # remove prompt
-        answer_cursor = 0
-        answer_tokens = []
-        answer_is_complete = False
-        token_id = 0
-        while token_id < len(sequence):
-            token = sequence[token_id]
-            token_id += 1
-            if token == self.answer[answer_cursor]:
-                answer_cursor += 1
-                if answer_cursor >= len(self.answer):
-                    #answer_found = True
-                    break
-        #if answer_found:
-        while token_id < len(sequence):
-            token = sequence[token_id]
-            token_id += 1
-            if token in self.eofanswer:
-                answer_is_complete = True
-                break
-            else:
-                answer_tokens.append(token)
-
-        outcome = (answer_is_complete, answer_tokens) if return_answer else answer_is_complete
-
-        return outcome
