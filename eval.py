@@ -117,7 +117,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                 prompt_cache = None
 
             for batch_number, batch in enumerate(tqdm(dataloader)):
-                print(f'Batch {batch_number}:')
+                print(f'\nBatch {batch_number}:')
                 for question in batch:
                     print(question)
                 prompted_batch = list(map(model_config.apply_prompt_template, batch))

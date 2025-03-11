@@ -431,9 +431,12 @@ class PostgresTrieIndex(Index):
             _next_tokens = {}
             if len(query_result) > 0:
                 totalnumleaves = 0
+                totalnumleaves_subtree = 0
+                totalnumleaves_oneleaf = 0
                 for row, (query_id, children, subtree, numleaves, childrenleaves) in enumerate(query_result):
                     totalnumleaves += numleaves
                     if numleaves == 1:
+                        totalnumleaves_oneleaf += 1
                         # triple finish
                         # children is the entire triple
                         child = children[0]
@@ -443,7 +446,6 @@ class PostgresTrieIndex(Index):
                         # save the rest in cache
                         current_tree = state.oneleaf_cache.to_dict([*sequence, *children], numleaves)
                         merge_numleaves = state.oneleaf_cache.merge(current_tree, update_numleaves=True)
-
                     else:
                         for child, childleaves in zip(children, childrenleaves):
                             if child not in _next_tokens:
@@ -451,13 +453,14 @@ class PostgresTrieIndex(Index):
                             _next_tokens[child] += childleaves
 
                         if subtree:
+                            totalnumleaves_subtree += numleaves
                             subtree = pickle.loads(subtree)
                             current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
                             if self.do_count_leaves and numleaves != subtree_cache.count_leaves(current_tree):
                                 print('WARNING: number of leaves does not match after COUNT LEAVES.')
 
                             merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
-                            numleaves_diff = totalnumleaves - merge_numleaves
+                            numleaves_diff = totalnumleaves_subtree - merge_numleaves
                             if numleaves_diff != 0:
                                 # TODO debug
                                 # reduce all the upper numleaves by the difference

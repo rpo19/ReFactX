@@ -5,7 +5,7 @@ from base_dataset_config import QADataset
 config = {
     'path': '/workspace/data/mintaka_dev.json',
     'random_seed': 1234,
-    'num_samples': 5,
+    'num_samples': 50,
 }
 
 print(f'Loading {config["path"]}')

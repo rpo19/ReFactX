@@ -119,8 +119,9 @@ def main(index_module, postgres_url, redis_url, table_name, rootkey, end_of_trip
                                     end_of_triple=end_of_triple)
 
     if flush_redis:
-        print('Redis flush db')
+        print('Redis flush db and close.')
         index.flush_redis()
+        sys.exit(0)
 
     if json_tokens:
         assert not initial_tokens, 'ERROR: specify either intitial tokens or json tokens. Not both.'
