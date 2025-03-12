@@ -90,8 +90,9 @@ Actual values:
 @click.option("--dump-oneleaf-cache", required=False, default=False, is_flag=True, help="Dump oneleaf cache")
 @click.option("--verbose", required=False, default=False, is_flag=True, help="Verbose mode")
 @click.option("--generations", required=False, default=1, help="Number of triples to generate")
+@click.option("--add-special-tokens", required=False, is_flag=True, help="Add special tokens when tokenizing initial tokens")
 def main(index_module, postgres_url, redis_url, table_name, rootkey, end_of_triple, model_name, flush_redis, switch_parameter,
-        random_seed, initial_tokens, json_tokens, dump_subtree_cache, dump_oneleaf_cache, verbose, generations):
+        random_seed, initial_tokens, json_tokens, dump_subtree_cache, dump_oneleaf_cache, verbose, generations, add_special_tokens):
     if index_module:
 
         if index_module.endswith('.py'):
@@ -142,7 +143,7 @@ def main(index_module, postgres_url, redis_url, table_name, rootkey, end_of_trip
     if initial_tokens:
         if isinstance(initial_tokens, str):
             print(f'|{initial_tokens}|')
-            initial_tokens = tokenizer(initial_tokens)['input_ids']
+            initial_tokens = tokenizer(initial_tokens, add_special_tokens=add_special_tokens)['input_ids']
             print(initial_tokens)
         else:
             print(f'|{tokenizer.decode(initial_tokens)}|')

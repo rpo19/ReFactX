@@ -7,5 +7,6 @@ index_config = IndexConfig(
     postgresql_table = 'ctriev5llama',
     switch_parameter = 7,
     rootkey = 200000,
-    end_of_triple = 662
+    end_of_triple = 662,
+    redis_db=1,
 )

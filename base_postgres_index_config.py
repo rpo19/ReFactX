@@ -14,7 +14,7 @@ class IndexConfig():
                 postgres_db='postgres',
                 autocommit=True,
                 redis_base_url=None, # if None loads from dotenv
-                redis_db=0,
+                redis_db=None,
                 ):
         load_dotenv()
 
@@ -27,6 +27,8 @@ class IndexConfig():
         self.autocommit = autocommit
         if redis_base_url is None:
             redis_base_url = os.environ.get('REDIS_BASE_URL')
+        if redis_base_url and redis_db is None:
+            raise IndexConfigException('When using redis you must configure which db to use (e.g. 0 or 1).')
         self.redis_url = redis_base_url + str(redis_db)
         self.redis_connection = redis.Redis().from_url(self.redis_url) if redis_base_url else None
         self.postgresql_connection = psycopg.connect(self.postgresql_url, autocommit = self.autocommit)
