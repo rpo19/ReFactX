@@ -3,7 +3,7 @@ from ctrie import ConstrainedLogitsProcessor
 import torch
 
 class ModelConfig():
-    def __init__(self, model_name, switch_pattern, newline_token, load_model = True, load_model_args = None):
+    def __init__(self, model_name, switch_pattern, newline_token, load_model = True, load_model_args = None, device_map = 'auto'):
         self.model_name = model_name
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -16,7 +16,7 @@ class ModelConfig():
         if load_model:
             print(f'Loading {self.model_name}')
             if load_model_args is None:
-                load_model_args = dict(device_map = 'auto')
+                load_model_args = dict(device_map = device_map)
             self.model = AutoModelForCausalLM.from_pretrained(self.model_name,
                 **load_model_args
                 )
