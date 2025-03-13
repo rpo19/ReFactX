@@ -1,6 +1,6 @@
 import random
 import json
-from base_dataset_config import QADataset
+from mintaka_base import MintakaDataset
 
 config = {
     'path': '/workspace/data/mintaka_test.json',
@@ -16,4 +16,5 @@ with open(config['path']) as fd:
 random.seed(config['random_seed'])
 raw_dataset = random.sample(raw_dataset, config['num_samples'])
 
-dataset = QADataset(raw_dataset, config)
+dataset = MintakaDataset(raw_dataset, config)
+

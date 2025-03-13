@@ -28,6 +28,9 @@ class QADataset(Dataset):
     def questions_dataset(self):
         return QuestionsDataset(self.dataset, self.config)
 
+    def get_answer(self, i):
+        return self.dataset[i]['answer']
+
 class QuestionsDataset(QADataset):
     def __init__(self, dataset, config):
         super().__init__(dataset, config)

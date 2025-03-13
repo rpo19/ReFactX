@@ -1,6 +1,7 @@
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from ctrie import ConstrainedLogitsProcessor
 import torch
+import re
 
 class ModelConfig():
     def __init__(self, model_name, switch_pattern, newline_token, load_model = True, load_model_args = None, device_map = 'cuda',
@@ -78,6 +79,8 @@ Answer: Mont Blanc.
 
         self.skip_serialize = set(['skip_serialize','tokenizer', 'model', 'index'])
 
+        self.answer_pattern = re.compile('Answer: (.*)\.?')
+
     def apply_prompt_template(self, question=None):
         if question is None:
             # only prompt for caching
@@ -98,3 +101,16 @@ Answer: Mont Blanc.
         keys.difference_update(self.skip_serialize)
         for key in keys:
             yield (key, self.__dict__[key])
+
+    def get_prediction(self, full_prediction, remove_dot=True):
+        prediction = None
+
+        full_prediction = full_prediction.split(self.model.eos_token, 1)[0]
+        if remove_dot and full_prediction.endswith('.'):
+            full_prediction = full_prediction[:-len('.')]
+        match = self.answer_pattern.search(full_prediction)
+        if match:
+            prediction = match.group(1)
+
+        return prediction
+

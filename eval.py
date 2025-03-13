@@ -155,16 +155,18 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
 
                 state_idx_generator = range(0, num_states, model_config.generate_args.get('num_beams', 1))
                 for question, prompted_question, output_i, state_idx in zip(batch, prompted_batch, output, state_idx_generator):
-                    answer_complete, answer = False, [] # TODO find with regex
+                    full_prediction = model_config.tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):])
+                    prediction = model.get_prediction(full_prediction)
+                    prediction_complete = bool(prediction)
                     # TODO also save worse beams
 
                     state = states[state_idx] # TODO check if states are permuted before or after beam step
 
                     sample = dict(
                             question=question,
-                            answer_complete=answer_complete,
-                            prediction=model_config.tokenizer.decode(answer),
-                            full_prediction=model_config.tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):]),
+                            answer_complete=prediction_complete,
+                            prediction=prediction,
+                            full_prediction=full_prediction,
                             prompt=model_config.tokenizer.decode(output_i[:len(batch_inputs.input_ids[0])]),
                             full_sample=model_config.tokenizer.decode(output_i),
                             triples=list(map(model_config.tokenizer.decode, state.generated_triples)),
