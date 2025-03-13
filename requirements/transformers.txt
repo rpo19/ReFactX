@@ -1,1 +1,1 @@
-git+https://github.com/rpo19/transformers # patched transformers for stateful constrained generation
+git+https://github.com/rpo19/transformers@v4.49.0-Gemma-3-release # patched transformers for stateful constrained generation
