@@ -11,7 +11,7 @@ bzgrep -P '(http://www\\.w3\\.org/2000/01/rdf-schema#label|http://www\\.w3\\.org
 ## Create a virtualenv
 ```
 python -m venv venv
-pip install -r requirements/base.txt
+pip install -r requirements/base.txt -r requirements/transformers.txt
 pip install -r requirements/postgres.txt # for the postgres index
 ```
 
