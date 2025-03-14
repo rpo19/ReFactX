@@ -89,7 +89,7 @@ protected-mode yes
 
 # Accept connections on the specified port, default is 6379 (IANA #815344).
 # If port 0 is specified Redis will not listen on a TCP socket.
-port 0
+# port 6379
 
 # TCP listen() backlog.
 #
@@ -504,7 +504,7 @@ replica-priority 100
 # 150k passwords per second against a good box. This means that you should
 # use a very strong password otherwise it will be very easy to break.
 
-requirepass 12345678
+# requirepass 12345678
 
 # Command renaming.
 #
@@ -1372,12 +1372,19 @@ rdb-save-incremental-fsync yes
 # the main dictionary scan
 # active-defrag-max-scan-fields 1000
 
-## TLS
+##### END OF SAMPLE REDIS CONF #####
 
-tls-port 6379
-port 0
+requirepass changeme
 
-tls-cert-file /usr/local/etc/redis/server.crt
-tls-key-file /usr/local/etc/redis/server.key
+## Unsecure
+port 6379
 
-tls-auth-clients no
+### TLS
+#
+#tls-port 6379
+#port 0 # disable unsecure port
+#
+#tls-cert-file /usr/local/etc/redis/server.crt
+#tls-key-file /usr/local/etc/redis/server.key
+#
+#tls-auth-clients no

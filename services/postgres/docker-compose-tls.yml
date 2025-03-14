@@ -5,20 +5,20 @@ services:
     environment:
       POSTGRES_PASSWORD: $POSTGRES_PASSWORD
     ports:
-      - 5432:5432
+      - $POSTGRES_LISTEN:5432
     volumes:
       - $POSTGRES_DATA:/var/lib/postgresql/data
-      - ./postgresql.conf:/var/lib/postgresql/data/postgresql.conf:ro
-      - ./pg_hba.conf:/var/lib/postgresql/data/pg_hba.conf:ro
+      - ./postgresql.conf:/var/lib/postgresql/data/postgresql.conf
+      - ./pg_hba.conf:/var/lib/postgresql/data/pg_hba.conf
       - ./server.crt:/var/lib/postgresql/data/server.crt:ro
       - ./server.key:/var/lib/postgresql/data/server.key:ro
   redis:
     image: redis:7
     command: redis-server /usr/local/etc/redis/redis.conf
     ports:
-      - 6379:6379
+      - $REDIS_LISTEN:6379
     volumes:
       - $REDIS_DATA:/data
-      - ./redis-tls.conf:/usr/local/etc/redis/redis.conf:ro
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
       - ./server.crt:/usr/local/etc/redis/server.crt:ro
       - ./server.key:/usr/local/etc/redis/server.key:ro

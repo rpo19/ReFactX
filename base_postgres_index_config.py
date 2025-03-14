@@ -3,6 +3,7 @@ import psycopg
 import redis
 from dotenv import load_dotenv
 import os
+from urllib.parse import urlparse
 
 class IndexConfigException(Exception):
     pass
@@ -15,6 +16,8 @@ class IndexConfig():
                 autocommit=True,
                 redis_base_url=None, # if None loads from dotenv
                 redis_db=None,
+                redis_ssl=None,
+                redis_ssl_ca_certs=None,
                 ):
         load_dotenv()
 
@@ -29,8 +32,19 @@ class IndexConfig():
             redis_base_url = os.environ.get('REDIS_BASE_URL')
         if redis_base_url and redis_db is None:
             raise IndexConfigException('When using redis you must configure which db to use (e.g. 0 or 1).')
-        self.redis_url = redis_base_url + str(redis_db)
-        self.redis_connection = redis.Redis().from_url(self.redis_url) if redis_base_url else None
+        if redis_ssl is None:
+            redis_ssl = os.environ.get('REDIS_SSL', 'false').lower() == 'true'
+            redis_ssl_ca_certs = os.environ.get('REDIS_SSL_CA_CERTS', '')
+        redis_config = urlparse(redis_base_url)
+        self.redis_connection = redis.Redis(
+            host=redis_config.hostname,
+            port=redis_config.port,
+            password=redis_config.password,
+            username=redis_config.username,
+            db=redis_db,
+            ssl=redis_ssl,
+            ssl_ca_certs=redis_ssl_ca_certs,
+            ) if redis_base_url else None
         self.postgresql_connection = psycopg.connect(self.postgresql_url, autocommit = self.autocommit)
         self.postgresql_table = postgresql_table
         self.switch_parameter = switch_parameter

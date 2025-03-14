@@ -5,3 +5,5 @@ data_*
 *.key
 *.crt
 *.csr
+*.srl
+redis.conf

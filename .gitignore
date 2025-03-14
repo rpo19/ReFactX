@@ -13,3 +13,4 @@
 *.out
 *.xlsx
 .env
+ca.crt
