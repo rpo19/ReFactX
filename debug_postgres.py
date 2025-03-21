@@ -178,7 +178,7 @@ def main(index_module, postgres_url, redis_url, table_name, rootkey, end_of_trip
                     if verbose and extra and extra.get('found_subtree'):
                         print('found_subtree')
                     try:
-                        visited_tokens = state.cache_index.next_tokens(sequence)
+                        visited_tokens, _ = state.cache_index.next_tokens(sequence)
                         # print(visited_tokens, end=' = ')
                         state.cache_index.subtract_tokens(possible_tokens_dict, visited_tokens)
                         # print(possible_tokens)
