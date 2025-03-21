@@ -318,20 +318,33 @@ class DictIndex(Index):
                 cursor += 1
         return dst[0]
 
+class Cache():
+    def __init__(self, cache_db):
+        self.cache_db = cache_db
+
+    # key --> (children, childrenleaves, oneleaf, subtree)
+    def add(self, sequence):
+        pass
+
+    def next_tokens(self, sequence, **kwargs):
+        next_tokens, oneleaf_cache, subtree_cache = None, None, None
+        return next_tokens, oneleaf_cache, subtree_cache
+
 class PostgresTrieIndex(Index):
-    def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name, redis_connection = None, return_state = False, do_count_leaves=False):
+    def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name, cache: Cache = None, return_state = False, do_count_leaves=False):
         super().__init__(end_of_triple)
         self.rootkey = rootkey
         self.postgresql_connection = postgresql_connection
         self.switch_parameter = switch_parameter
         self.table_name = table_name
-        self.redis_connection = redis_connection
+        self.cache = cache
         self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
         self.return_state = return_state
         self.do_count_leaves = do_count_leaves # slower if true
 
-    def flush_redis(self, asynchronous=False):
-        self.redis_connection.flushdb(asynchronous)
+    def flush_cache(self):
+        if self.cache:
+            self.cache.flush()
 
     def _merge_next_tokens(self, src, dst):
         if src is not None:
@@ -387,34 +400,13 @@ class PostgresTrieIndex(Index):
 
         return _next_tokens, extra
 
-    def _redis_encode_sequence(self, sequence):
-        # TODO use base64 or similar for improve space efficiency
-        redis_key = '.'.join(map(str, sequence))
-        return redis_key
-
-    def _add_to_redis_cache(self, sequence, next_tokens, oneleaf_cache, subtree_cache):
-        redis_key = '.'.join(map(str, sequence))
-        redis_value = pickle.dumps([next_tokens, oneleaf_cache, subtree_cache], protocol=5)
-        self.redis_connection.set(redis_key, redis_value)
-
-    def _next_tokens_from_redis_cache(self, sequence):
-        redis_key = self._redis_encode_sequence(sequence)
-        redis_value = self.redis_connection.get(redis_key)
-        if redis_value:
-            _next_tokens, oneleaf_cache, subtree_cache = pickle.loads(redis_value)
-        else:
-            _next_tokens = None
-            oneleaf_cache = DictIndex(end_of_triple=self.end_of_triple) # empty index
-            subtree_cache = DictIndex(end_of_triple=self.end_of_triple)
-        return _next_tokens, oneleaf_cache, subtree_cache
-
     def _next_tokens_from_postgresql(self, sequence, state):
         found_in_cache = False
-        if self.redis_connection:
+        if self.cache:
             # key --> (children, childrenleaves, oneleaf, subtree)
             # better saving entire or incremental cache?
             # better entire to reduce computation
-            _next_tokens, new_oneleaf_cache, new_subtree_cache = self._next_tokens_from_redis_cache(sequence)
+            _next_tokens, new_oneleaf_cache, new_subtree_cache = self.cache.next_tokens(sequence)
             found_in_cache = _next_tokens is not None
             if found_in_cache:
                 # do not reset the cache if not found
@@ -448,7 +440,7 @@ class PostgresTrieIndex(Index):
                         merge_numleaves = state.oneleaf_cache.merge(current_tree, update_numleaves=True)
                     else:
                         for child, childleaves in zip(children, childrenleaves):
-                            if child not in _next_tokens:
+                            if (child not in _next_tokens):
                                 _next_tokens[child] = 0
                             _next_tokens[child] += childleaves
 
@@ -456,7 +448,7 @@ class PostgresTrieIndex(Index):
                             totalnumleaves_subtree += numleaves
                             subtree = pickle.loads(subtree)
                             current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
-                            if self.do_count_leaves and numleaves != subtree_cache.count_leaves(current_tree):
+                            if self.do_count_leaves and numleaves != state.subtree_cache.count_leaves(current_tree):
                                 print('WARNING: number of leaves does not match after COUNT LEAVES.')
 
                             merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
@@ -469,11 +461,11 @@ class PostgresTrieIndex(Index):
 
             # TODO maybe do it only when there is no subtree cache to save space and bandwidth
             # (first calls are the slowest)
-            if self.redis_connection:
+            if self.cache:
                 try:
-                    self._add_to_redis_cache(sequence, _next_tokens, state.oneleaf_cache, state.subtree_cache)
+                    self.cache.add(sequence, _next_tokens, state.oneleaf_cache, state.subtree_cache)
                 except Exception as e:
-                    print('WARNING: failed to populate redis cache', e)
+                    print('WARNING: failed to populate cache', e)
 
         return _next_tokens
 

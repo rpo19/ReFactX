@@ -1,9 +1,8 @@
 from ctrie import PostgresTrieIndex
 import psycopg
-import redis
 from dotenv import load_dotenv
 import os
-from urllib.parse import urlparse
+import importlib
 
 class IndexConfigException(Exception):
     pass
@@ -14,10 +13,8 @@ class IndexConfig():
                 postgresql_base_url=None, # if None loads from dotenv
                 postgres_db='postgres',
                 autocommit=True,
-                redis_base_url=None, # if None loads from dotenv
-                redis_db=None,
-                redis_ssl=None,
-                redis_ssl_ca_certs=None,
+                cache=None, # if None loads from dotenv
+                cache_db=0,
                 ):
         load_dotenv()
 
@@ -28,23 +25,14 @@ class IndexConfig():
             raise IndexConfigException('postgres_url is None.')
         self.postgresql_url = postgresql_base_url + postgres_db
         self.autocommit = autocommit
-        if redis_base_url is None:
-            redis_base_url = os.environ.get('REDIS_BASE_URL')
-        if redis_base_url and redis_db is None:
-            raise IndexConfigException('When using redis you must configure which db to use (e.g. 0 or 1).')
-        if redis_ssl is None:
-            redis_ssl = os.environ.get('REDIS_SSL', 'false').lower() == 'true'
-            redis_ssl_ca_certs = os.environ.get('REDIS_SSL_CA_CERTS', '')
-        redis_config = urlparse(redis_base_url)
-        self.redis_connection = redis.Redis(
-            host=redis_config.hostname,
-            port=redis_config.port,
-            password=redis_config.password,
-            username=redis_config.username,
-            db=redis_db,
-            ssl=redis_ssl,
-            ssl_ca_certs=redis_ssl_ca_certs,
-            ) if redis_base_url else None
+
+        if cache is None and os.environ.get('POSTGRES_CACHE') is not None:
+            cache_class = os.environ.get('POSTGRES_CACHE')
+            cache_module = importlib.import_module(cache_class)
+            self.cache = cache_module.__init__(cache_db)
+        else:
+            self.cache = cache
+
         self.postgresql_connection = psycopg.connect(self.postgresql_url, autocommit = self.autocommit)
         self.postgresql_table = postgresql_table
         self.switch_parameter = switch_parameter
@@ -56,10 +44,10 @@ class IndexConfig():
             switch_parameter = self.switch_parameter,
             table_name = self.postgresql_table,
             end_of_triple = self.end_of_triple,
-            redis_connection = self.redis_connection,
+            cache = self.cache,
             )
 
-        self.skip_serialize = set(['skip_serialize', 'postgresql_connection', 'redis_connection', 'index'])
+        self.skip_serialize = set(['skip_serialize', 'postgresql_connection', 'cache', 'index'])
 
     def __iter__(self):
         keys = set(self.__dict__.keys())

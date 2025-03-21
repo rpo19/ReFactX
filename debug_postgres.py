@@ -1,5 +1,4 @@
 import psycopg
-import redis
 from transformers import AutoTokenizer
 import sys
 import random
@@ -8,6 +7,7 @@ import json
 import click
 from ctrie import PostgresTrieIndex, ConstrainedState, DictIndex, TripleNotFoundException, EmptyIndexException
 import importlib
+from base_postgres_index_config import IndexConfigException
 
 class TimeMeasure:
     def __init__(self, tag='default', verbose=False, outfile=sys.stdout):
@@ -75,13 +75,14 @@ Actual values:
 # db
 @click.option("--index-module", required=False, help="Index Module with index config")
 @click.option("--postgres-url", required=False, help="Postgres connection URL")
-@click.option("--redis-url", required=False, default=None, help="Postgres connection URL")
+@click.option("--cache-class", required=False, default=None, help="Cache class")
+@click.option("--cache-db", required=False, default=0, help="Cache db")
 @click.option("--table-name", required=False, help="Table name")
 @click.option("--rootkey", type=int, required=False, help="Root key")
 @click.option("--switch-parameter", type=int, required=False, help="Switch parameter")
 @click.option("--end-of-triple", type=int, required=False, help="End of triple")
 @click.option("--model-name", required=False, help="Model name")
-@click.option("--flush-redis", is_flag=True, required=False, help="Flush redis db at program start")
+@click.option("--flush-cache", is_flag=True, required=False, help="Flush cache db at program start")
 #
 @click.option("--random-seed", type=int, required=False, help="Random seed")
 @click.option("--initial-tokens", default='', help="Initial tokens")
@@ -91,7 +92,7 @@ Actual values:
 @click.option("--verbose", required=False, default=False, is_flag=True, help="Verbose mode")
 @click.option("--generations", required=False, default=1, help="Number of triples to generate")
 @click.option("--add-special-tokens", required=False, is_flag=True, help="Add special tokens when tokenizing initial tokens")
-def main(index_module, postgres_url, redis_url, table_name, rootkey, end_of_triple, model_name, flush_redis, switch_parameter,
+def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey, end_of_triple, model_name, flush_cache, switch_parameter,
         random_seed, initial_tokens, json_tokens, dump_subtree_cache, dump_oneleaf_cache, verbose, generations, add_special_tokens):
     if index_module:
 
@@ -101,7 +102,7 @@ def main(index_module, postgres_url, redis_url, table_name, rootkey, end_of_trip
         index_config = getattr(index_module, 'index_config')
 
         postgres_connection = index_config.postgresql_connection
-        redis_connection = index_config.redis_connection
+        cache = index_config.cache
         end_of_triple = index_config.end_of_triple
         index = index_config.index
 
@@ -110,18 +111,26 @@ def main(index_module, postgres_url, redis_url, table_name, rootkey, end_of_trip
         raise IndexArgumentException(index_module, postgres_url, table_name, rootkey, switch_parameter, end_of_triple, model_name)
     else:
         postgres_connection = psycopg.connect(postgres_url, autocommit=False)
-        redis_connection = redis.Redis().from_url(redis_url) if redis_url else None
+        # TODO add in-memory cache
+
+        if cache_class is not None:
+            if cache_db is None:
+                raise IndexConfigException('When using caching you must configure which db to use (e.g. 0)')
+            cache_module = importlib.import_module(cache_class)
+            cache = cache_module.__init__(cache_db)
+        else:
+            cache = None
 
         index = PostgresTrieIndex(rootkey=rootkey,
                                     postgresql_connection=postgres_connection,
-                                    redis_connection=redis_connection,
+                                    cache=cache,
                                     switch_parameter=switch_parameter,
                                     table_name=table_name,
                                     end_of_triple=end_of_triple)
 
-    if flush_redis:
+    if flush_cache:
         print('Redis flush db and close.')
-        index.flush_redis()
+        index.cache.flush()
         sys.exit(0)
 
     if json_tokens:

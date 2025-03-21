@@ -1,2 +1,7 @@
 POSTGRES_BASE_URL=postgres://user:pwd@host:port/
-REDIS_BASE_URL=redis://user:pwd@host:port/
+# POSTGRES_CACHE=SimpleCache
+# POSTGRES_CACHE_MAXSIZE=1024
+# POSTGRES_CACHE=RedisCache
+# REDIS_BASE_URL=redis://user:pwd@host:port/
+# REDIS_SSL=false
+# REDIS_SSL_CA_CERTS=
