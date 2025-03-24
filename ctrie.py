@@ -3,6 +3,7 @@ import torch
 import pickle
 from psycopg import sql
 from copy import deepcopy
+import requests
 
 class EmptyIndexException(Exception):
     pass
@@ -480,19 +481,20 @@ def serialize(obj):
     return pickle.dumps(obj)
 
 class HTTPPostgresTrieIndex(PostgresTrieIndex):
-    def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name, base_url: str, redis_connection = None, return_state = False, do_count_leaves=False):
-        super().__init__(rootkey, end_of_triple, None, switch_parameter, table_name, None, return_state, do_count_leaves)
+    def __init__(self, rootkey : int, end_of_triple: int, switch_parameter : int, table_name, base_url: str, cache: Cache = None, postgresql_connection = None, redis_connection = None, return_state = False, do_count_leaves=False, rootcert=None):
+        super().__init__(rootkey, end_of_triple, None, switch_parameter, table_name, cache, return_state, do_count_leaves)
         # self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
-        self.base_url = base_url
+        self.base_url = base_url[:-1] if base_url.endswith('/') else base_url
         self.select_url = f'/select'
+        self.rootcert = rootcert
 
     def _next_tokens_from_postgresql(self, sequence, state):
         found_in_cache = False
-        if self.redis_connection:
+        if self.cache:
             # key --> (children, childrenleaves, oneleaf, subtree)
             # better saving entire or incremental cache?
             # better entire to reduce computation
-            _next_tokens, new_oneleaf_cache, new_subtree_cache = self._next_tokens_from_redis_cache(sequence)
+            _next_tokens, new_oneleaf_cache, new_subtree_cache = self.cache.next_tokens(sequence)
             found_in_cache = _next_tokens is not None
             if found_in_cache:
                 # do not reset the cache if not found
@@ -503,9 +505,13 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
 
         if not found_in_cache:
             data = serialize(dict(sequence=sequence,table_name=self.table_name))
-            result_select = requests.post(self.select_url, data=data, headers={'Content-Type': 'application/octet-stream'})
-            if not result_select.ok:
-                raise HTTPPostgresError(result_select.text)
+            response = requests.post(self.base_url + self.select_url,
+                data=data,
+                headers={'Content-Type': 'application/octet-stream'},
+                verify=self.rootcert,
+            )
+            if not response.ok:
+                raise HTTPPostgresError(response.text)
             query_result = deserialize(response.content)
 
             _next_tokens = {}
@@ -528,7 +534,7 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
                         merge_numleaves = state.oneleaf_cache.merge(current_tree, update_numleaves=True)
                     else:
                         for child, childleaves in zip(children, childrenleaves):
-                            if child not in _next_tokens:
+                            if (child not in _next_tokens):
                                 _next_tokens[child] = 0
                             _next_tokens[child] += childleaves
 
@@ -536,7 +542,7 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
                             totalnumleaves_subtree += numleaves
                             subtree = pickle.loads(subtree)
                             current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
-                            if self.do_count_leaves and numleaves != subtree_cache.count_leaves(current_tree):
+                            if self.do_count_leaves and numleaves != state.subtree_cache.count_leaves(current_tree):
                                 print('WARNING: number of leaves does not match after COUNT LEAVES.')
 
                             merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
@@ -549,11 +555,11 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
 
             # TODO maybe do it only when there is no subtree cache to save space and bandwidth
             # (first calls are the slowest)
-            if self.redis_connection:
+            if self.cache:
                 try:
-                    self._add_to_redis_cache(sequence, _next_tokens, state.oneleaf_cache, state.subtree_cache)
+                    self.cache.add(sequence, _next_tokens, state.oneleaf_cache, state.subtree_cache)
                 except Exception as e:
-                    print('WARNING: failed to populate redis cache', e)
+                    print('WARNING: failed to populate cache', e)
 
         return _next_tokens
 

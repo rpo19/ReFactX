@@ -101,8 +101,6 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
         index_module = importlib.import_module(index_module)
         index_config = getattr(index_module, 'index_config')
 
-        postgres_connection = index_config.postgresql_connection
-        cache = index_config.cache
         end_of_triple = index_config.end_of_triple
         index = index_config.index
 

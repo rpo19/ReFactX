@@ -28,8 +28,8 @@ class IndexConfig():
         self.postgresql_url = postgresql_base_url + postgres_db
         self.autocommit = autocommit
 
-        if cache is None and os.environ.get('POSTGRES_CACHE') is not None:
-            cache_class = os.environ.get('POSTGRES_CACHE')
+        if cache is None and os.environ.get('CACHE') is not None:
+            cache_class = os.environ.get('CACHE')
             cache_module = importlib.import_module(cache_class)
             self.cache = cache_module.__init__(cache_db)
         else:
