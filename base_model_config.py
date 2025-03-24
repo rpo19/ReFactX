@@ -78,7 +78,7 @@ Answer: Mont Blanc.
             )
         self.batch_size = 3
 
-        self.answer_pattern = re.compile('Answer: (.*)\.?')
+        self.answer_pattern = re.compile(r'Answer: (.*)\.?')
 
         self.skip_serialize = set(['skip_serialize','tokenizer', 'model', 'index', 'answer_pattern', 'model_class'])
 
