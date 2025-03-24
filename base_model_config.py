@@ -77,9 +77,9 @@ Answer: Mont Blanc.
             )
         self.batch_size = 3
 
-        self.skip_serialize = set(['skip_serialize','tokenizer', 'model', 'index'])
-
         self.answer_pattern = re.compile('Answer: (.*)\.?')
+
+        self.skip_serialize = set(['skip_serialize','tokenizer', 'model', 'index', 'answer_pattern'])
 
     def apply_prompt_template(self, question=None):
         if question is None:
