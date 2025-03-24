@@ -16,6 +16,7 @@ class ModelConfig():
         #     bnb_4bit_quant_type='nf4',
         #     bnb_4bit_compute_dtype='bfloat16')
         self.model_class = model_class
+        self.model_class_name = str(model_class)
         if load_model:
             print(f'Loading {self.model_name}')
             if load_model_args is None:
@@ -79,7 +80,7 @@ Answer: Mont Blanc.
 
         self.answer_pattern = re.compile('Answer: (.*)\.?')
 
-        self.skip_serialize = set(['skip_serialize','tokenizer', 'model', 'index', 'answer_pattern'])
+        self.skip_serialize = set(['skip_serialize','tokenizer', 'model', 'index', 'answer_pattern', 'model_class'])
 
     def apply_prompt_template(self, question=None):
         if question is None:
