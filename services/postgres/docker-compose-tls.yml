@@ -12,6 +12,14 @@ services:
       - ./pg_hba.conf:/var/lib/postgresql/data/pg_hba.conf
       - ./server.crt:/var/lib/postgresql/data/server.crt:ro
       - ./server.key:/var/lib/postgresql/data/server.key:ro
+  nginx:
+    image: nginx:1.26
+    ports:
+      - $NGINX_LISTEN:443
+    volumes:
+      - ./server.crt:/etc/nginx/server.crt:ro
+      - ./server.key:/etc/nginx/server.key:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
   redis:
     image: redis:7
     command: redis-server /usr/local/etc/redis/redis.conf

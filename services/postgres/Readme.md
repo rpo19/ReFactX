@@ -17,7 +17,7 @@ Copy `redis.conf.sample` to `redis.conf` and edit the password at the end of the
 
 #### Start the services
 ```
-sudo docker compose up -d
+sudo docker compose -f docker-compose-insecure.yml up -d
 ```
 ## TLS
 In this setup we will enable TLS encryption without certificate verification
@@ -34,12 +34,12 @@ sudo ./generate_certs.sh example.com 999
 ```
 #### Start postgres without TLS
 ```
-sudo docker compose up -d postgres
+sudo docker compose -f docker-compose-insecure.yml up -d postgres
 ```
 Now the db (empty) should have been created.
 #### Stop and delete the container
 ```
-sudo docker compose down
+sudo docker compose -f docker-compose-insecure.yml down
 ```
 The db is persisted in the volume.
 #### Start the docker-compose-tls
