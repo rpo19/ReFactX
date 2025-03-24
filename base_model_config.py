@@ -106,7 +106,7 @@ Answer: Mont Blanc.
     def get_prediction(self, full_prediction, remove_dot=True):
         prediction = None
 
-        full_prediction = full_prediction.split(self.model.eos_token, 1)[0]
+        full_prediction = full_prediction.split(self.tokenizer.eos_token, 1)[0]
         if remove_dot and full_prediction.endswith('.'):
             full_prediction = full_prediction[:-len('.')]
         match = self.answer_pattern.search(full_prediction)
