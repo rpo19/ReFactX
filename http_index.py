@@ -22,6 +22,8 @@ class IndexConfig():
         self.base_url = base_url
         if rootcert is None:
             rootcert = os.environ.get('HTTP_ROOTCERT')
+        if rootcert and rootcert.lower() == 'false':
+            rootcert = False
         self.rootcert = rootcert
         self.postgresql_table = postgresql_table
         self.switch_parameter = switch_parameter

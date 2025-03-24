@@ -508,7 +508,7 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
             response = requests.post(self.base_url + self.select_url,
                 data=data,
                 headers={'Content-Type': 'application/octet-stream'},
-                verify=self.rootcert,
+                verify=self.rootcert
             )
             if not response.ok:
                 raise HTTPPostgresError(response.text)
