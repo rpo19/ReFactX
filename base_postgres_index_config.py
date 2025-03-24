@@ -13,6 +13,8 @@ class IndexConfig():
                 postgresql_base_url=None, # if None loads from dotenv
                 postgres_db='postgres',
                 autocommit=True,
+                postgres_ssl_mode=None,
+                postgres_ssl_rootcert=None,
                 cache=None, # if None loads from dotenv
                 cache_db=0,
                 ):
@@ -33,7 +35,10 @@ class IndexConfig():
         else:
             self.cache = cache
 
-        self.postgresql_connection = psycopg.connect(self.postgresql_url, autocommit = self.autocommit)
+        if postgres_ssl_mode is None:
+            postgres_ssl_mode = os.environ.get('POSTGRES_SSL_MODE', 'disable')
+            postgres_ssl_rootcert = os.environ.get('POSTGRES_SSL_ROOTCERT', None)
+        self.postgresql_connection = psycopg.connect(self.postgresql_url, autocommit = self.autocommit, sslmode=postgres_ssl_mode, sslrootcert=postgres_ssl_rootcert)
         self.postgresql_table = postgresql_table
         self.switch_parameter = switch_parameter
         self.rootkey = rootkey # decided at injestion time
