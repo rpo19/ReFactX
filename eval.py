@@ -156,7 +156,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                 state_idx_generator = range(0, num_states, model_config.generate_args.get('num_beams', 1))
                 for question, prompted_question, output_i, state_idx in zip(batch, prompted_batch, output, state_idx_generator):
                     full_prediction = model_config.tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):])
-                    prediction = model.get_prediction(full_prediction)
+                    prediction = model_config.get_prediction(full_prediction)
                     prediction_complete = bool(prediction)
                     # TODO also save worse beams
 
