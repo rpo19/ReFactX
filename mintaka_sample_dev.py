@@ -3,7 +3,7 @@ import json
 from mintaka_base import MintakaDataset
 
 config = {
-    'path': '/workspace/data/mintaka_dev.json',
+    'path': './data/mintaka_dev.json',
     'random_seed': 1234,
     'num_samples': 50,
 }
