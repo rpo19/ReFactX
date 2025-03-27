@@ -7,3 +7,5 @@ data_*
 *.csr
 *.srl
 redis.conf
+api_index.py
+.htpasswd

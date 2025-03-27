@@ -8,7 +8,7 @@ userid=$2  # e.g., 999
 # === Step 1: Generate CA ===
 echo "Generating CA..."
 openssl genrsa -out ca.key 4096
-openssl req -new -x509 -days 365 -key ca.key -out ca.crt -subj "/CN=Custom CA"
+openssl req -new -x509 -days 365 -key ca.key -out ca.crt -subj "/CN=$domain"
 
 # === Step 2: Generate Server Key ===
 echo "Generating server key..."

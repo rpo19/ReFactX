@@ -14,7 +14,8 @@
 *.xlsx
 .env
 ca.crt
-data
+**/data
+**/data_**
+**/**_data
 hpc
-**/.htpasswd
-**/htpasswd
+services

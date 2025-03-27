@@ -24,6 +24,9 @@ class IndexConfig():
             rootcert = os.environ.get('HTTP_ROOTCERT')
         if rootcert and rootcert.lower() == 'false':
             rootcert = False
+            import urllib3
+            urllib3.disable_warnings()
+
         self.rootcert = rootcert
         self.postgresql_table = postgresql_table
         self.switch_parameter = switch_parameter
