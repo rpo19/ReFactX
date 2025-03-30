@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 import copy
 import datetime
 import click
+import time
 
 def logrotate(file_name):
     idx = 0
@@ -30,10 +31,13 @@ def get_utc_date_and_time():
 @click.option("--index", "index_config_path", required=True, help="Index configuration module (without .py).")
 @click.option("--model", "model_config_path", required=True, help="Model configuration module (without .py).")
 @click.option("--dataset", "dataset_config_path", required=True, help="Dataset configuration module (without .py).")
-def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path):
-
+@click.option("--wandb", "wandb", is_flag=True, help="Log in wandb")
+def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb):
     output_file = logrotate(output_file)
     print('Output file:', output_file)
+    if wandb:
+        print('Logging in wandb.')
+        time.sleep(5) # let the user time to stop
 
     with open(output_file, 'w') as output_fd:
         if index_config_path.endswith('.py'):
@@ -63,6 +67,14 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         }
         output_fd.write(json.dumps(metadata_plus))
         output_fd.write('\n')
+
+        if wandb:
+            import wandb
+            wandb.init(
+                project=experiment_name,
+                config=metadata_plus,
+                name=f"{experiment_name}_{get_utc_date_and_time()}",
+            )
 
         assert index_config.rootkey > max(model_config.tokenizer.vocab.values())
 
@@ -173,6 +185,9 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                         )
                     output_fd.write(json.dumps(sample))
                     output_fd.write('\n')
+
+                    if wandb:
+                        wandb.log(sample)
 
 if __name__ == "__main__":
     main()
