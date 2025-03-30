@@ -72,11 +72,11 @@ Answer: Mont Blanc.
             temperature = None,
             top_k = None,
             top_p = None,
-            max_new_tokens = 400,
+            max_new_tokens = 800,
             pad_token_id = self.tokenizer.eos_token_id,
             use_cache = True,
             )
-        self.batch_size = 3
+        self.batch_size = 1
 
         self.answer_pattern = re.compile(r'Answer: (.*)\.?')
 

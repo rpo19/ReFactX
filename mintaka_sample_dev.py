@@ -5,7 +5,7 @@ from mintaka_base import MintakaDataset
 config = {
     'path': './data/mintaka_dev.json',
     'random_seed': 1234,
-    'num_samples': 50,
+    'num_samples': 100,
 }
 
 print(f'Loading {config["path"]}')
