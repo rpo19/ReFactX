@@ -1,6 +1,4 @@
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from ctrie import ConstrainedLogitsProcessor
-import torch
 import re
 
 class ModelConfig():
