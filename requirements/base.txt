@@ -1,6 +1,0 @@
-tqdm
-torch
-bitsandbytes
-accelerate
-click
-python-dotenv

@@ -1,1 +1,0 @@
-git+https://github.com/rpo19/transformers@main # patched transformers for stateful constrained generation

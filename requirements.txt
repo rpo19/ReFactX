@@ -1,0 +1,14 @@
+requests
+flask
+gunicorn
+uvicorn
+tqdm
+torch
+bitsandbytes
+accelerate
+click
+python-dotenv
+psycopg[binary]
+redis
+cachetools
+git+https://github.com/rpo19/transformers@main # patched transformers for stateful constrained generation
