@@ -1,4 +1,8 @@
 from torch.utils.data import Dataset
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 class QADataset(Dataset):
     def __init__(self, dataset, config):
@@ -30,6 +34,14 @@ class QADataset(Dataset):
 
     def get_answer(self, i):
         return self.dataset[i]['answer']
+
+    @staticmethod
+    def get_dataset_path(dataset_name):
+        DATA_PATH = os.getenv('DATA_PATH', './data')
+        path = os.path.join(DATA_PATH, dataset_name)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Dataset file not found at {path}. Please check the path.")
+        return path
 
 class QuestionsDataset(QADataset):
     def __init__(self, dataset, config):

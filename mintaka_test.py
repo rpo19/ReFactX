@@ -1,7 +1,7 @@
 import json
 from mintaka_base import MintakaDataset
 
-path = MintakaDataset.get_dataset_path('mintaka_dev.json')
+path = MintakaDataset.get_dataset_path('mintaka_test.json')
 
 config = {
     'path': path
