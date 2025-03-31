@@ -12,6 +12,7 @@
 *.bak
 *.out
 *.xlsx
+*.xlsx#
 .env
 ca.crt
 data
