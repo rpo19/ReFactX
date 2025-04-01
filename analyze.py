@@ -68,6 +68,7 @@ def print_metrics(title, columns, values):
 def main(dataset, infile, outfile, fix_predictions, no_fix_none_prediction, split_pattern, force):
     if dataset.endswith('.py'):
         dataset = dataset[:-3]
+    dataset_name = os.path.basename(dataset)
     dataset_module = importlib.import_module(dataset)
     dataset = getattr(dataset_module, 'dataset')
 
@@ -78,7 +79,11 @@ def main(dataset, infile, outfile, fix_predictions, no_fix_none_prediction, spli
             evaluation_raw.append(json.loads(line))
             line = fd.readline()
 
-    header = evaluation_raw[:1]
+    header = evaluation_raw[0]
+    start_from = header.get('dataset_config', {}).get('config', {}).get('start_from', 0)
+    if start_from > 0:
+        print('Datasets starts from', start_from)
+        dataset = dataset[start_from:]
     evaluation = evaluation_raw[1:]
 
     predictions = set(range(len(evaluation)))
@@ -100,11 +105,14 @@ def main(dataset, infile, outfile, fix_predictions, no_fix_none_prediction, spli
     final_answers = answered - dontknow
 
     # Create a metrics table
-    metrics_columns = ['Percentage Answered', 'Percentage Don\'t Know', 'Final Answers (Answered - Don\'t Know)']
+    metrics_columns = ['Percentage Answered', 'Percentage Don\'t Know', 'Final Answers (Answered - Don\'t Know)',  'Num 0 Triples', 'Percentage 0 Triples', 'Percentage 0 Triples (Final Answers)']
     metrics_values = [
         len(answered) / len(evaluation),
         len(dontknow) / len(evaluation),
-        len(final_answers) / len(evaluation)
+        len(final_answers) / len(evaluation),
+        '{}/{}'.format(sum(map(lambda x: x['triples'] == [], evaluation)), len(evaluation)),
+        sum(map(lambda x: x['triples'] == [], evaluation)) / len(evaluation),
+        sum(1 for i in final_answers if evaluation[i]['triples'] == []) / len(final_answers),
     ]
     print_metrics('Answered Metrics', metrics_columns, metrics_values)
 
@@ -119,8 +127,8 @@ def main(dataset, infile, outfile, fix_predictions, no_fix_none_prediction, spli
                 complexityType[dataset[i]['complexityType']] = 0
             complexityType[dataset[i]['complexityType']] += 1 / len(final_answers)
 
-            complexity_df = pd.DataFrame(list(complexityType.items()), columns=['Complexity Type', 'Percentage'])
-            print_metrics('Complexity Type Distribution', complexity_df['Complexity Type'], complexity_df['Percentage'])
+        complexity_df = pd.DataFrame(list(complexityType.items()), columns=['Complexity Type', 'Percentage'])
+        print_metrics('Complexity Type Distribution', complexity_df['Complexity Type'], complexity_df['Percentage'])
     except:
         print('Complexity type not found.')
 
@@ -188,18 +196,18 @@ def main(dataset, infile, outfile, fix_predictions, no_fix_none_prediction, spli
 
     columns = ['Question', 'Prediction', 'Answer', 'EM', 'IM', 'BLEU1', 'B4', 'METEOR', 'ROUGEL', 'Answered', 'DontKnow', 'FULL prediction', 'FULL sample', 'Triples', 'AnswerBig']
     evaldf = pd.DataFrame(data, columns = columns)
-    print(evaldf.shape)
-    evaldf.head()
+    # print(evaldf.shape)
+    # evaldf.head()
 
     if outfile:
         xlsx_file = outfile
     else:
-        xlsx_file = f'{dataset}_{os.path.basename(infile)}.xlsx'
+        xlsx_file = f'{dataset_name}_{os.path.basename(infile)}.xlsx'
     if not force:
         assert not os.path.isfile(xlsx_file), f'Error: {xlsx_file} already exists'
     print(f'Writing {xlsx_file}')
     with pd.ExcelWriter(xlsx_file) as writer:
-        evaldf.to_excel(writer, sheet_name=f"{dataset} X {os.path.basename(infile)}")
+        evaldf.to_excel(writer, sheet_name=f"{dataset_name} X {os.path.basename(infile)}")
 
 if __name__ == '__main__':
     main()

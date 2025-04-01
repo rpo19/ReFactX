@@ -14,10 +14,11 @@ class QADataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def __getitem__(self, idx):
-        # Return a dictionary directly with tensor slices for the given index
-        sample = self.dataset[idx]
-        return sample
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return self.__class__(self.dataset[key], self.config)
+        else:
+            return self.dataset[key]
 
     def __iter__(self):
         for sample in self.dataset:
