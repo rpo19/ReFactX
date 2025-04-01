@@ -27,12 +27,14 @@ def get_utc_date_and_time():
 
 @click.command()
 @click.argument("experiment_name")
-@click.argument("output_file")
+@click.option("--output", "output_file", required=False, default=None, type=click.Path(), help="Output file for the results.")
 @click.option("--index", "index_config_path", required=True, help="Index configuration module (without .py).")
 @click.option("--model", "model_config_path", required=True, help="Model configuration module (without .py).")
 @click.option("--dataset", "dataset_config_path", required=True, help="Dataset configuration module (without .py).")
 @click.option("--wandb", "wandb", is_flag=True, help="Log in wandb")
 def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb):
+    if output_file is None:
+        output_file = f'{experiment_name}.out'
     output_file = logrotate(output_file)
     print('Output file:', output_file)
     if wandb:
