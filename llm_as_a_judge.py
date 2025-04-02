@@ -58,7 +58,7 @@ def judge_predictions(model, dataset_path, predictions, fix_predictions, no_fix_
     model = AutoModelForCausalLM.from_pretrained(model, device_map=device_map)
 
     if outfile is None:
-        outfile = f"{os.path.basename(predictions)}_llm_as_a_judge_results.jsonl"
+        outfile = f"{os.path.basename(predictions)}_llm_as_a_judge_results.out"
 
     evaluation_raw = []
     with open(predictions) as fd:
@@ -107,47 +107,64 @@ def judge_predictions(model, dataset_path, predictions, fix_predictions, no_fix_
             correct_answer = dataset.get_answer(i)
             predicted_answer = evaluation[i]['prediction']
 
-            if not question or not correct_answer or not predicted_answer:
-                print(f"Skipping sample {i} due to missing fields.")
-                continue
+            if question and correct_answer and predicted_answer:
+                # Construct the prompt for the LLM
+                prompt = (
+                    f"Given the question: '{question}', the correct answer: '{correct_answer}', "
+                    f"and the predicted answer: '{predicted_answer}', is the predicted answer correct? (yes/no)"
+                )
 
-            # Construct the prompt for the LLM
-            prompt = (
-                f"Given the question: '{question}', the correct answer: '{correct_answer}', "
-                f"and the predicted answer: '{predicted_answer}', is the predicted answer correct? (yes/no)"
-            )
+                # Tokenize the input
+                inputs = tokenizer(prompt, return_tensors="pt")
+                inputs.to(model.device)
 
-            # Tokenize the input
-            inputs = tokenizer(prompt, return_tensors="pt")
-            inputs.to(model.device)
+                # Generate a single token
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=50,
+                    do_sample=False,
+                    num_beams=1,
+                    num_return_sequences=1,
+                    top_p=None,
+                    top_k=None,
+                    # logits_processor=None, # TODO constrain the output to 'yes' or 'no'
+                )
 
-            # Generate a single token
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=50,
-                do_sample=False,
-                num_beams=1,
-                num_return_sequences=1,
-                top_p=None,
-                top_k=None,
-                # logits_processor=None, # TODO constrain the output to 'yes' or 'no'
-            )
+                # Decode the generated token
+                llm_output = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip().lower()
 
-            # Decode the generated token
-            llm_output = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip().lower()
+                # Extract the decision (yes/no)
+                decision = "yes" if "yes" in llm_output else "no"
+                current_result = {
+                    "index": i,
+                    "question": question,
+                    "correct_answer": correct_answer,
+                    "predicted_answer": predicted_answer,
+                    "llm_decision": decision,
+                    "llm_full_answer": llm_output,
+                }
 
-            # Extract the decision (yes/no)
-            decision = "yes" if "yes" in llm_output else "no"
-            current_result = {
-                "question": question,
-                "correct_answer": correct_answer,
-                "predicted_answer": predicted_answer,
-                "llm_decision": decision,
-                "llm_full_answer": llm_output,
-            }
-
-            json.dump(current_result, f)
-            f.write('\n')
+                json.dump(current_result, f)
+                f.write('\n')
+            else:
+                missing_fields = []
+                if not question:
+                    missing_fields.append("question")
+                if not correct_answer:
+                    missing_fields.append("correct_answer")
+                if not predicted_answer:
+                    missing_fields.append("predicted_answer")
+                print(f"Skipping sample {i} due to missing fields: {', '.join(missing_fields)}.")
+                current_result = {
+                    "index": i,
+                    "question": question,
+                    "correct_answer": correct_answer,
+                    "predicted_answer": predicted_answer,
+                    "llm_decision": "skipped",
+                    "llm_full_answer": f"Missing fields: {', '.join(missing_fields)}",
+                }
+                json.dump(current_result, f)
+                f.write('\n')
 
     print(f"Judgment completed. Results saved to '{outfile}'.")
 
