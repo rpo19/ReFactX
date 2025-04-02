@@ -5,7 +5,9 @@ model_config = ModelConfig(
     switch_pattern = [17873, 25], # "Fact:" after newline
     newline_token = 198,
     # load_model = False
+    device_map='auto',
 )
+model_config.batch_size = 8
 
 # model_config.model = load_model_with_quantization() # TODO
 

@@ -120,7 +120,7 @@ Answer: Yes.
             padding_side='left'
         )
         self.generate_args = dict(
-            num_beams = 3,
+            num_beams = 1,
             num_return_sequences = 1,
             do_sample = False,
             temperature = None,
