@@ -161,7 +161,7 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
                 llm_output = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip().lower()
 
                 # Extract the decision (yes/no)
-                decision = "yes" if "yes" in llm_output else "no"
+                decision = "yes" if llm_output.lower().startswith('yes') else "no"
                 current_result = {
                     "index": i,
                     "question": question,

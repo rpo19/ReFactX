@@ -13,7 +13,7 @@ import os
 nltk.download('wordnet')
 scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
 
-def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, final_answers, dontknow, group=None):
+def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, final_answers, dontknow, group=None, judge_match=None):
     for i in range(len(evaluation)):
         prediction = evaluation[i]
         target = dataset[i]
@@ -25,7 +25,7 @@ def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, fina
         else:
             group_name = None
 
-        yield (target['question'],
+        row = [target['question'],
             prediction['prediction'],
             dataset.get_answer(i),
             EM[i],
@@ -42,14 +42,21 @@ def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, fina
             target['answer'],
             group_name,
             group_name
-            )
+            ]
 
-def get_evaldf(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4, meteor, rougeL, final_answers, dontknow, group = None):
+        if judge_match is not None:
+            row.insert(5, judge_match[i])
+
+        yield row
+
+def get_evaldf(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4, meteor, rougeL, final_answers, dontknow, group = None, judge_match=None):
     columns = ['Question', 'Prediction', 'Answer', 'EM', 'IM', 'BLEU1', 'B4', 'METEOR', 'ROUGEL', 'Answered', 'DontKnow', 'FULL prediction', 'FULL sample', 'Triples', 'AnswerBig']
+    if judge_match is not None:
+        columns.insert(5, 'Judge')
     if group is not None:
         columns.append('Group')
         columns.append(group)
-    data = pd_generator(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4, meteor, rougeL, final_answers, dontknow, group = group)
+    data = pd_generator(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4, meteor, rougeL, final_answers, dontknow, group = group, judge_match=judge_match)
     evaldf = pd.DataFrame(data, columns = columns)
     return evaldf
 
@@ -151,7 +158,7 @@ def get_other_metrics(evaluation, dataset, name='other_metrics', idx=None, do_pr
 
     return other_df, bleu_1, bleu_4, meteor, rougeL
 
-def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answers):
+def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answers, judge_evaluation=None):
     print('--- Groups ---')
     complexityType = {}
     for i in range(len(evaluation)):
@@ -164,14 +171,26 @@ def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answe
     complexity_df = pd.DataFrame(list(complexity_stats.items()), columns=['Complexity Type', 'Percentage'])
     print_metrics('Complexity Type Distribution', complexity_df['Complexity Type'], complexity_df['Percentage'])
 
-    grouped_answered_metrics = pd.DataFrame(columns=['Num', 'Percentage Answered', 'Percentage Don\'t Know',
-        'Final Answers (Answered - Don\'t Know)',  'Num 0 Triples',
-        'Percentage 0 Triples', 'Percentage 0 Triples (Final Answers)',
-        'Exact Match', 'Exact Match (Final Answer)',
-        'Inclusion Match', 'Inclusion Match (Final Answer)',
+    group_columns = ['Num',
+                     'Percentage Answered',
+                     'Percentage Don\'t Know',
+                     'Final Answers (Answered - Don\'t Know)',
+                     'Num 0 Triples',
+                     'Percentage 0 Triples',
+                     'Percentage 0 Triples (Final Answers)',
+                     'Exact Match',
+                     'Exact Match (Final Answer)',
+                     'Inclusion Match',
+                     'Inclusion Match (Final Answer)',
         'BLEU1', 'BLEU4', 'METEOR', 'ROUGEL-P', 'ROUGEL-R', 'ROUGEL-F1',
         'BLEU1-Final', 'BLEU4-Final', 'METEOR-Final', 'ROUGEL-P-Final', 'ROUGEL-R-Final', 'ROUGEL-F1-Final',
-        ])
+        ]
+
+    if judge_evaluation is not None:
+        group_columns.insert(11, 'Judge Match')
+        group_columns.insert(12, 'Judge Match (Final Answer)')
+
+    grouped_answered_metrics = pd.DataFrame(columns=group_columns)
 
     for g in complexityType.keys():
         g_set = set(complexityType[g])
@@ -215,9 +234,29 @@ def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answe
             bleu_1_f.mean(), bleu_4_f.mean(), meteor_f.mean(), rougeL_f[:, 0].mean(), rougeL_f[:, 1].mean(), rougeL_f[:, 2].mean()
         ]
 
+        if judge_evaluation is not None:
+            judge_match_g = get_judge_evaluation(judge_evaluation, idx=g_idx)
+            judge_match_g_final_answers = get_judge_evaluation(judge_evaluation, idx=final_answers_g_idx)
+            row.insert(11, judge_match_g.mean())
+            row.insert(12, judge_match_g_final_answers.mean())
+
         grouped_answered_metrics.loc[g] = row
 
     return complexity_df, grouped_answered_metrics
+
+
+def get_judge_evaluation(judge_evaluation, idx=None):
+    if idx is None:
+        idx = range(len(judge_evaluation))
+
+    judge_match = np.zeros((len(idx),))
+    j = 0
+    for i in idx:
+        if judge_evaluation[i]['llm_decision'] == 'yes':
+            judge_match[j] = 1
+        j += 1
+
+    return judge_match
 
 
 @click.command()
@@ -229,7 +268,9 @@ def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answe
 @click.option('--split-pattern', required=False, default=r'<\|im_end\|>', help='Pattern to split the full prediction. Use with --fix-predictions.')
 @click.option('--force', is_flag=True, default=False, help='Overwrite outfile if existing.')
 @click.option('--group', required=False, default=None, help='Calculate grouped metrics (e.g. by question type).')
-def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction, split_pattern, force, group):
+@click.option('--judge', required=False, help="Path to the llm-as-a-judge output file.")
+@click.option('--overwrite-judge', is_flag=True, default=False, help='Overwrite judge decision.')
+def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction, split_pattern, force, group, judge, overwrite_judge):
     evaluation_raw = []
     with open(infile) as fd:
         line = fd.readline()
@@ -273,6 +314,22 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
     for i in range(len(evaluation)):
         assert evaluation[i]['question'] == dataset[i]['question']
 
+    if judge:
+        judge_evaluation = []
+        with open(judge) as judge_fd:
+            judge_line = judge_fd.readline()
+            while judge_line:
+                sample = json.loads(judge_line)
+                if overwrite_judge or 'llm_decision' not in sample:
+                    sample['llm_decision'] = 'yes' if sample['llm_full_answer'].lower().startswith('yes') else 'no'
+                judge_evaluation.append(sample)
+                judge_line = judge_fd.readline()
+
+        # assert judge questions are the same as dataset questions
+        for i in range(len(evaluation)):
+            assert evaluation[i]['question'] == judge_evaluation[i]['question']
+            assert evaluation[i]['prediction'] == judge_evaluation[i]['predicted_answer']
+
     # # Metrics
 
     # ## Exact match
@@ -281,17 +338,26 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
 
     inclusion_match = get_inclusion_match(evaluation, dataset)
 
+    metric_columns = [
+        'Num',
+        'Exact Match (All)', 'Exact Match (Final Answers)',
+        'Inclusion Match (All)', 'Inclusion Match (Final Answers)'
+    ]
+    metric_values = [
+        len(evaluation),
+        exact_match.mean(), exact_match[final_answers_idx].mean(),
+        inclusion_match.mean(), inclusion_match[final_answers_idx].mean()
+    ]
+
+    if judge:
+        judge_match = get_judge_evaluation(judge_evaluation)
+        metric_columns.extend(['Judge Match (All)', 'Judge Match (Final Answers)'])
+        metric_values.extend([judge_match.mean(), judge_match[final_answers_idx].mean()])
+
     em_im_metrics = print_metrics(
         'Exact and Inclusion Match Metrics',
-        [   'Num',
-            'Exact Match (All)', 'Exact Match (Final Answers)',
-            'Inclusion Match (All)', 'Inclusion Match (Final Answers)'
-        ],
-        [
-            len(evaluation),
-            exact_match.mean(), exact_match[final_answers_idx].mean(),
-            inclusion_match.mean(), inclusion_match[final_answers_idx].mean()
-        ]
+        metric_columns,
+        metric_values
     )
 
     other_metrics_all, bleu_1, bleu_4, meteor, rougeL = get_other_metrics(evaluation, dataset, name='ALL')
@@ -301,11 +367,11 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
 
     # ## Group
     if group is not None:
-        complexity_df, grouped_answered_metrics = grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answers)
+        complexity_df, grouped_answered_metrics = grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answers, judge_evaluation=judge_evaluation)
 
     # ## Excel
 
-    evaldf = get_evaldf(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4, meteor, rougeL, final_answers, dontknow, group = group)
+    evaldf = get_evaldf(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4, meteor, rougeL, final_answers, dontknow, group = group, judge_match=judge_match)
 
     if outfile:
         xlsx_file = outfile
