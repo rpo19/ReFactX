@@ -57,7 +57,7 @@ def judge_predictions(model, dataset_path, predictions, fix_predictions, no_fix_
     model = AutoModelForCausalLM.from_pretrained(model)
 
     if outfile is None:
-        outfile = f"{os.path.basename(predictions)}_llm_as_a_judge_results.json"
+        outfile = f"{os.path.basename(predictions)}_llm_as_a_judge_results.jsonl"
 
     evaluation_raw = []
     with open(predictions) as fd:
@@ -98,52 +98,52 @@ def judge_predictions(model, dataset_path, predictions, fix_predictions, no_fix_
             if evaluation[i]['prediction'] is None:
                 evaluation[i]['prediction'] = ''
 
-    results = []
-    for i in trange(len(evaluation)):
-        assert evaluation[i]['question'] == dataset[i]['question']
-        question = dataset[i]['question']
-        correct_answer = dataset.get_answer(i)
-        predicted_answer = evaluation[i]['prediction']
-
-        if not question or not correct_answer or not predicted_answer:
-            print(f"Skipping sample {i} due to missing fields.")
-            continue
-
-        # Construct the prompt for the LLM
-        prompt = (
-            f"Given the question: '{question}', the correct answer: '{correct_answer}', "
-            f"and the predicted answer: '{predicted_answer}', is the predicted answer correct? (yes/no)"
-        )
-
-        # Tokenize the input
-        inputs = tokenizer(prompt, return_tensors="pt")
-
-        # Generate a single token
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=50,
-            do_sample=False,
-            num_beams=1,
-            num_return_sequences=1,
-            # logits_processor=None, # TODO constrain the output to 'yes' or 'no'
-        )
-
-        # Decode the generated token
-        llm_output = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip().lower()
-
-        # Extract the decision (yes/no)
-        decision = "yes" if "yes" in llm_output else "no"
-        results.append({
-            "question": question,
-            "correct_answer": correct_answer,
-            "predicted_answer": predicted_answer,
-            "llm_decision": decision,
-            "llm_full_answer": llm_output,
-        })
-
-    # Save results to a file
+    # Save results to a JSONL file
     with open(outfile, "w") as f:
-        json.dump(results, f, indent=4)
+        for i in trange(len(evaluation)):
+            assert evaluation[i]['question'] == dataset[i]['question']
+            question = dataset[i]['question']
+            correct_answer = dataset.get_answer(i)
+            predicted_answer = evaluation[i]['prediction']
+
+            if not question or not correct_answer or not predicted_answer:
+                print(f"Skipping sample {i} due to missing fields.")
+                continue
+
+            # Construct the prompt for the LLM
+            prompt = (
+                f"Given the question: '{question}', the correct answer: '{correct_answer}', "
+                f"and the predicted answer: '{predicted_answer}', is the predicted answer correct? (yes/no)"
+            )
+
+            # Tokenize the input
+            inputs = tokenizer(prompt, return_tensors="pt")
+
+            # Generate a single token
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=50,
+                do_sample=False,
+                num_beams=1,
+                num_return_sequences=1,
+                # logits_processor=None, # TODO constrain the output to 'yes' or 'no'
+            )
+
+            # Decode the generated token
+            llm_output = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip().lower()
+
+            # Extract the decision (yes/no)
+            decision = "yes" if "yes" in llm_output else "no"
+            current_result = {
+                "question": question,
+                "correct_answer": correct_answer,
+                "predicted_answer": predicted_answer,
+                "llm_decision": decision,
+                "llm_full_answer": llm_output,
+            }
+
+            json.dump(current_result, f)
+            f.write('\n')
 
     print(f"Judgment completed. Results saved to '{outfile}'.")
 
