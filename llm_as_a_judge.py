@@ -1,3 +1,4 @@
+import time
 import click
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import json
@@ -6,6 +7,7 @@ import importlib
 from transformers.generation.logits_process import LogitsProcessor,LogitsProcessorList
 import re
 from tqdm import trange
+from eval import get_utc_date_and_time
 
 answer_pattern = re.compile(r'Answer: (.*)\.?')
 def get_prediction(full_prediction, split_pattern, remove_dot=True):
@@ -42,26 +44,30 @@ def get_prediction(full_prediction, split_pattern, remove_dot=True):
 @click.command()
 @click.option('--model', default="gpt2", help="HuggingFace model to load.")
 @click.option('--dataset', 'dataset_path', required=False, help="Path to the dataset file (JSON).")
-@click.option('--predictions', required=True, help="Path to the predictions file (JSON).")
+@click.option('--predictions', 'input_file', required=True, help="Path to the predictions file (JSON).")
 @click.option('--fix-predictions', is_flag=True, default=False, help='Fix (missing) predictions in the evaluation.')
 @click.option('--no-fix-none-prediction', is_flag=True, default=True, help='Do not replace None predictions with an empty string.')
 @click.option('--split-pattern', required=False, default=r'<\|im_end\|>', help='Pattern to split the full prediction. Use with --fix-predictions.')
 @click.option('--outfile', required=False, default=None, help="Output file for the results.")
 @click.option('--device-map', required=False, default='cuda', help="Where to load the model.")
-def judge_predictions(model, dataset_path, predictions, fix_predictions, no_fix_none_prediction, split_pattern, outfile, device_map):
+@click.option("--wandb", "wandb", is_flag=True, help="Log in wandb")
+def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_none_prediction, split_pattern, outfile, device_map, wandb):
     """
     Use an LLM to judge the correctness of predictions based on a dataset.
     """
+    if wandb:
+        print('Logging in wandb.')
+        time.sleep(5) # let the user time to stop
     # Load the HuggingFace model and tokenizer
     print(f"Loading model: {model}")
     tokenizer = AutoTokenizer.from_pretrained(model)
     model = AutoModelForCausalLM.from_pretrained(model, device_map=device_map)
 
     if outfile is None:
-        outfile = f"{os.path.basename(predictions)}_llm_as_a_judge_results.out"
+        outfile = f"{os.path.basename(input_file)}_llm_as_a_judge_results.out"
 
     evaluation_raw = []
-    with open(predictions) as fd:
+    with open(input_file) as fd:
         line = fd.readline()
         while line:
             evaluation_raw.append(json.loads(line))
@@ -101,6 +107,24 @@ def judge_predictions(model, dataset_path, predictions, fix_predictions, no_fix_
 
     # Save results to a JSONL file
     with open(outfile, "w") as f:
+        if wandb:
+            import wandb
+            experiment_name = os.path.basename(input_file)
+            metadata_plus = {
+                "model": model,
+                "dataset_path": dataset_path,
+                "input_file": input_file,
+                "fix_predictions": fix_predictions,
+                "no_fix_none_prediction": no_fix_none_prediction,
+                "split_pattern": split_pattern,
+                "outfile": outfile,
+                "device_map": device_map,
+            }
+            wandb.init(
+                project=experiment_name,
+                config=metadata_plus,
+                name=f"llm_as_a_judge_{experiment_name}_{get_utc_date_and_time()}",
+            )
         for i in trange(len(evaluation)):
             assert evaluation[i]['question'] == dataset[i]['question']
             question = dataset[i]['question']
