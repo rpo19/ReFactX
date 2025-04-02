@@ -82,7 +82,7 @@ Now I need the birth date of Danny Boyle.
 Fact: <Danny Boyle> <date of birth> <1956-10-20T00:00:00Z>.
 Long answer: The director of Slumdog Millionaire is Danny Boyle, who was born on October 20, 1956, so this is the answer to the question.
 
-Answer: October 20, 1956.
+Answer: 20-Oct-56.
 '''
             },
             {
@@ -158,7 +158,7 @@ Answer: Yes.
             yield (key, self.__dict__[key])
 
     def get_prediction(self, full_prediction, remove_dot=True):
-        prediction = None
+        prediction = ''
 
         full_prediction = full_prediction.split(self.tokenizer.eos_token, 1)[0]
         if remove_dot and full_prediction.endswith('.'):
@@ -168,4 +168,5 @@ Answer: Yes.
             prediction = match.group(1)
 
         return prediction
+
 

@@ -270,7 +270,7 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
 
     answered_metrics, answered, dontknow, final_answers, final_answers_idx = get_answered(predictions, evaluation)
 
-    for i in final_answers:
+    for i in range(len(evaluation)):
         assert evaluation[i]['question'] == dataset[i]['question']
 
     # # Metrics
