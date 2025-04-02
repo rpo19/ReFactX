@@ -77,7 +77,7 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
 
     # Load dataset and predictions
     if dataset_path is None:
-        dataset_path = header.get('dataset_config', {}).get('config', {}).get('path')
+        dataset_path = header.get('dataset_config_path')
         if dataset_path is None:
             raise Exception('No dataset path provided. Nor in the --infile nor as --dataset.')
     if dataset_path.endswith('.py'):
@@ -125,6 +125,8 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
                 config=metadata_plus,
                 name=f"llm_as_a_judge_{experiment_name}_{get_utc_date_and_time()}",
             )
+        # TODO batched
+        # TODO solve Setting `pad_token_id` to `eos_token_id`:128001 for open-end generation.
         for i in trange(len(evaluation)):
             assert evaluation[i]['question'] == dataset[i]['question']
             question = dataset[i]['question']
@@ -151,6 +153,7 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
                     num_return_sequences=1,
                     top_p=None,
                     top_k=None,
+                    temperature=None,
                     # logits_processor=None, # TODO constrain the output to 'yes' or 'no'
                 )
 
