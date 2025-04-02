@@ -184,6 +184,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                             prompt=model_config.tokenizer.decode(output_i[:len(batch_inputs.input_ids[0])]),
                             full_sample=model_config.tokenizer.decode(output_i),
                             triples=list(map(model_config.tokenizer.decode, state.generated_triples)),
+                            reached_max_tokens=output_i[len(batch_inputs.input_ids[0]):].shape[0] == model_config.generate_args.get('max_new_tokens'),
                         )
                     output_fd.write(json.dumps(sample))
                     output_fd.write('\n')
