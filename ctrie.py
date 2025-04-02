@@ -4,6 +4,7 @@ import pickle
 from psycopg import sql
 from copy import deepcopy
 import requests
+from requests.adapters import HTTPAdapter, Retry
 
 class EmptyIndexException(Exception):
     pass
@@ -481,12 +482,20 @@ def serialize(obj):
     return pickle.dumps(obj)
 
 class HTTPPostgresTrieIndex(PostgresTrieIndex):
-    def __init__(self, rootkey : int, end_of_triple: int, switch_parameter : int, table_name, base_url: str, cache: Cache = None, postgresql_connection = None, redis_connection = None, return_state = False, do_count_leaves=False, rootcert=None):
+    def __init__(self, rootkey : int, end_of_triple: int, switch_parameter : int, table_name, base_url: str, cache: Cache = None, postgresql_connection = None, redis_connection = None, return_state = False, do_count_leaves=False, rootcert=None, timeout=15, retry=5):
         super().__init__(rootkey, end_of_triple, None, switch_parameter, table_name, cache, return_state, do_count_leaves)
         # self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
         self.base_url = base_url[:-1] if base_url.endswith('/') else base_url
         self.select_url = f'/select'
         self.rootcert = rootcert
+        self.timeout = timeout
+        self.retry = retry
+
+        self.session = requests.Session()
+
+        retries = Retry(total=self.retry)
+
+        self.session.mount(self.base_url, HTTPAdapter(max_retries=retries))
 
     def _next_tokens_from_postgresql(self, sequence, state):
         found_in_cache = False
@@ -505,10 +514,11 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
 
         if not found_in_cache:
             data = serialize(dict(sequence=sequence,table_name=self.table_name))
-            response = requests.post(self.base_url + self.select_url,
+            response = self.session.post(self.base_url + self.select_url,
                 data=data,
                 headers={'Content-Type': 'application/octet-stream'},
-                verify=self.rootcert
+                verify=self.rootcert,
+                timeout=self.timeout,
             )
             if not response.ok:
                 raise HTTPPostgresError(response.text)
