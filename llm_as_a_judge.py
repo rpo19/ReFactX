@@ -5,6 +5,7 @@ import os
 import importlib
 from transformers.generation.logits_process import LogitsProcessor,LogitsProcessorList
 import re
+from tqdm import trange
 
 answer_pattern = re.compile(r'Answer: (.*)\.?')
 def get_prediction(full_prediction, split_pattern, remove_dot=True):
@@ -98,7 +99,7 @@ def judge_predictions(model, dataset_path, predictions, fix_predictions, no_fix_
                 evaluation[i]['prediction'] = ''
 
     results = []
-    for i in range(len(evaluation)):
+    for i in trange(len(evaluation)):
         assert evaluation[i]['question'] == dataset[i]['question']
         question = dataset[i]['question']
         correct_answer = dataset.get_answer(i)
