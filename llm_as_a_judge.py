@@ -47,14 +47,15 @@ def get_prediction(full_prediction, split_pattern, remove_dot=True):
 @click.option('--no-fix-none-prediction', is_flag=True, default=True, help='Do not replace None predictions with an empty string.')
 @click.option('--split-pattern', required=False, default=r'<\|im_end\|>', help='Pattern to split the full prediction. Use with --fix-predictions.')
 @click.option('--outfile', required=False, default=None, help="Output file for the results.")
-def judge_predictions(model, dataset_path, predictions, fix_predictions, no_fix_none_prediction, split_pattern, outfile):
+@click.option('--device-map', required=False, default='cuda', help="Where to load the model.")
+def judge_predictions(model, dataset_path, predictions, fix_predictions, no_fix_none_prediction, split_pattern, outfile, device_map):
     """
     Use an LLM to judge the correctness of predictions based on a dataset.
     """
     # Load the HuggingFace model and tokenizer
     print(f"Loading model: {model}")
     tokenizer = AutoTokenizer.from_pretrained(model)
-    model = AutoModelForCausalLM.from_pretrained(model)
+    model = AutoModelForCausalLM.from_pretrained(model, device_map=device_map)
 
     if outfile is None:
         outfile = f"{os.path.basename(predictions)}_llm_as_a_judge_results.jsonl"
@@ -118,6 +119,7 @@ def judge_predictions(model, dataset_path, predictions, fix_predictions, no_fix_
 
             # Tokenize the input
             inputs = tokenizer(prompt, return_tensors="pt")
+            inputs.to(model.device)
 
             # Generate a single token
             outputs = model.generate(
@@ -126,6 +128,8 @@ def judge_predictions(model, dataset_path, predictions, fix_predictions, no_fix_
                 do_sample=False,
                 num_beams=1,
                 num_return_sequences=1,
+                top_p=None,
+                top_k=None,
                 # logits_processor=None, # TODO constrain the output to 'yes' or 'no'
             )
 
