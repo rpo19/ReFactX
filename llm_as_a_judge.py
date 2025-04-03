@@ -24,24 +24,24 @@ def get_prediction(full_prediction, split_pattern, remove_dot=True):
 
     return prediction
 
-# import torch
-# class YesNoLogitsProcessor(LogitsProcessor):
-#     # yes and no tokens are lists of token ids
-#     def __init__(self, yes_tokens, no_tokens):
-#         super().__init__()
-#         self.yes_token = yes_tokens
-#         self.no_token = no_tokens
-#         self.allowed_tokens = yes_tokens + no_tokens
+class YesNoLogitsProcessor(LogitsProcessor):
+    # yes and no tokens are lists of token ids
+    def __init__(self, yes_tokens, no_tokens):
+        super().__init__()
+        self.yes_token = yes_tokens
+        self.no_token = no_tokens
+        self.allowed_tokens = yes_tokens + no_tokens
 
-#     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
-#         allowed_scores = scores[:, self.allowed_tokens]
-#         scores[:,:] = -float('inf')
-#         scores[:, self.allowed_tokens] = allowed_scores
-#         return scores
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
+        allowed_scores = scores[:, self.allowed_tokens]
+        scores[:,:] = -float('inf')
+        scores[:, self.allowed_tokens] = allowed_scores
+        return scores
 
-# allowed_answers = {
-#     'yes': ['yes', 1],
-# }
+allowed_answers = {
+    'yes': [' yes', ' Yes'],
+    'no': [' no', ' No'],
+}
 
 @click.command()
 @click.option('--model', required=True, help="HuggingFace model to load.")
@@ -64,6 +64,19 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
     # Load the HuggingFace model and tokenizer
     print(f"Loading model: {model}")
     tokenizer = AutoTokenizer.from_pretrained(model)
+
+    yes_tokens = [tokenizer(answer, add_special_tokens=False)['input_ids'][-1] for answer in allowed_answers['yes']]
+    no_tokens = [tokenizer(answer, add_special_tokens=False)['input_ids'][-1] for answer in allowed_answers['no']]
+
+    print('Checking yes and no tokens:')
+    print("Yes tokens: {} - ".format(yes_tokens, tokenizer.convert_ids_to_tokens(yes_tokens)))
+    print([tokenizer.decode(tokenizer("Is the answer correct?", add_special_tokens=False)['input_ids'] + [token]) for token in yes_tokens])
+    print("No tokens: {} - ".format(no_tokens, tokenizer.convert_ids_to_tokens(no_tokens)))
+    print([tokenizer.decode(tokenizer("Is the answer correct?", add_special_tokens=False)['input_ids'] + [token]) for token in no_tokens])
+
+    yesnoprocessor = YesNoLogitsProcessor(yes_tokens, no_tokens)
+    processor = LogitsProcessorList([yesnoprocessor])
+
     model = AutoModelForCausalLM.from_pretrained(model, device_map=device_map)
     model.pad_token_id = tokenizer.eos_token_id
 
@@ -189,13 +202,14 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
                 # Generate a single token
                 outputs = model.generate(
                     **inputs,
-                    max_new_tokens=10,
+                    max_new_tokens=1,
                     do_sample=False,
                     num_beams=1,
                     num_return_sequences=1,
                     top_p=None,
                     top_k=None,
                     temperature=None,
+                    logits_processor=processor,
                 )
 
                 for prompt, output in zip(batch, outputs):
@@ -208,8 +222,10 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
                         continue
                     assert output_complete_cursor in prompts_idx
                     assert output_complete[output_complete_cursor]['prompt'] == prompt
-                    llm_answer = tokenizer.decode(output[inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
-                    decision = "yes" if llm_answer.lower().startswith('yes') else "no"
+                    llm_answer = tokenizer.decode(output[inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip().lower()
+                    decision = llm_answer
+
+                    assert decision == 'yes' or decision == 'no'
 
                     output_complete[output_complete_cursor]['llm_decision'] = decision
                     output_complete[output_complete_cursor]['llm_full_answer'] = llm_answer
