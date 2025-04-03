@@ -6,8 +6,10 @@ import os
 import importlib
 from transformers.generation.logits_process import LogitsProcessor,LogitsProcessorList
 import re
-from tqdm import trange
+from tqdm import tqdm
 from eval import get_utc_date_and_time
+from torch.utils.data import DataLoader
+import torch
 
 answer_pattern = re.compile(r'Answer: (.*)\.?')
 def get_prediction(full_prediction, split_pattern, remove_dot=True):
@@ -42,7 +44,7 @@ def get_prediction(full_prediction, split_pattern, remove_dot=True):
 # }
 
 @click.command()
-@click.option('--model', default="gpt2", help="HuggingFace model to load.")
+@click.option('--model', required=True, help="HuggingFace model to load.")
 @click.option('--dataset', 'dataset_path', required=False, help="Path to the dataset file (JSON).")
 @click.option('--predictions', 'input_file', required=True, help="Path to the predictions file (JSON).")
 @click.option('--fix-predictions', is_flag=True, default=False, help='Fix (missing) predictions in the evaluation.')
@@ -51,7 +53,8 @@ def get_prediction(full_prediction, split_pattern, remove_dot=True):
 @click.option('--outfile', required=False, default=None, help="Output file for the results.")
 @click.option('--device-map', required=False, default='cuda', help="Where to load the model.")
 @click.option("--wandb", "wandb", is_flag=True, help="Log in wandb")
-def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_none_prediction, split_pattern, outfile, device_map, wandb):
+@click.option('--batch-size', default=1, help="Batch size for the dataloader.")
+def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_none_prediction, split_pattern, outfile, device_map, wandb, batch_size):
     """
     Use an LLM to judge the correctness of predictions based on a dataset.
     """
@@ -62,6 +65,7 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
     print(f"Loading model: {model}")
     tokenizer = AutoTokenizer.from_pretrained(model)
     model = AutoModelForCausalLM.from_pretrained(model, device_map=device_map)
+    model.pad_token_id = tokenizer.eos_token_id
 
     if outfile is None:
         outfile = f"{os.path.basename(input_file)}_llm_as_a_judge_results.out"
@@ -82,7 +86,6 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
             raise Exception('No dataset path provided. Nor in the --infile nor as --dataset.')
     if dataset_path.endswith('.py'):
         dataset_path = dataset_path[:-3]
-    dataset_name = os.path.basename(dataset_path)
     dataset_module = importlib.import_module(dataset_path)
     dataset = getattr(dataset_module, 'dataset')
 
@@ -91,8 +94,6 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
         print('Datasets starts from', start_from)
         dataset = dataset[start_from:]
     evaluation = evaluation_raw[1:]
-
-    predictions = set(range(len(evaluation)))
 
     if fix_predictions:
         print('Split pattern:', split_pattern)
@@ -125,54 +126,32 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
                 config=metadata_plus,
                 name=f"llm_as_a_judge_{experiment_name}_{get_utc_date_and_time()}",
             )
-        # TODO batched
-        # TODO solve Setting `pad_token_id` to `eos_token_id`:128001 for open-end generation.
-        for i in trange(len(evaluation)):
+
+        # prepare a dataset : list with all the prompts
+        output_complete = []
+        prompts = []
+        prompts_idx = []
+        skipped_idx = []
+        for i in range(len(evaluation)):
             assert evaluation[i]['question'] == dataset[i]['question']
             question = dataset[i]['question']
             correct_answer = dataset.get_answer(i)
             predicted_answer = evaluation[i]['prediction']
-
             if question and correct_answer and predicted_answer:
-                # Construct the prompt for the LLM
                 prompt = (
                     f"Given the question: '{question}', the correct answer: '{correct_answer}', "
                     f"and the predicted answer: '{predicted_answer}', is the predicted answer correct? (yes/no)"
                 )
-
-                # Tokenize the input
-                inputs = tokenizer(prompt, return_tensors="pt")
-                inputs.to(model.device)
-
-                # Generate a single token
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=50,
-                    do_sample=False,
-                    num_beams=1,
-                    num_return_sequences=1,
-                    top_p=None,
-                    top_k=None,
-                    temperature=None,
-                    # logits_processor=None, # TODO constrain the output to 'yes' or 'no'
-                )
-
-                # Decode the generated token
-                llm_output = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip().lower()
-
-                # Extract the decision (yes/no)
-                decision = "yes" if llm_output.lower().startswith('yes') else "no"
+                prompts.append(prompt)
+                prompts_idx.append(i)
                 current_result = {
                     "index": i,
                     "question": question,
                     "correct_answer": correct_answer,
                     "predicted_answer": predicted_answer,
-                    "llm_decision": decision,
-                    "llm_full_answer": llm_output,
+                    "prompt": prompt,
                 }
-
-                json.dump(current_result, f)
-                f.write('\n')
+                output_complete.append(current_result)
             else:
                 missing_fields = []
                 if not question:
@@ -190,8 +169,55 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
                     "llm_decision": "skipped",
                     "llm_full_answer": f"Missing fields: {', '.join(missing_fields)}",
                 }
-                json.dump(current_result, f)
-                f.write('\n')
+                output_complete.append(current_result)
+                skipped_idx.append(i)
+
+        # TODO solve Setting `pad_token_id` to `eos_token_id`:128001 for open-end generation.
+        dataloader = DataLoader(prompts, batch_size=batch_size, shuffle=False)
+
+        output_complete_cursor = 0
+
+        model.eval()
+        with torch.no_grad():
+            for batch in tqdm(dataloader):
+                # Tokenize the input
+                inputs = tokenizer(batch, return_tensors="pt",
+                                    padding=True,
+                                    padding_side='left')
+                inputs.to(model.device)
+
+                # Generate a single token
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=10,
+                    do_sample=False,
+                    num_beams=1,
+                    num_return_sequences=1,
+                    top_p=None,
+                    top_k=None,
+                    temperature=None,
+                )
+
+                for prompt, output in zip(batch, outputs):
+                    while output_complete_cursor in skipped_idx:
+                        json.dump(output_complete[output_complete_cursor], f)
+                        f.write('\n')
+                        if wandb:
+                            wandb.log(output_complete[output_complete_cursor])
+                        output_complete_cursor += 1
+                        continue
+                    assert output_complete_cursor in prompts_idx
+                    assert output_complete[output_complete_cursor]['prompt'] == prompt
+                    llm_answer = tokenizer.decode(output[inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+                    decision = "yes" if llm_answer.lower().startswith('yes') else "no"
+
+                    output_complete[output_complete_cursor]['llm_decision'] = decision
+                    output_complete[output_complete_cursor]['llm_full_answer'] = llm_answer
+                    json.dump(output_complete[output_complete_cursor], f)
+                    f.write('\n')
+                    if wandb:
+                        wandb.log(output_complete[output_complete_cursor])
+                    output_complete_cursor += 1
 
     print(f"Judgment completed. Results saved to '{outfile}'.")
 
