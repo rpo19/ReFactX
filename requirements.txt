@@ -14,3 +14,7 @@ cachetools
 wandb
 git+https://github.com/rpo19/transformers@main # patched transformers for stateful constrained generation
 tabulate
+nltk
+rouge-score
+pandas
+openpyxl

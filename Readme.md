@@ -11,8 +11,13 @@ bzgrep -P '(http://www\\.w3\\.org/2000/01/rdf-schema#label|http://www\\.w3\\.org
 ## Create a virtualenv
 ```
 python -m venv venv
-pip install -r requirements/base.txt -r requirements/transformers.txt
-pip install -r requirements/postgres.txt # for the postgres index
+pip install -r requirements.txt
+```
+
+## Install flash attention
+If you have compatible GPUs.
+```
+pip install flash-attn --no-build-isolation
 ```
 
 ## Load labels and description into a pickle file
