@@ -314,6 +314,7 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
     for i in range(len(evaluation)):
         assert evaluation[i]['question'] == dataset[i]['question']
 
+    judge_evaluation = None
     if judge:
         judge_evaluation = []
         with open(judge) as judge_fd:
@@ -349,6 +350,7 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
         inclusion_match.mean(), inclusion_match[final_answers_idx].mean()
     ]
 
+    judge_match = None
     if judge:
         judge_match = get_judge_evaluation(judge_evaluation)
         metric_columns.extend(['Judge Match (All)', 'Judge Match (Final Answers)'])

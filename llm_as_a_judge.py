@@ -185,6 +185,8 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
                 output_complete.append(current_result)
                 skipped_idx.append(i)
 
+        assert len(output_complete) == len(evaluation)
+
         # TODO solve Setting `pad_token_id` to `eos_token_id`:128001 for open-end generation.
         dataloader = DataLoader(prompts, batch_size=batch_size, shuffle=False)
 
@@ -234,6 +236,15 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
                     if wandb:
                         wandb.log(output_complete[output_complete_cursor])
                     output_complete_cursor += 1
+
+            while output_complete_cursor in skipped_idx:
+                json.dump(output_complete[output_complete_cursor], f)
+                f.write('\n')
+                if wandb:
+                    wandb.log(output_complete[output_complete_cursor])
+                output_complete_cursor += 1
+                continue
+            assert output_complete_cursor == len(evaluation), (output_complete_cursor, len(evaluation))
 
     print(f"Judgment completed. Results saved to '{outfile}'.")
 
