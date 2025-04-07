@@ -7,7 +7,8 @@ model_config = ModelConfig(
     # load_model = False
     device_map='auto',
 )
-model_config.batch_size = 8
+model_config.batch_size = 4
+#model_config.generate_args['num_beams'] = 3
 
 # model_config.model = load_model_with_quantization() # TODO
 

@@ -168,7 +168,7 @@ Answer: I don't know.'''
             padding_side='left'
         )
         self.generate_args = dict(
-            num_beams = 1,
+            num_beams = 3,
             num_return_sequences = 1,
             do_sample = False,
             temperature = None,
@@ -178,7 +178,7 @@ Answer: I don't know.'''
             pad_token_id = self.tokenizer.eos_token_id,
             use_cache = True,
             )
-        self.batch_size = 1
+        self.batch_size = 8
 
         self.answer_pattern = re.compile(r'Answer: (.*)\.?')
 
