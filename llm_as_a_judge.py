@@ -44,17 +44,17 @@ allowed_answers = {
 }
 
 @click.command()
-@click.option('--model', required=True, help="HuggingFace model to load.")
+@click.option('--model', 'model_name', required=True, help="HuggingFace model to load.")
 @click.option('--dataset', 'dataset_path', required=False, help="Path to the dataset file (JSON).")
 @click.option('--predictions', 'input_file', required=True, help="Path to the predictions file (JSON).")
 @click.option('--fix-predictions', is_flag=True, default=False, help='Fix (missing) predictions in the evaluation.')
 @click.option('--no-fix-none-prediction', is_flag=True, default=True, help='Do not replace None predictions with an empty string.')
-@click.option('--split-pattern', required=False, default=r'<\|im_end\|>', help='Pattern to split the full prediction. Use with --fix-predictions.')
+@click.option('--split-pattern', required=False, default=r'(<\|im_end\|>|<\|end_of_text\|>)', help='Pattern to split the full prediction. Use with --fix-predictions.')
 @click.option('--outfile', required=False, default=None, help="Output file for the results.")
 @click.option('--device-map', required=False, default='cuda', help="Where to load the model.")
 @click.option("--wandb", "wandb", is_flag=True, help="Log in wandb")
 @click.option('--batch-size', default=1, help="Batch size for the dataloader.")
-def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_none_prediction, split_pattern, outfile, device_map, wandb, batch_size):
+def judge_predictions(model_name, dataset_path, input_file, fix_predictions, no_fix_none_prediction, split_pattern, outfile, device_map, wandb, batch_size):
     """
     Use an LLM to judge the correctness of predictions based on a dataset.
     """
@@ -62,8 +62,8 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
         print('Logging in wandb.')
         time.sleep(5) # let the user time to stop
     # Load the HuggingFace model and tokenizer
-    print(f"Loading model: {model}")
-    tokenizer = AutoTokenizer.from_pretrained(model)
+    print(f"Loading model: {model_name}")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     yes_tokens = [tokenizer(answer, add_special_tokens=False)['input_ids'][-1] for answer in allowed_answers['yes']]
     no_tokens = [tokenizer(answer, add_special_tokens=False)['input_ids'][-1] for answer in allowed_answers['no']]
@@ -77,7 +77,7 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
     yesnoprocessor = YesNoLogitsProcessor(yes_tokens, no_tokens)
     processor = LogitsProcessorList([yesnoprocessor])
 
-    model = AutoModelForCausalLM.from_pretrained(model, device_map=device_map)
+    model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device_map)
     model.pad_token_id = tokenizer.eos_token_id
 
     if outfile is None:
@@ -125,7 +125,7 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
         experiment_name = os.path.basename(input_file)
         metadata_plus = {
             "experiment_name": experiment_name,
-            "model": model,
+            "model": model_name,
             "dataset_config_path": dataset_path,
             "prediction_file": input_file,
             "input_file": input_file,

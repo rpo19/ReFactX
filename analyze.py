@@ -265,7 +265,7 @@ def get_judge_evaluation(judge_evaluation, idx=None):
 @click.option('--outfile', required=False, default=None, help='Path to the output xlsx file (automatic if missing).')
 @click.option('--fix-predictions', is_flag=True, default=False, help='Fix (missing) predictions in the evaluation.')
 @click.option('--no-fix-none-prediction', is_flag=True, default=True, help='Do not replace None predictions with an empty string.')
-@click.option('--split-pattern', required=False, default=r'<\|im_end\|>', help='Pattern to split the full prediction. Use with --fix-predictions.')
+@click.option('--split-pattern', required=False, default=r'(<\|im_end\|>|<\|end_of_text\|>)', help='Pattern to split the full prediction. Use with --fix-predictions.')
 @click.option('--force', is_flag=True, default=False, help='Overwrite outfile if existing.')
 @click.option('--group', required=False, default=None, help='Calculate grouped metrics (e.g. by question type).')
 @click.option('--judge', required=False, help="Path to the llm-as-a-judge output file.")
@@ -285,11 +285,6 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
                 judge_evaluation.append(sample)
                 judge_line = judge_fd.readline()
 
-        # assert judge questions are the same as dataset questions
-        for i in range(len(evaluation)):
-            assert evaluation[i]['question'] == judge_evaluation[i]['question'], 'Question: {} != {} (judge)'.format(evaluation[i]['question'], judge_evaluation[i]['question'])
-            assert evaluation[i]['prediction'] == judge_evaluation[i]['predicted_answer'], 'Prediction: {} != {} (judge)'.format(evaluation[i]['prediction'], judge_evaluation[i]['predicted_answer'])
-
         if infile is None:
             infile = judge_metadata.get('prediction_file')
 
@@ -303,6 +298,7 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
         while line:
             evaluation_raw.append(json.loads(line))
             line = fd.readline()
+    evaluation = evaluation_raw[1:]
 
     header = evaluation_raw[0]
 
@@ -320,7 +316,6 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
     if start_from > 0:
         print('Datasets starts from', start_from)
         dataset = dataset[start_from:]
-    evaluation = evaluation_raw[1:]
 
     predictions = set(range(len(evaluation)))
 
@@ -334,6 +329,12 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
         for i in range(len(evaluation)):
             if evaluation[i]['prediction'] is None:
                 evaluation[i]['prediction'] = ''
+
+    if judge:
+        # assert judge questions are the same as dataset questions
+        for i in range(len(evaluation)):
+            assert evaluation[i]['question'] == judge_evaluation[i]['question'], 'Question: {} != {} (judge)'.format(evaluation[i]['question'], judge_evaluation[i]['question'])
+            assert evaluation[i]['prediction'] == judge_evaluation[i]['predicted_answer'], 'Prediction: {} != {} (judge)'.format(evaluation[i]['prediction'], judge_evaluation[i]['predicted_answer'])
 
     answered_metrics, answered, dontknow, final_answers, final_answers_idx = get_answered(predictions, evaluation)
 
