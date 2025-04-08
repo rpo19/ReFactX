@@ -2,7 +2,7 @@ import json
 import os
 from base_dataset_config import QADataset
 
-path = QADataset.get_dataset_path('2wikimultihop_test_ssample200.json')
+path = QADataset.get_dataset_path('2wikimultihop_dev_ssample200.json')
 
 config = {
     'path': path,
