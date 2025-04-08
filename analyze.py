@@ -281,7 +281,7 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
     header = evaluation_raw[0]
 
     if dataset_path is None:
-        dataset_path = header.get('dataset_config', {}).get('config', {}).get('path')
+        dataset_path = header.get('dataset_config_path')
         if dataset_path is None:
             raise Exception('No dataset path provided. Nor in the --infile nor as --dataset.')
     if dataset_path.endswith('.py'):
@@ -328,8 +328,9 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
 
         # assert judge questions are the same as dataset questions
         for i in range(len(evaluation)):
-            assert evaluation[i]['question'] == judge_evaluation[i]['question']
-            assert evaluation[i]['prediction'] == judge_evaluation[i]['predicted_answer']
+            assert evaluation[i]['question'] == judge_evaluation[i]['question'], 'Question: {} != {} (judge)'.format(evaluation[i]['question'], judge_evaluation[i]['question'])
+            assert evaluation[i]['prediction'] == judge_evaluation[i]['predicted_answer'], 'Prediction: {} != {} (judge)'.format(evaluation[i]['prediction'], judge_evaluation[i]['predicted_answer'])
+
 
     # # Metrics
 
