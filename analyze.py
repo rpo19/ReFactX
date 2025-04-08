@@ -261,7 +261,7 @@ def get_judge_evaluation(judge_evaluation, idx=None):
 
 @click.command()
 @click.option('--dataset', 'dataset_path', required=False, default=None, help='Path to the dataset configuration file.')
-@click.option('--infile', required=True, help='Path to the input file.')
+@click.option('--infile', required=False, help='Path to the input file.')
 @click.option('--outfile', required=False, default=None, help='Path to the output xlsx file (automatic if missing).')
 @click.option('--fix-predictions', is_flag=True, default=False, help='Fix (missing) predictions in the evaluation.')
 @click.option('--no-fix-none-prediction', is_flag=True, default=True, help='Do not replace None predictions with an empty string.')
@@ -271,6 +271,32 @@ def get_judge_evaluation(judge_evaluation, idx=None):
 @click.option('--judge', required=False, help="Path to the llm-as-a-judge output file.")
 @click.option('--overwrite-judge', is_flag=True, default=False, help='Overwrite judge decision.')
 def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction, split_pattern, force, group, judge, overwrite_judge):
+
+    judge_evaluation = None
+    if judge:
+        judge_evaluation = []
+        with open(judge) as judge_fd:
+            judge_metadata = json.loads(judge_fd.readline())
+            judge_line = judge_fd.readline()
+            while judge_line:
+                sample = json.loads(judge_line)
+                if overwrite_judge or 'llm_decision' not in sample:
+                    sample['llm_decision'] = 'yes' if sample['llm_full_answer'].lower().startswith('yes') else 'no'
+                judge_evaluation.append(sample)
+                judge_line = judge_fd.readline()
+
+        # assert judge questions are the same as dataset questions
+        for i in range(len(evaluation)):
+            assert evaluation[i]['question'] == judge_evaluation[i]['question'], 'Question: {} != {} (judge)'.format(evaluation[i]['question'], judge_evaluation[i]['question'])
+            assert evaluation[i]['prediction'] == judge_evaluation[i]['predicted_answer'], 'Prediction: {} != {} (judge)'.format(evaluation[i]['prediction'], judge_evaluation[i]['predicted_answer'])
+
+        if infile is None:
+            infile = judge_metadata.get('prediction_file')
+
+    if infile is None:
+        print('Error: No input file provided.')
+        sys.exit(1)
+
     evaluation_raw = []
     with open(infile) as fd:
         line = fd.readline()
@@ -313,24 +339,6 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
 
     for i in range(len(evaluation)):
         assert evaluation[i]['question'] == dataset[i]['question']
-
-    judge_evaluation = None
-    if judge:
-        judge_evaluation = []
-        with open(judge) as judge_fd:
-            judge_line = judge_fd.readline()
-            while judge_line:
-                sample = json.loads(judge_line)
-                if overwrite_judge or 'llm_decision' not in sample:
-                    sample['llm_decision'] = 'yes' if sample['llm_full_answer'].lower().startswith('yes') else 'no'
-                judge_evaluation.append(sample)
-                judge_line = judge_fd.readline()
-
-        # assert judge questions are the same as dataset questions
-        for i in range(len(evaluation)):
-            assert evaluation[i]['question'] == judge_evaluation[i]['question'], 'Question: {} != {} (judge)'.format(evaluation[i]['question'], judge_evaluation[i]['question'])
-            assert evaluation[i]['prediction'] == judge_evaluation[i]['predicted_answer'], 'Prediction: {} != {} (judge)'.format(evaluation[i]['prediction'], judge_evaluation[i]['predicted_answer'])
-
 
     # # Metrics
 

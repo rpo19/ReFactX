@@ -121,19 +121,26 @@ def judge_predictions(model, dataset_path, input_file, fix_predictions, no_fix_n
 
     # Save results to a JSONL file
     with open(outfile, "w") as f:
+        # writing metadata
+        experiment_name = os.path.basename(input_file)
+        metadata_plus = {
+            "experiment_name": experiment_name,
+            "model": model,
+            "dataset_config_path": dataset_path,
+            "prediction_file": input_file,
+            "input_file": input_file,
+            "fix_predictions": fix_predictions,
+            "no_fix_none_prediction": no_fix_none_prediction,
+            "split_pattern": split_pattern,
+            "outfile": outfile,
+            "device_map": device_map,
+        }
+        f.write(json.dumps(metadata_plus))
+        f.write('\n')
+
         if wandb:
             import wandb
-            experiment_name = os.path.basename(input_file)
-            metadata_plus = {
-                "model": model,
-                "dataset_path": dataset_path,
-                "input_file": input_file,
-                "fix_predictions": fix_predictions,
-                "no_fix_none_prediction": no_fix_none_prediction,
-                "split_pattern": split_pattern,
-                "outfile": outfile,
-                "device_map": device_map,
-            }
+
             wandb.init(
                 project=experiment_name,
                 config=metadata_plus,
