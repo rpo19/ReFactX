@@ -32,7 +32,8 @@ def get_utc_date_and_time():
 @click.option("--model", "model_config_path", required=True, help="Model configuration module (without .py).")
 @click.option("--dataset", "dataset_config_path", required=True, help="Dataset configuration module (without .py).")
 @click.option("--wandb", "wandb", is_flag=True, help="Log in wandb")
-def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb):
+@click.option("--unconstrained-generation", is_flag=True, help="Unconstrained generation")
+def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb, unconstrained_generation):
     if output_file is None:
         output_file = f'{experiment_name}.out'
     output_file = logrotate(output_file)
@@ -102,6 +103,8 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         logits_processor_list = LogitsProcessorList([
             constrained_processor
         ])
+        if unconstrained_generation:
+            logits_processor_list = LogitsProcessorList([])
 
         dataloader = DataLoader(dataset, batch_size=model_config.batch_size, shuffle=False)
 
