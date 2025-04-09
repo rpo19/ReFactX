@@ -192,7 +192,7 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
                     subtree_cache = DictIndex(end_of_triple=index_config.end_of_triple),
                     oneleaf_cache = DictIndex(end_of_triple=index_config.end_of_triple),
                 ) for _ in range(self.num_states)],
-            num_beams=self.model_config.generate_args.get('num_beams', 1),
+            num_beams=1,
             batch_size = self.model_config.batch_size,
             pad_token_id = self.model_config.generate_args['pad_token_id'])
 
@@ -224,11 +224,6 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
 
             batch_inputs = self.model_config.tokenize_fun(prompted_batch)
 
-            if len(self.states) != batch_inputs.input_ids.shape[0] * self.model_config.generate_args.get('num_beams', 1):
-                self.states = self.states[:batch_inputs.input_ids.shape[0] * self.model_config.generate_args.get('num_beams', 1)]
-                self.states.batch_size = batch_inputs.input_ids.shape[0]
-                self.constrained_processor.states = self.states
-
             output = self.model_config.model.generate(
                 **batch_inputs,
                 #logits_processor=self.logits_processor_list,
@@ -236,11 +231,9 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
                 kwargs = {'constrained_state': self.states}, # passing stat
             )
 
-            self.states.beam_permutation() # final permutation to match final beams
-
             full_prediction = self.model_config.tokenizer.decode(output[0][len(batch_inputs.input_ids[0]):])
-            prediction = self.model_config.get_prediction(full_prediction)
-            prediction_complete = bool(prediction)
+            #prediction = self.model_config.get_prediction(full_prediction)
+            #prediction_complete = bool(prediction)
 
             response = full_prediction
             self._save_cache(sys_prompt_arg + prompt, response)
@@ -264,7 +257,17 @@ def load_dataset(dataset_config_path):
 def answer_equality_fn(prediction: tg.Variable, ground_truth_answer: tg.Variable):
     # TODO can consider other stuff like answer in prediction or viceversa
     # can consider if there are triples generated
-    return int(str(prediction.value) == str(ground_truth_answer.value))
+    global llm_api_test
+    full_prediction = str(prediction.value)
+    actual_prediction = llm_api_test.model_config.get_prediction(full_prediction).lower()
+    gt_str = str(ground_truth_answer.value).lower()
+    eq = int(actual_prediction == gt_str)
+    inclusion = int(gt_str in actual_prediction) + int(actual_prediction in gt_str)
+    inclusion_wide = int(gt_str in full_prediction.lower())
+
+    #result = (eq * 4 + inclusion * 3 + inclusion_wide * 1) / 8
+    result = eq
+    return result
 
 if __name__ == '__main__':
     wandb.init(
@@ -300,7 +303,7 @@ if __name__ == '__main__':
     set_seed(12)
 
     client = OpenAI(base_url="http://localhost:8000/v1", api_key="lm-studio")
-    llm_api_eval = ChatExternalClient(client=client, model_string="meta-llama/Llama-3.3-70B-Instruct")
+    llm_api_eval = ChatExternalClient(client=client, model_string=os.environ.get('MODEL_NAME'))
     tg.set_backward_engine(llm_api_eval, override=True)
 
     STARTING_SYSTEM_PROMPT = llm_api_test.system_prompt
