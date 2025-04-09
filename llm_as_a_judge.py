@@ -54,7 +54,8 @@ allowed_answers = {
 @click.option('--device-map', required=False, default='cuda', help="Where to load the model.")
 @click.option("--wandb", "wandb", is_flag=True, help="Log in wandb")
 @click.option('--batch-size', default=1, help="Batch size for the dataloader.")
-def judge_predictions(model_name, dataset_path, input_file, fix_predictions, no_fix_none_prediction, split_pattern, outfile, device_map, wandb, batch_size):
+@click.option('--torch-dtype', required=False, default='bfloat16', help="Torch dtype for loading the model.")
+def judge_predictions(model_name, dataset_path, input_file, fix_predictions, no_fix_none_prediction, split_pattern, outfile, device_map, wandb, batch_size, torch_dtype):
     """
     Use an LLM to judge the correctness of predictions based on a dataset.
     """
@@ -77,7 +78,7 @@ def judge_predictions(model_name, dataset_path, input_file, fix_predictions, no_
     yesnoprocessor = YesNoLogitsProcessor(yes_tokens, no_tokens)
     processor = LogitsProcessorList([yesnoprocessor])
 
-    model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device_map)
+    model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device_map, torch_dtype=torch_dtype)
     model.pad_token_id = tokenizer.eos_token_id
 
     if outfile is None:

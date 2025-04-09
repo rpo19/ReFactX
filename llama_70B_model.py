@@ -6,3 +6,4 @@ model_config = ModelConfig(
     newline_token = 198,
     device_map='auto',
 )
+model_config.batch_size=4
