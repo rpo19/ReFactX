@@ -20,3 +20,4 @@ hpc
 **/.htpasswd
 **/htpasswd
 wandb
+**/logs

@@ -54,7 +54,11 @@ from ctrie import DictIndex, ConstrainedStateList, ConstrainedState, Constrained
 import torch
 
 from textgrad.autograd.string_based_ops import StringBasedFunction
-from textgrad.engine.vllm import ChatVLLM
+from openai import OpenAI
+from textgrad.engine.local_model_openai_api import ChatExternalClient
+
+import wandb
+import json
 
 
 # %% [markdown] id="9a459a37-7446-4c4a-a7e0-38182b5dbd3e"
@@ -263,6 +267,11 @@ def answer_equality_fn(prediction: tg.Variable, ground_truth_answer: tg.Variable
     return int(str(prediction.value) == str(ground_truth_answer.value))
 
 if __name__ == '__main__':
+    wandb.init(
+        project='textgrad',
+        config={},
+        name=f"textgrad",
+    )
     train_path = 'mintaka_train_ssample200'
     train_set = load_dataset(train_path)
     val_path = 'mintaka_dev_ssample72'
@@ -289,7 +298,9 @@ if __name__ == '__main__':
 
     # %% id="e69f8431-661c-42f8-b7fc-efccea588a03" outputId="88a5a39d-b34c-4a7f-e17d-5e608eecad29"
     set_seed(12)
-    llm_api_eval = ChatVLLM(model_string='meta-llama/Llama-3.3-70B-Instruct', dtype='bfloat16', tensor_parallel_size=4) # torch.bfloat16
+
+    client = OpenAI(base_url="http://localhost:8000/v1", api_key="lm-studio")
+    llm_api_eval = ChatExternalClient(client=client, model_string="meta-llama/Llama-3.3-70B-Instruct")
     tg.set_backward_engine(llm_api_eval, override=True)
 
     STARTING_SYSTEM_PROMPT = llm_api_test.system_prompt
@@ -357,3 +368,6 @@ if __name__ == '__main__':
             results["prompt"].append(system_prompt.get_value())
             if steps == 3:
                 break
+
+    with open('textgrad_results.json','w') as fd:
+        json.dump(results, fd)
