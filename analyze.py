@@ -1,3 +1,4 @@
+# TODO add percentage max_tokens
 from copy import deepcopy
 import sys
 import json
@@ -92,7 +93,7 @@ def get_answered(predictions, evaluation):
     final_answers = answered - dontknow
 
     # Create a metrics table
-    metrics_columns = ['Num', 'Percentage Answered', 'Percentage Don\'t Know', 'Final Answers (Answered - Don\'t Know)',  'Num 0 Triples', 'Percentage 0 Triples', 'Percentage 0 Triples (Final Answers)']
+    metrics_columns = ['Num', 'Percentage Answered', 'Percentage Don\'t Know', 'Final Answers (Answered - Don\'t Know)',  'Num 0 Triples', 'Percentage 0 Triples', 'Percentage 0 Triples (Final Answers)', 'Percentage Max Tokens']
     metrics_values = [
         len(evaluation),
         len(answered) / (len(evaluation) + sys.float_info.min),
@@ -101,6 +102,7 @@ def get_answered(predictions, evaluation):
         '{}/{}'.format(sum(map(lambda x: x['triples'] == [], evaluation)), len(evaluation)),
         sum(map(lambda x: x['triples'] == [], evaluation)) / (len(evaluation) + sys.float_info.min),
         sum(1 for i in final_answers if evaluation[i]['triples'] == []) / (len(final_answers) + sys.float_info.min),
+        sum(map(lambda x: x['reached_max_tokens'] == True, evaluation)) / (len(evaluation) + sys.float_info.min),
     ]
     answered_metrics = print_metrics('Answered Metrics', metrics_columns, metrics_values)
 
