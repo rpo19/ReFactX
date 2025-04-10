@@ -91,7 +91,7 @@ def eval_sample(item, eval_fn, model):
 
 
 # %% id="9559a31e07e54d7f"
-def eval_dataset(test_set, eval_fn, model, max_samples: int=None):
+def eval_dataset_parallel(test_set, eval_fn, model, max_samples: int=None):
     if max_samples is None:
         max_samples = len(test_set)
     accuracy_list = []
@@ -121,6 +121,8 @@ def eval_dataset_slow(test_set, eval_fn, model, max_samples: int=None):
         tqdm_loader.set_description(f"Accuracy: {np.mean(accuracy_list)}")
     return accuracy_list
 
+eval_dataset = eval_dataset_slow
+
 
 # %% id="4ea732b7edf34eb9"
 def run_validation_revert(system_prompt: tg.Variable, results, model, eval_fn, val_set):
@@ -142,7 +144,8 @@ def run_validation_revert(system_prompt: tg.Variable, results, model, eval_fn, v
 # custom engine
 # I need to directly use huggingface locally for constrained generation
 
-
+def format_prompt(system_prompt, prompt):
+    return system_prompt + '<|im_start|>user\n' + prompt + '<|im_end|>\n<|im_start|>assistant\n'
 
 class ChatConstrainedHF(EngineLM, CachedEngine):
     def __init__(
@@ -192,8 +195,8 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
                     subtree_cache = DictIndex(end_of_triple=index_config.end_of_triple),
                     oneleaf_cache = DictIndex(end_of_triple=index_config.end_of_triple),
                 ) for _ in range(self.num_states)],
-            num_beams=1,
-            batch_size = self.model_config.batch_size,
+            num_beams=self.model_config.generate_args.get('num_beams', 1),
+            batch_size = 1,
             pad_token_id = self.model_config.generate_args['pad_token_id'])
 
         self.constrained_processor = ConstrainedLogitsProcessor(
@@ -218,7 +221,7 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
         with torch.no_grad():
             #batch = [messages]
             #prompted_batch = list(map(self.model_config.apply_prompt_template, batch))
-            prompted_batch = [system_prompt + prompt]
+            prompted_batch = [format_prompt(system_prompt, prompt)]
 
             self.states.reset() # reset caches
 
@@ -226,7 +229,7 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
 
             output = self.model_config.model.generate(
                 **batch_inputs,
-                #logits_processor=self.logits_processor_list,
+                logits_processor=self.logits_processor_list,
                 **self.model_config.generate_args,
                 kwargs = {'constrained_state': self.states}, # passing stat
             )
@@ -234,8 +237,11 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
             full_prediction = self.model_config.tokenizer.decode(output[0][len(batch_inputs.input_ids[0]):])
             #prediction = self.model_config.get_prediction(full_prediction)
             #prediction_complete = bool(prediction)
+            # print('fp', full_prediction)
 
-            response = full_prediction
+            prediction = self.model_config.get_prediction(full_prediction)
+
+            response = prediction
             self._save_cache(sys_prompt_arg + prompt, response)
 
             return response
@@ -255,15 +261,13 @@ def load_dataset(dataset_config_path):
     return dataset_x_y
 
 def answer_equality_fn(prediction: tg.Variable, ground_truth_answer: tg.Variable):
+    #eval_fn
     # TODO can consider other stuff like answer in prediction or viceversa
     # can consider if there are triples generated
-    global llm_api_test
-    full_prediction = str(prediction.value)
-    actual_prediction = llm_api_test.model_config.get_prediction(full_prediction).lower()
+    prediction = str(prediction.value).lower()
     gt_str = str(ground_truth_answer.value).lower()
-    eq = int(actual_prediction == gt_str)
-    inclusion = int(gt_str in actual_prediction) + int(actual_prediction in gt_str)
-    inclusion_wide = int(gt_str in full_prediction.lower())
+    eq = int(prediction == gt_str)
+    # print(prediction, gt_str, eq)
 
     #result = (eq * 4 + inclusion * 3 + inclusion_wide * 1) / 8
     result = eq
@@ -284,8 +288,8 @@ if __name__ == '__main__':
 
     # %%
     llm_api_test = ChatConstrainedHF(
-        model_config_path="qwen25_7B_model",
-        index_config_path="http_index_qwen",
+        model_config_path="qwen25_3B_model",
+        index_config_path="qwen25_index",
         system_prompt=None,
         cache_path=os.path.join(platformdirs.user_cache_dir("textgrad"), "cache_hf_llama1.db"),
     )
