@@ -337,7 +337,7 @@ def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding
     if fix_max_tokens:
         padding_pattern = re.compile(padding_pattern)
         for i in range(len(evaluation)):
-            reached_max_tokens = bool(evaluation[i]['prediction']) == False and padding_pattern.match(evaluation[i]['full_prediction'])
+            reached_max_tokens = bool(evaluation[i]['prediction']) == False and not padding_pattern.match(evaluation[i]['full_prediction'])
             evaluation[i]['reached_max_tokens'] = reached_max_tokens
 
     if judge:
