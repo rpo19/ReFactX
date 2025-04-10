@@ -178,8 +178,8 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                     # TODO also save worse beams
 
                     state = states[state_idx] # TODO check if states are permuted before or after beam step
-                    
-                    reached_max_tokens = output_i[len(batch_inputs.input_ids[0]):].shape[0] == model_config.generate_args.get('max_new_tokens') and output_i[-1] != model_config.generate_args.get('pad_token_id')
+
+                    reached_max_tokens = bool(output_i[len(batch_inputs.input_ids[0]):].shape[0] == model_config.generate_args.get('max_new_tokens') and output_i[-1] != model_config.generate_args.get('pad_token_id'))
 
                     sample = dict(
                             question=question,
