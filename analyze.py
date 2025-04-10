@@ -266,13 +266,15 @@ def get_judge_evaluation(judge_evaluation, idx=None):
 @click.option('--infile', required=False, help='Path to the input file.')
 @click.option('--outfile', required=False, default=None, help='Path to the output xlsx file (automatic if missing).')
 @click.option('--fix-predictions', is_flag=True, default=False, help='Fix (missing) predictions in the evaluation.')
+@click.option('--fix-max-tokens', is_flag=True, default=False, help='Fix (wrong) reached_max_tokens calculations.')
+@click.option('--padding-pattern', required=False, default=r'(<\|eot_id\|>|<\|im_end\|>)$', help='Path to the dataset configuration file.')
 @click.option('--no-fix-none-prediction', is_flag=True, default=True, help='Do not replace None predictions with an empty string.')
 @click.option('--split-pattern', required=False, default=r'(<\|im_end\|>|<\|end_of_text\|>)', help='Pattern to split the full prediction. Use with --fix-predictions.')
 @click.option('--force', is_flag=True, default=False, help='Overwrite outfile if existing.')
 @click.option('--group', required=False, default=None, help='Calculate grouped metrics (e.g. by question type).')
 @click.option('--judge', required=False, help="Path to the llm-as-a-judge output file.")
 @click.option('--overwrite-judge', is_flag=True, default=False, help='Overwrite judge decision.')
-def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction, split_pattern, force, group, judge, overwrite_judge):
+def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding_pattern, no_fix_none_prediction, split_pattern, force, group, judge, overwrite_judge):
 
     judge_evaluation = None
     if judge:
@@ -331,6 +333,12 @@ def main(dataset_path, infile, outfile, fix_predictions, no_fix_none_prediction,
         for i in range(len(evaluation)):
             if evaluation[i]['prediction'] is None:
                 evaluation[i]['prediction'] = ''
+
+    if fix_max_tokens:
+        padding_pattern = re.compile(padding_pattern)
+        for i in range(len(evaluation)):
+            reached_max_tokens = bool(evaluation[i]['prediction']) == False and padding_pattern.match(evaluation[i]['full_prediction'])
+            evaluation[i]['reached_max_tokens'] = reached_max_tokens
 
     if judge:
         # assert judge questions are the same as dataset questions
