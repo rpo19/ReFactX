@@ -60,9 +60,11 @@ class QADataset(Dataset):
     """
     Array of correct answers.
     """
-    def get_answer(self, i) -> list:
-        answers = [{'answer': answer, 'aliases': []} for answer in self.dataset[i]['answers']]
-        return answers
+    def get_answer(self, i) -> str:
+        # answers = [{'answer': answer, 'aliases': []} for answer in self.dataset[i]['answers']]
+        # Answer1 (Alias1.1, Alias1.2), Answer2 (Alias2.1, Alias2.2) OR Answer1 (Alias1.1, Alias1.2)
+        answer = self.dataset[i]['answer']
+        return answer
 
     def get_question_from_sample(self, sample) -> str:
         return sample['question']
