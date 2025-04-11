@@ -17,33 +17,37 @@ scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
 def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, final_answers, dontknow, group=None, judge_match=None):
     for i in range(len(evaluation)):
         prediction = evaluation[i]
-        target = dataset[i]
+        question = dataset.get_question(i)
+        answer = dataset.get_answer(i)
 
-        assert prediction['question'] == target['question']
+        assert prediction['question'] == question
 
         if group is not None:
             group_name = dataset[i][group]
         else:
             group_name = None
 
-        row = [target['question'],
-            prediction['prediction'],
-            dataset.get_answer(i),
-            EM[i],
-            IM[i],
-            bleu1[i],
-            bleu4[i],
-            meteor[i],
-            rougeL[i,2], # F1
-            i in final_answers,
-            i in dontknow,
-            prediction['full_prediction'],
-            prediction['full_sample'],
-            prediction['triples'],
-            target['answer'],
-            group_name,
-            group_name
+        row = [question,
+                prediction['prediction'],
+                answer,
+                EM[i],
+                IM[i],
+                bleu1[i],
+                bleu4[i],
+                meteor[i],
+                rougeL[i,2], # F1
+                i in final_answers,
+                i in dontknow,
+                prediction['full_prediction'],
+                prediction['full_sample'],
+                prediction['triples'],
             ]
+
+        if group is not None:
+            row.extend([
+                    group_name,
+                    group_name
+                ])
 
         if judge_match is not None:
             row.insert(5, judge_match[i])
@@ -51,7 +55,7 @@ def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, fina
         yield row
 
 def get_evaldf(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4, meteor, rougeL, final_answers, dontknow, group = None, judge_match=None):
-    columns = ['Question', 'Prediction', 'Answer', 'EM', 'IM', 'BLEU1', 'B4', 'METEOR', 'ROUGEL', 'Answered', 'DontKnow', 'FULL prediction', 'FULL sample', 'Triples', 'AnswerBig']
+    columns = ['Question', 'Prediction', 'Answer', 'EM', 'IM', 'BLEU1', 'B4', 'METEOR', 'ROUGEL', 'Answered', 'DontKnow', 'FULL prediction', 'FULL sample', 'Triples']
     if judge_match is not None:
         columns.insert(5, 'Judge')
     if group is not None:
@@ -349,7 +353,7 @@ def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding
     answered_metrics, answered, dontknow, final_answers, final_answers_idx = get_answered(predictions, evaluation)
 
     for i in range(len(evaluation)):
-        assert evaluation[i]['question'] == dataset[i]['question']
+        assert evaluation[i]['question'] == dataset.get_question(i)
 
     # # Metrics
 
