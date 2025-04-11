@@ -1,5 +1,4 @@
 import json
-import os
 from mintaka_base import MintakaDataset
 
 path = MintakaDataset.get_dataset_path('mintaka_train.json')

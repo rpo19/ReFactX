@@ -5,6 +5,7 @@ class WebQSPDataset(QADataset):
         return dataset['Questions']
 
     def get_answer(self, i) -> list:
+        # we assume that in case of duplication the llm-as-a-judge will judge correctly
         answers = []
         for parse in self.dataset[i]['Parses']:
             for answer in parse['Answers']:
@@ -12,7 +13,8 @@ class WebQSPDataset(QADataset):
                     answers.append(answer['EntityName'])
                 elif answer['AnswerType'] == "Value":
                     answers.append(answer['AnswerArgument'])
-        return answers
+        textual_answer = ', '.join(answers)
+        return textual_answer.strip()
 
     def get_question_from_sample(self, sample):
         return sample['RawQuestion']
