@@ -153,7 +153,6 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
         model_config_path: str,
         index_config_path: str,
         system_prompt: None,
-        batch_size: int,
         **kwargs):
         """
         :param model_string:
@@ -187,8 +186,6 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
 
         self.is_multimodal = False
 
-        self.batch_size = batch_size
-
         self.num_states = self.model_config.generate_args.get('num_beams', 1)
         self.states = ConstrainedStateList(
             [ConstrainedState(
@@ -199,7 +196,7 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
                     oneleaf_cache = DictIndex(end_of_triple=index_config.end_of_triple),
                 ) for _ in range(self.num_states)],
             num_beams=self.model_config.generate_args.get('num_beams', 1),
-            batch_size = self.batch_size,
+            batch_size = 1,
             pad_token_id = self.model_config.generate_args['pad_token_id'])
 
         self.constrained_processor = ConstrainedLogitsProcessor(
@@ -212,7 +209,7 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
             self.constrained_processor
         ])
 
-    def generate(self, prompt: list, system_prompt: str=None):
+    def generate(self, prompt: str, system_prompt: str=None):
         sys_prompt_arg = system_prompt if system_prompt else self.system_prompt
         '''
         messages=[
@@ -224,7 +221,7 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
         with torch.no_grad():
             #batch = [messages]
             #prompted_batch = list(map(self.model_config.apply_prompt_template, batch))
-            prompted_batch = [format_prompt(system_prompt, prompt_i) for prompt_i in prompt]
+            prompted_batch = [format_prompt(system_prompt, prompt)]
 
             self.states.reset() # reset caches
 
@@ -237,12 +234,12 @@ class ChatConstrainedHF(EngineLM, CachedEngine):
                 kwargs = {'constrained_state': self.states}, # passing stat
             )
 
-            full_predictions = [self.model_config.tokenizer.decode(output[i][len(batch_inputs.input_ids[0]):]) for i in output.shape[0]]
+            full_prediction = self.model_config.tokenizer.decode(output[0][len(batch_inputs.input_ids[0]):])
             #prediction = self.model_config.get_prediction(full_prediction)
             #prediction_complete = bool(prediction)
             # print('fp', full_prediction)
 
-            predictions = [self.model_config.get_prediction(full_prediction) for full_prediction in full_predictions]
+            prediction = self.model_config.get_prediction(full_prediction)
 
             response = prediction
             self._save_cache(sys_prompt_arg + prompt, response)
@@ -289,15 +286,12 @@ if __name__ == '__main__':
     test_path = 'mintaka_test_ssample200'
     test_set = load_dataset(test_path)
 
-    batch_size = 4
-
     # %%
     llm_api_test = ChatConstrainedHF(
-        model_config_path="qwen25_7B_model",
-        index_config_path="http_index_qwen",
+        model_config_path="qwen25_3B_model",
+        index_config_path="qwen25_index",
         system_prompt=None,
         cache_path=os.path.join(platformdirs.user_cache_dir("textgrad"), "cache_hf_llama1.db"),
-        batch_size=batch_size,
     )
 
     # %%
@@ -360,11 +354,14 @@ if __name__ == '__main__':
             pbar.set_description(f"Training step {steps}. Epoch {epoch}")
             optimizer.zero_grad()
             losses = []
-            responses = model(batch_x)
-            for (y, ygt) in zip(responses, batch_y):
-                y = tg.Variable(y, requires_grad=False, role_description="prediction from the language model")
-                ygt = tg.Variable(ygt, requires_grad=False, role_description="correct answer for the query")
-                eval_output_variable = eval_fn(inputs=dict(prediction=y, ground_truth_answer=ygt))
+            for (x, y) in zip(batch_x, batch_y):
+                x = tg.Variable(x, requires_grad=False, role_description="query to the language model")
+                y = tg.Variable(y, requires_grad=False, role_description="correct answer for the query")
+                response = model(x)
+                try:
+                    eval_output_variable = eval_fn(inputs=dict(prediction=response, ground_truth_answer=y))
+                except:
+                    eval_output_variable = eval_fn([x, y, response])
                 losses.append(eval_output_variable)
             total_loss = tg.sum(losses)
             total_loss.backward()
@@ -379,5 +376,5 @@ if __name__ == '__main__':
             if steps == 3:
                 break
 
-        with open(f'textgrad_results_epoch_{epoch}.json','w') as fd:
-            json.dump(results, fd)
+    with open('textgrad_results.json','w') as fd:
+        json.dump(results, fd)
