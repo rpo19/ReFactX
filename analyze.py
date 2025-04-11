@@ -23,7 +23,7 @@ def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, fina
         assert prediction['question'] == question
 
         if group is not None:
-            group_name = dataset[i][group]
+            group_name = dataset.get_question_type(i)
         else:
             group_name = None
 
@@ -44,10 +44,7 @@ def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, fina
             ]
 
         if group is not None:
-            row.extend([
-                    group_name,
-                    group_name
-                ])
+            row.append(group_name)
 
         if judge_match is not None:
             row.insert(5, judge_match[i])
@@ -58,9 +55,8 @@ def get_evaldf(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4
     columns = ['Question', 'Prediction', 'Answer', 'EM', 'IM', 'BLEU1', 'B4', 'METEOR', 'ROUGEL', 'Answered', 'DontKnow', 'FULL prediction', 'FULL sample', 'Triples']
     if judge_match is not None:
         columns.insert(5, 'Judge')
-    if group is not None:
+    if group:
         columns.append('Group')
-        columns.append(group)
     data = pd_generator(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4, meteor, rougeL, final_answers, dontknow, group = group, judge_match=judge_match)
     evaldf = pd.DataFrame(data, columns = columns)
     return evaldf
@@ -168,9 +164,9 @@ def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answe
     print('--- Groups ---')
     complexityType = {}
     for i in range(len(evaluation)):
-        if not dataset[i][group] in complexityType:
-            complexityType[dataset[i][group]] = []
-        complexityType[dataset[i][group]].append(i)
+        if not dataset.get_question_type(i) in complexityType:
+            complexityType[dataset.get_question_type(i)] = []
+        complexityType[dataset.get_question_type(i)].append(i)
 
     complexity_stats = {k:len(v) / (len(evaluation) + sys.float_info.min) for k,v in complexityType.items()}
 
@@ -275,7 +271,7 @@ def get_judge_evaluation(judge_evaluation, idx=None):
 @click.option('--no-fix-none-prediction', is_flag=True, default=True, help='Do not replace None predictions with an empty string.')
 @click.option('--split-pattern', required=False, default=r'(<\|im_end\|>|<\|end_of_text\|>)', help='Pattern to split the full prediction. Use with --fix-predictions.')
 @click.option('--force', is_flag=True, default=False, help='Overwrite outfile if existing.')
-@click.option('--group', required=False, default=None, help='Calculate grouped metrics (e.g. by question type).')
+@click.option('--group', is_flag=True, required=False, default=None, help='Calculate grouped metrics (e.g. by question type).')
 @click.option('--judge', required=False, help="Path to the llm-as-a-judge output file.")
 @click.option('--overwrite-judge', is_flag=True, default=False, help='Overwrite judge decision.')
 def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding_pattern, no_fix_none_prediction, split_pattern, force, group, judge, overwrite_judge):

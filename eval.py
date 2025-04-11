@@ -26,14 +26,32 @@ def get_utc_date_and_time():
     return nowstr
 
 @click.command()
-@click.argument("experiment_name")
+@click.option("--name", "experiment_name", default=None, required=False, help="Experiment name.")
 @click.option("--output", "output_file", required=False, default=None, type=click.Path(), help="Output file for the results.")
 @click.option("--index", "index_config_path", required=True, help="Index configuration module (without .py).")
 @click.option("--model", "model_config_path", required=True, help="Model configuration module (without .py).")
 @click.option("--dataset", "dataset_config_path", required=True, help="Dataset configuration module (without .py).")
 @click.option("--wandb", "wandb", is_flag=True, help="Log in wandb")
 @click.option("--unconstrained-generation", is_flag=True, help="Unconstrained generation")
-def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb, unconstrained_generation):
+@click.option("--debug", is_flag=True, help="Print debug information.")
+def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb, unconstrained_generation, debug):
+    if index_config_path.endswith('.py'):
+        index_config_path = index_config_path[:-3]
+    index_module = importlib.import_module(index_config_path)
+    index_config = getattr(index_module, 'index_config')
+
+    if model_config_path.endswith('.py'):
+        model_config_path = model_config_path[:-3]
+    model_module = importlib.import_module(model_config_path)
+    model_config = getattr(model_module, 'model_config')
+
+    if dataset_config_path.endswith('.py'):
+        dataset_config_path = dataset_config_path[:-3]
+    dataset_module = importlib.import_module(dataset_config_path)
+    dataset = getattr(dataset_module, 'dataset').questions_dataset()
+
+    if experiment_name is None:
+        experiment_name = f'{os.path.basename(dataset_config_path)}.{os.path.basename(model_config_path)}.{os.path.basename(index_config_path)}'
     if output_file is None:
         output_file = f'{experiment_name}.out'
     output_file = logrotate(output_file)
@@ -43,21 +61,6 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         time.sleep(5) # let the user time to stop
 
     with open(output_file, 'w') as output_fd:
-        if index_config_path.endswith('.py'):
-            index_config_path = index_config_path[:-3]
-        index_module = importlib.import_module(index_config_path)
-        index_config = getattr(index_module, 'index_config')
-
-        if model_config_path.endswith('.py'):
-            model_config_path = model_config_path[:-3]
-        model_module = importlib.import_module(model_config_path)
-        model_config = getattr(model_module, 'model_config')
-
-        if dataset_config_path.endswith('.py'):
-            dataset_config_path = dataset_config_path[:-3]
-        dataset_module = importlib.import_module(dataset_config_path)
-        dataset = getattr(dataset_module, 'dataset').questions_dataset()
-
         metadata_plus = {
             'index_config_path': index_config_path,
             'model_config_path': model_config_path,
@@ -134,9 +137,10 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                 prompt_cache = None
 
             for batch_number, batch in enumerate(tqdm(dataloader)):
-                print(f'\nBatch {batch_number}:')
-                for question in batch:
-                    print(question)
+                if debug:
+                    print(f'\nBatch {batch_number}:')
+                    for question in batch:
+                        print(question)
                 prompted_batch = list(map(model_config.apply_prompt_template, batch))
 
                 states.reset() # reset caches

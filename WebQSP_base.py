@@ -4,9 +4,6 @@ class WebQSPDataset(QADataset):
     def preprocess(self, dataset):
         return dataset['Questions']
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def get_answer(self, i) -> list:
         answers = []
         for parse in self.dataset[i]['Parses']:

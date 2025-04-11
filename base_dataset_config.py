@@ -10,9 +10,15 @@ class QADataset(Dataset):
 
     def __init__(self, dataset, config, preprocess=True):
         self.dataset = dataset
+        self.config = config
         if preprocess:
             self.dataset = self.preprocess(self.dataset)
-        self.config = config
+            # now self.dataset should be a list
+            dataset_start_from = int(os.environ.get('DATASET_START_FROM', 0))
+            if dataset_start_from:
+                print(f"Skipping first {dataset_start_from} samples from dataset. Previous length: {len(self.dataset)}, current length: {len(self.dataset) - dataset_start_from}")
+                self.dataset = self.dataset[dataset_start_from:]
+                config['start_from'] = dataset_start_from
 
         self.skip_serialize = set(['skip_serialize','dataset'])
 
@@ -63,6 +69,9 @@ class QADataset(Dataset):
     def get_question(self, i) -> str:
         sample = self.dataset[i]
         return self.get_question_from_sample(sample)
+
+    def get_question_type(self, i):
+        return 'unknown'
 
     @staticmethod
     def get_dataset_path(dataset_name):
