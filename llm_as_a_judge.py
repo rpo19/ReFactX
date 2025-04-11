@@ -153,16 +153,22 @@ def judge_predictions(model_name, dataset_path, input_file, fix_predictions, no_
         prompts = []
         prompts_idx = []
         skipped_idx = []
+        prompt_template = {
+            'role': 'system',
+            'content': 'You are a judge. You will be given a question, the correct answer, and a predicted answer. The correct answer is a list that contains the different correct answers that must be mentioned in a correct prediction. Optionally the answer can have aliases. You consider correct when a prediction contains all the answers (or eventually their aliases).'
+        }
+        # TODO add few shot examples?
         for i in range(len(evaluation)):
             assert evaluation[i]['question'] == dataset[i]['question']
             question = dataset[i]['question']
             correct_answer = dataset.get_answer(i)
             predicted_answer = evaluation[i]['prediction']
             if question and correct_answer and predicted_answer:
-                prompt = (
-                    f"Given the question: '{question}', the correct answer: '{correct_answer}', "
-                    f"and the predicted answer: '{predicted_answer}', is the predicted answer correct? (yes/no)"
-                )
+                prompt_question = {
+                    'role': 'user',
+                    'content': f'''f"Given the question: '{question}', the correct answers: '{correct_answer}' and the predicted answer: '{predicted_answer}', is the predicted answer correct? (yes/no)
+'''}
+                prompt = tokenizer.apply_chat_template(prompt_template + [prompt_question], tokenize=False, add_generation_prompt=True)
                 prompts.append(prompt)
                 prompts_idx.append(i)
                 current_result = {

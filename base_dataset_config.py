@@ -61,7 +61,8 @@ class QADataset(Dataset):
     Array of correct answers.
     """
     def get_answer(self, i) -> list:
-        return [self.dataset[i]['answer']]
+        answers = [{'answer': answer, 'aliases': []} for answer in self.dataset[i]['answers']]
+        return answers
 
     def get_question_from_sample(self, sample) -> str:
         return sample['question']

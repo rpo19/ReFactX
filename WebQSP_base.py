@@ -7,6 +7,7 @@ class WebQSPDataset(QADataset):
     def get_answer(self, i) -> list:
         answers = []
         for parse in self.dataset[i]['Parses']:
+            current_answer = {'an'}
             for answer in parse['Answers']:
                 if answer['AnswerType'] == "Entity":
                     answers.append(answer['EntityName'])
