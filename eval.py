@@ -11,14 +11,46 @@ import datetime
 import click
 import time
 
-def logrotate(file_name):
+def eq_metadata(metadata1, metadata2):
+    if metadata1['index_config_path'] != metadata2['index_config_path']:
+        return False
+    if metadata1['model_config_path'] != metadata2['model_config_path']:
+        return False
+    if metadata1['dataset_config_path'] != metadata2['dataset_config_path']:
+        return False
+    # if metadata1['experiment_name'] != metadata2['experiment_name']: # ignore exp name
+    #     return False
+    # if metadata1['date'] != metadata2['date']: # ignore date
+    #     return False
+    if metadata1['index_config'] != metadata2['index_config']:
+        return False
+    if metadata1['model_config'] != metadata2['model_config']:
+        return False
+    if metadata1['dataset_config'] != metadata2['dataset_config']:
+        return False
+    return True
+
+def logrotate(file_name, dataset_length=None, metadata=None):
     idx = 0
+    dataset_start_from = 0
     while True:
+        if os.path.isfile(f'{file_name}.{idx}'):
+            if dataset_length is not None:
+                with open(f'{file_name}.{idx}', 'r') as fd:
+                    prev_output = fd.readlines()
+                    header = json.loads(prev_output[0])
+                    prev_output = prev_output[1:]
+                    prev_dataset_length = len(prev_output)
+                if prev_dataset_length < dataset_length and eq_metadata(header, metadata):
+                    dataset_start_from = prev_dataset_length
+                    print(f'Found incomplete run file: {file_name}.{idx}. Continuing from {dataset_start_from}.')
+                    break
+            idx += 1
         if not os.path.isfile(f'{file_name}.{idx}'):
             break
         idx += 1
 
-    return f'{file_name}.{idx}'
+    return f'{file_name}.{idx}', dataset_start_from
 
 def get_utc_date_and_time():
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -34,7 +66,8 @@ def get_utc_date_and_time():
 @click.option("--wandb", "wandb", is_flag=True, help="Log in wandb")
 @click.option("--unconstrained-generation", is_flag=True, help="Unconstrained generation")
 @click.option("--debug", is_flag=True, help="Print debug information.")
-def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb, unconstrained_generation, debug):
+@click.option("--continue", 'continue_from_previous_run', is_flag=True, help="Continue previous run if not concluded (and if config was the same).")
+def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb, unconstrained_generation, debug, continue_from_previous_run):
     if index_config_path.endswith('.py'):
         index_config_path = index_config_path[:-3]
     index_module = importlib.import_module(index_config_path)
@@ -54,25 +87,37 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         experiment_name = f'{os.path.basename(dataset_config_path)}.{os.path.basename(model_config_path)}.{os.path.basename(index_config_path)}'
     if output_file is None:
         output_file = f'{experiment_name}.out'
-    output_file = logrotate(output_file)
+
+    metadata_plus = {
+        'index_config_path': index_config_path,
+        'model_config_path': model_config_path,
+        'dataset_config_path': dataset_config_path,
+        'experiment_name': experiment_name,
+        'date': get_utc_date_and_time(),
+        'index_config': dict(index_config),
+        'model_config': dict(model_config),
+        'dataset_config': dict(dataset.dump_config())
+    }
+
+    if continue_from_previous_run:
+        output_file, dataset_start_from = logrotate(output_file, len(dataset), metadata_plus)
+    else:
+        output_file, dataset_start_from = logrotate(output_file)
     print('Output file:', output_file)
     if wandb:
         print('Logging in wandb.')
         time.sleep(5) # let the user time to stop
 
-    with open(output_file, 'w') as output_fd:
-        metadata_plus = {
-            'index_config_path': index_config_path,
-            'model_config_path': model_config_path,
-            'dataset_config_path': dataset_config_path,
-            'experiment_name': experiment_name,
-            'date': get_utc_date_and_time(),
-            'index_config': dict(index_config),
-            'model_config': dict(model_config),
-            'dataset_config': dict(dataset.dump_config())
-        }
-        output_fd.write(json.dumps(metadata_plus))
-        output_fd.write('\n')
+    assert os.path.isfile(output_file) or dataset_start_from == 0
+
+    if dataset_start_from > 0:
+        output_file_mode = 'a'
+        dataset = dataset[dataset_start_from:]
+    else:
+        output_file_mode = 'w'
+    with open(output_file, output_file_mode) as output_fd:
+        if dataset_start_from == 0:
+            output_fd.write(json.dumps(metadata_plus) + '\n')
 
         if wandb:
             import wandb
@@ -195,8 +240,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                             triples=list(map(model_config.tokenizer.decode, state.generated_triples)),
                             reached_max_tokens=reached_max_tokens,
                         )
-                    output_fd.write(json.dumps(sample))
-                    output_fd.write('\n')
+                    output_fd.write(json.dumps(sample) + '\n')
 
                     if wandb:
                         wandb.log(sample)

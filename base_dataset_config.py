@@ -51,7 +51,12 @@ class QADataset(Dataset):
                 super().__init__(dataset, config, preprocess)
 
             def __getitem__(dataset_self, idx):
-                return dataset_self.get_question(idx)
+                if isinstance(idx, slice):
+                    config = self.config.copy()
+                    config['start_from'] = idx.start
+                    return DynamicQuestionsDataset(dataset_self.dataset[idx], dataset_self.config, preprocess=False)
+                else:
+                    return dataset_self.get_question(idx)
 
             def __iter__(dataset_self):
                 for sample in super().__iter__():
