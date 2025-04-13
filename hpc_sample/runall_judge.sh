@@ -33,7 +33,7 @@ for i in "${!PREDICTION_FILES[@]}"; do
         ${JUDGE_ADDITIONAL_ARGS_PER_MODEL[$i]}" # e.g. --wandb
 
   if [ "$DEBUG" == "true" ]; then
-    echo $SBATCH_ARGS
+    echo sbatch $SBATCH_ARGS
   else
     # Run the task
     sbatch $SBATCH_ARGS

@@ -36,7 +36,7 @@ for i in "${!MODELS[@]}"; do
         $ADDITIONAL_ARGS" # e.g. --wandb
 
   if [ "$DEBUG" == "true" ]; then
-    echo $SBATCH_ARGS
+    echo sbatch $SBATCH_ARGS
   else
     # Run the task
     sbatch $SBATCH_ARGS
