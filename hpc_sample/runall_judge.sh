@@ -34,10 +34,10 @@ for i in "${!PREDICTION_FILES[@]}"; do
 
   if [ "$DEBUG" == "true" ]; then
     echo $SBATCH_ARGS
+  else
+    # Run the task
+    sbatch $SBATCH_ARGS
   fi
-
-  # Run the task
-  sbatch $SBATCH_ARGS
 
   if [ "$DEBUG" == "true" ]; then
     echo "Debug mode enabled. Breaking after first iteration."
