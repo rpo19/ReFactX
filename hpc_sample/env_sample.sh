@@ -49,19 +49,6 @@ JUDGE_NUM_GPUS=2
 JUDGE_MEM=80G
 JUDGE_TIME_LIMIT=1:00:00
 
-JUDGE_ADDITIONAL_ARGS_PER_MODEL=(
-  "" # --fix-predictions --split-pattern '<\|end_of_text\|>'
-  ""
-  ""
-  ""
-  ""
-  ""
-  ""
-  ""
-  ""
-  ""
-)
-
 # Assert that the lengths of MODELS and INDEXES are equal
 if [ "${#MODELS[@]}" -ne "${#INDEXES[@]}" ]; then
   echo "Error: The lengths of MODELS and INDEXES arrays are not equal!" >&2

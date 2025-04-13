@@ -6,11 +6,12 @@ mkdir -p logs
 
 source env.sh
 
-PREDICTION_FILES=$@
+ADDITIONAL_ARGS="$@"
 
-for i in "${!PREDICTION_FILES[@]}"; do
-  PREDICTION_FILE=${PREDICTION_FILES[$i]}
-  if [ ! -f "$PREDICTION_FILE" ]; then
+ITERATION_COUNT=0
+
+while read PREDICTION_FILE; do
+  if [ ! -f "../$PREDICTION_FILE" ]; then
     echo "Error: Prediction file $PREDICTION_FILE does not exist!" >&2
     exit 1
   fi
@@ -30,7 +31,7 @@ for i in "${!PREDICTION_FILES[@]}"; do
         $PREDICTION_FILE \
         $JUDGE_DEVICE_MAP \
         $JUDGE_BATCH_SIZE \
-        ${JUDGE_ADDITIONAL_ARGS_PER_MODEL[$i]}" # e.g. --wandb
+        $ADDITIONAL_ARGS" # e.g. --wandb
 
   if [ "$DEBUG" == "true" ]; then
     echo sbatch $SBATCH_ARGS
@@ -38,6 +39,8 @@ for i in "${!PREDICTION_FILES[@]}"; do
     # Run the task
     sbatch $SBATCH_ARGS
   fi
+
+  ITERATION_COUNT=$((ITERATION_COUNT + 1))
 
   if [ "$DEBUG" == "true" ]; then
     echo "Debug mode enabled. Breaking after first iteration."
@@ -58,6 +61,6 @@ echo "Judge batch size: $JUDGE_BATCH_SIZE" >> logs/runall_$LOG_DATE.log
 echo "Additional args per model: ${JUDGE_ADDITIONAL_ARGS_PER_MODEL[@]}" >> logs/runall_$LOG_DATE.log
 
 if [ "$DEBUG" != "true" ]; then
-  echo "${#PREDICTION_FILES[@]} jobs submitted."
+  echo "$ITERATION_COUNT jobs submitted."
   squeue --me
 fi
