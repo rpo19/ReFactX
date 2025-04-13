@@ -19,6 +19,7 @@ class CWQDataset(QADataset):
     def fix_encoding(self, text):
         return text.encode('latin-1').decode('utf-8')
     def preprocess(self, dataset):
-        for sample in dataset:
-            sample['question'] = self.fix_encoding(sample['question'])
+        if self.config.get('fix_encoding', True):
+            for sample in dataset:
+                sample['question'] = self.fix_encoding(sample['question'])
         return dataset

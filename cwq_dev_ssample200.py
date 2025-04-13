@@ -9,6 +9,7 @@ config = {
     'sample_size': 200,
     'stratify': True,
     'columns': ['compositionality_type'],
+    'fix_encoding': False, # already fixed during sampling
 }
 
 print(f'Loading {config["path"]}')
