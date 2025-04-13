@@ -28,6 +28,11 @@ for i in "${!MODELS[@]}"; do
         $MODEL \
         $DATASET \
         $ADDITIONAL_ARGS # e.g. --wandb
+
+  if [ "$DEBUG" == "true" ]; then
+    echo "Debug mode enabled. Breaking after first iteration."
+    break
+  fi
 done
 
 # # Print to file a log of the variables used
