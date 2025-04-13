@@ -4,7 +4,7 @@ export HF_HUB_CACHE=/path/to/hf/hub
 
 # do not define MODEL and INDEX here
 
-MODELS=(llama_1B_model llama_8B_model llama_70B_model phi4_model qwen25_05_model qwen25_1B_model qwen25_3B_model qwen25_7B_model qwen25_14B_model qwen25_32B_model qwen25_72B_model)
+MODELS=(llama_1B_model llama_8B_model llama_70B_model phi4_model qwen25_05B_model qwen25_1B_model qwen25_3B_model qwen25_7B_model qwen25_14B_model qwen25_32B_model qwen25_72B_model)
 
 # # postgres indexes
 # INDEXES=(llama_index llama_index llama_index phi4_index qwen25_index qwen25_index qwen25_index qwen25_index qwen25_index qwen25_index qwen25_index)
