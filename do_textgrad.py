@@ -288,8 +288,8 @@ if __name__ == '__main__':
 
     # %%
     llm_api_test = ChatConstrainedHF(
-        model_config_path="qwen25_3B_model",
-        index_config_path="qwen25_index",
+        model_config_path="phi4_model",
+        index_config_path="http_index_phi4",
         system_prompt=None,
         cache_path=os.path.join(platformdirs.user_cache_dir("textgrad"), "cache_hf_llama1.db"),
     )
@@ -376,5 +376,5 @@ if __name__ == '__main__':
             if steps == 3:
                 break
 
-    with open('textgrad_results.json','w') as fd:
-        json.dump(results, fd)
+        with open(f'textgrad_results_epoch_{epoch}.json.out','w') as fd:
+            json.dump(results, fd)
