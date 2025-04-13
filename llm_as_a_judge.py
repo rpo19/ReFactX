@@ -153,10 +153,10 @@ def judge_predictions(model_name, dataset_path, input_file, fix_predictions, no_
         prompts = []
         prompts_idx = []
         skipped_idx = []
-        prompt_template = {
+        prompt_template = [{
             'role': 'system',
             'content': 'You are a judge. You will be given a question, the correct answer, and a predicted answer. The correct answer is a list that contains the different correct answers that must be mentioned in a correct prediction. Optionally the answer can have aliases. You consider correct when a prediction contains all the answers (or eventually their aliases).'
-        }
+        }]
         # TODO add few shot examples?
         for i in range(len(evaluation)):
             question = dataset.get_question(i)
