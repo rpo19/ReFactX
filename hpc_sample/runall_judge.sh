@@ -15,7 +15,7 @@ for i in "${!PREDICTION_FILES[@]}"; do
     exit 1
   fi
   JOB_NAME="judge_$PREDICTION_FILE"
-  CMD=sbatch --job-name=$JOB_NAME \
+  SBATCH_ARGS="--job-name=$JOB_NAME \
         --output=logs/$JOB_NAME_%j_out.log \
         --error=logs/$JOB_NAME_%j_err.log \
         --partition=$PARTITION \
@@ -30,14 +30,14 @@ for i in "${!PREDICTION_FILES[@]}"; do
         $PREDICTION_FILE \
         $JUDGE_DEVICE_MAP \
         $JUDGE_BATCH_SIZE \
-        ${JUDGE_ADDITIONAL_ARGS_PER_MODEL[$i]} # e.g. --wandb
+        ${JUDGE_ADDITIONAL_ARGS_PER_MODEL[$i]}" # e.g. --wandb
 
   if [ "$DEBUG" == "true" ]; then
-    echo $CMD
+    echo $SBATCH_ARGS
   fi
 
-  # Run the command
-  $CMD
+  # Run the task
+  sbatch $SBATCH_ARGS
 
   if [ "$DEBUG" == "true" ]; then
     echo "Debug mode enabled. Breaking after first iteration."

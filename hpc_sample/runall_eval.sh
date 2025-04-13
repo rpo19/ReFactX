@@ -19,7 +19,7 @@ for i in "${!MODELS[@]}"; do
   TIME_LIMIT=${TIME_LIMIT_PER_MODEL[$i]}
   ADDITIONAL_ARGS="${ADDITIONAL_ARGS_ALL} ${ADDITIONAL_ARGS_PER_MODEL[$i]}"
 
-  CMD=sbatch --job-name=$JOB_NAME \
+  SBATCH_ARGS="--job-name=$JOB_NAME \
         --output=logs/${JOB_NAME}_%j_out.log \
         --error=logs/${JOB_NAME}_%j_err.log \
         --partition=$PARTITION \
@@ -33,14 +33,14 @@ for i in "${!MODELS[@]}"; do
         $INDEX \
         $MODEL \
         $DATASET \
-        $ADDITIONAL_ARGS # e.g. --wandb
+        $ADDITIONAL_ARGS" # e.g. --wandb
 
   if [ "$DEBUG" == "true" ]; then
-    echo $CMD
+    echo $SBATCH_ARGS
   fi
 
-  # Run the command
-  $CMD
+  # Run the task
+  sbatch $SBATCH_ARGS
 
   if [ "$DEBUG" == "true" ]; then
     echo "Debug mode enabled. Breaking after first iteration."
@@ -61,5 +61,5 @@ echo "Dataset: $DATASET" >> logs/runall_$LOG_DATE.log
 echo "Additional args: $ADDITIONAL_ARGS" >> logs/runall_$LOG_DATE.log
 echo "Job name: $JOB_NAME" >> logs/runall_$LOG_DATE.log
 
-echo "${!MODELS[@]} jobs submitted for dataset $DATASET."
+echo "${#MODELS[@]} jobs submitted for dataset $DATASET."
 squeue --me
