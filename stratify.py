@@ -3,6 +3,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 import click
 import random
+import importlib
 
 def distribution(df, column: str, do_print=True):
     """
@@ -16,7 +17,7 @@ def distribution(df, column: str, do_print=True):
     return dist_df
 
 @click.command()
-@click.option('--dataset', 'dataset_path', required=True, type=click.Path(exists=True), help="Path to the input JSON dataset.")
+@click.option('--dataset', 'dataset_config_path', required=True, type=str, help="Path to the dataset config.")
 @click.option('--columns', required=False, multiple=True, default=[], help="Columns to stratify by (e.g., --columns complexityType --columns category).")
 @click.option('--sample-size', type=int, help="Size of the sample (use this or --sample-fraction).")
 @click.option('--sample-fraction', type=float, help="Fraction of the dataset to sample (use this or --sample-size).")
@@ -25,7 +26,7 @@ def distribution(df, column: str, do_print=True):
 @click.option('--json-questions-path', type=str, default=".", help='Json path for the questions in the json file (e.g. ".dataset.questions").')
 @click.option('--input-encoding', type=str, default="utf-8", help='Input dataset encoding.')
 @click.option('--output-encoding', type=str, default="utf-8", help='Input dataset encoding.')
-def stratify_dataset(dataset_path, columns, sample_size, sample_fraction, output, random_seed, json_questions_path, input_encoding, output_encoding):
+def stratify_dataset(dataset_config_path, columns, sample_size, sample_fraction, output, random_seed, json_questions_path, input_encoding, output_encoding):
     """
     Perform stratified sampling on a dataset based on specified columns.
     """
@@ -33,24 +34,11 @@ def stratify_dataset(dataset_path, columns, sample_size, sample_fraction, output
     if (sample_size is None and sample_fraction is None) or (sample_size is not None and sample_fraction is not None):
         raise ValueError("You must specify exactly one of --sample-size or --sample-fraction.")
 
-    # Load dataset from JSON file
-    with open(dataset_path, "r", encoding=input_encoding) as f:
-        raw_data = json.load(f)
-
-    data = raw_data
-    update_pointer = None
-    if json_questions_path != '.':
-        if json_questions_path.startswith('.'):
-            # If the path starts with '.', remove it
-            json_questions_path = json_questions_path[1:]
-        hops = json_questions_path.split('.')
-        assert len(hops) > 0, "The --json-questions-path should not be empty."
-        for hop in hops[:-1]:
-            data = data[hop]
-        update_pointer = data
-        data = update_pointer[hops[-1]]
-
-    assert isinstance(data, list), "The questions should be a list of records."
+    if dataset_config_path.endswith('.py'):
+        dataset_config_path = dataset_config_path[:-3]
+    dataset_module = importlib.import_module(dataset_config_path)
+    dataset = getattr(dataset_module, 'dataset')
+    data = dataset.dataset
 
     if len(columns) > 0:
         # Do stratified sampling
@@ -94,10 +82,8 @@ def stratify_dataset(dataset_path, columns, sample_size, sample_fraction, output
         random.seed(random_seed)  # Set the random seed for reproducibility
         sampled_data = random.sample(data, sample_size)
 
-    if json_questions_path != '.':
-        update_pointer[hops[-1]] = sampled_data
-    else:
-        raw_data = sampled_data
+    dataset.dataset = sampled_data
+    raw_data = dataset.dump()
 
     # Save the stratified sample to a new JSON file
     with open(output, "w", encoding=output_encoding) as f:

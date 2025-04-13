@@ -16,3 +16,9 @@ class CWQDataset(QADataset):
         if textual_answer.endswith(', '):
             textual_answer = textual_answer[:-2]
         return textual_answer.strip()
+    def fix_encoding(self, text):
+        return text.encode('latin-1').decode('utf-8')
+    def preprocess(self, dataset):
+        for sample in dataset:
+            sample['question'] = self.fix_encoding(sample['question'])
+        return dataset

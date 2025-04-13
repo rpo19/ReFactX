@@ -5,6 +5,9 @@ import os
 load_dotenv()
 
 class QADataset(Dataset):
+    def dump(self):
+        return self.dataset
+
     def preprocess(self, dataset):
         return dataset
 
