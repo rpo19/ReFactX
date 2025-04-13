@@ -7,5 +7,5 @@ MODEL=$2
 DATASET=$3
 ADDITIONAL_ARGS=$4
 
-cd ../..
+cd ..
 python eval.py --index $INDEX --model $MODEL --dataset $DATASET $ADDITIONAL_ARGS
