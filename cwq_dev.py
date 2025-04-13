@@ -11,4 +11,4 @@ print(f'Loading {config["path"]}')
 with open(config['path']) as fd:
     raw_dataset = json.load(fd)
 
-dataset = CWQDataset(raw_dataset, config)
+dataset = CWQDataset(raw_dataset, config, preprocess=False)
