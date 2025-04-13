@@ -57,7 +57,7 @@ echo "Judge device map: $JUDGE_DEVICE_MAP" >> logs/runall_$LOG_DATE.log
 echo "Judge batch size: $JUDGE_BATCH_SIZE" >> logs/runall_$LOG_DATE.log
 echo "Additional args per model: ${JUDGE_ADDITIONAL_ARGS_PER_MODEL[@]}" >> logs/runall_$LOG_DATE.log
 
-echo "${#PREDICTION_FILES[@]} jobs submitted."
 if [ "$DEBUG" != "true" ]; then
+  echo "${#PREDICTION_FILES[@]} jobs submitted."
   squeue --me
 fi
