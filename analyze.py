@@ -273,8 +273,7 @@ def get_judge_evaluation(judge_evaluation, idx=None):
 @click.option('--force', is_flag=True, default=False, help='Overwrite outfile if existing.')
 @click.option('--group', is_flag=True, required=False, default=None, help='Calculate grouped metrics (e.g. by question type).')
 @click.option('--judge', required=False, help="Path to the llm-as-a-judge output file.")
-@click.option('--overwrite-judge', is_flag=True, default=False, help='Overwrite judge decision.')
-def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding_pattern, no_fix_none_prediction, split_pattern, force, group, judge, overwrite_judge):
+def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding_pattern, no_fix_none_prediction, split_pattern, force, group, judge):
 
     judge_evaluation = None
     if judge:
@@ -284,13 +283,13 @@ def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding
             judge_line = judge_fd.readline()
             while judge_line:
                 sample = json.loads(judge_line)
-                if overwrite_judge or 'llm_decision' not in sample:
-                    sample['llm_decision'] = 'yes' if sample['llm_full_answer'].lower().startswith('yes') else 'no'
                 judge_evaluation.append(sample)
                 judge_line = judge_fd.readline()
 
         if infile is None:
             infile = judge_metadata.get('prediction_file')
+
+        judge_model = judge_metadata['model']
 
     if infile is None:
         print('Error: No input file provided.')
@@ -411,7 +410,20 @@ def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding
         if group is not None:
             complexity_df.to_excel(writer, sheet_name="Complexity distribution")
             grouped_answered_metrics.to_excel(writer, sheet_name="Grouped metrics")
-        metadata_gen = [('dataset_path', dataset_path), ('input_file', infile), ('fix_predictions', fix_predictions), ('no_fix_none_prediction', no_fix_none_prediction), ('split_pattern', split_pattern)]
+        metadata_gen = [
+            ('dataset_path', dataset_path),
+            ('input_file', infile),
+            ('fix_predictions', fix_predictions),
+            ('fix_max_tokens', fix_max_tokens),
+            ('padding_pattern', padding_pattern),
+            ('no_fix_none_prediction', no_fix_none_prediction),
+            ('split_pattern', split_pattern),
+            ('force', force),
+            ('group', group),
+            ('judge', judge),
+        ]
+        if judge:
+            metadata_gen.append(('judge_model', judge_model))
         metadata_gen.extend(header.items())
         metadata_df = pd.DataFrame(metadata_gen, columns=['Key', 'Value'])
         metadata_df.to_excel(writer, sheet_name="Metadata", index=False)
