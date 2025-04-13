@@ -1,4 +1,9 @@
 #!/bin/bash
+set -e
+set -o pipefail
+
+mkdir -p logs
+
 source env.sh
 
 DATASET=$1
