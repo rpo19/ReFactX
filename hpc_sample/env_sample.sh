@@ -12,6 +12,22 @@ MODELS=(llama_1B_model llama_8B_model llama_70B_model phi4_model qwen25_1B_model
 # http indexes
 INDEXES=(http_index_llama http_index_llama http_index_llama http_index_phi4 http_index_qwen http_index_qwen http_index_qwen http_index_qwen http_index_qwen http_index_qwen)
 
+ADDITIONAL_ARGS_PER_MODEL=(
+  ""
+  ""
+  ""
+  ""
+  ""
+  ""
+  ""
+  ""
+  ""
+  ""
+)
+
+# # HPC partition
+PARTITION=your_partition_name
+
 # # Define the number of GPUs for each model
 GPUS_NUM_PER_MODEL=(1 1 4 2 1 1 1 2 3 4)
 
@@ -24,10 +40,29 @@ MEM_PER_MODEL=(20 40 80 40 20 40 40 40 80 80)
 # # Define the time limit for each model (in hours)
 TIME_LIMIT_PER_MODEL=(1:00:00 2:00:00 8:00:00 4:00:00 1:00:00 2:00:00 3:00:00 4:00:00 5:00:00 8:00:00)
 
+# LLM as a judge
+JUDGE_MODEL=meta-llama/Llama-3.3-70B-Instruct
+JUDGE_BATCH_SIZE=4
+JUDGE_DEVICE_MAP=auto
+JUDGE_NUM_GPUS=2
+JUDGE_MEM=80
+JUDGE_TIME_LIMIT=1:00:00
+
+JUDGE_ADDITIONAL_ARGS_PER_MODEL=(
+  "" # --fix-predictions --split-pattern '<\|end_of_text\|>'
+  ""
+  ""
+  ""
+  ""
+  ""
+  ""
+  ""
+  ""
+  ""
+)
+
 # Assert that the lengths of MODELS and INDEXES are equal
 if [ "${#MODELS[@]}" -ne "${#INDEXES[@]}" ]; then
   echo "Error: The lengths of MODELS and INDEXES arrays are not equal!" >&2
   exit 1
-
-# # HPC variables
-PARTITION=your_partition_name
+fi

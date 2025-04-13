@@ -2,7 +2,7 @@
 source env.sh
 
 DATASET=$1
-ADDITIONAL_ARGS="${@:2}"
+ADDITIONAL_ARGS_ALL="${@:2}"
 
 for i in "${!MODELS[@]}"; do
   MODEL=${MODELS[$i]}
@@ -12,8 +12,9 @@ for i in "${!MODELS[@]}"; do
   NODES_NUM=${NODES_NUM_PER_MODEL[$i]}
   MEM=${MEM_PER_MODEL[$i]}
   TIME_LIMIT=${TIME_LIMIT_PER_MODEL[$i]}
+  ADDITIONAL_ARGS="${ADDITIONAL_ARGS_ALL} ${ADDITIONAL_ARGS_PER_MODEL[$i]}"
 
-  sbatch runbatch.sh --job-name=$JOB_NAME \
+  sbatch runeval.sh --job-name=$JOB_NAME \
         --output=logs/${JOB_NAME}_%j_out.log \
         --error=logs/${JOB_NAME}_%j_err.log \
         --partition=$PARTITION \
