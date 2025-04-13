@@ -12,7 +12,6 @@
 #     answer = obj['AnswerArgument']
 
 import json
-import os
 from WebQSP_base import WebQSPDataset
 
 path = WebQSPDataset.get_dataset_path('WebQSP.test.json')
@@ -26,9 +25,3 @@ with open(config['path']) as fd:
     raw_dataset = json.load(fd)
 
 dataset = WebQSPDataset(raw_dataset, config)
-
-# DATASET_START_FROM = int(os.environ.get('DATASET_START_FROM', 0))
-# if DATASET_START_FROM:
-#     print(f'Loading dataset from {DATASET_START_FROM}')
-#     dataset = dataset[DATASET_START_FROM:]
-#     dataset.config['start_from'] = DATASET_START_FROM

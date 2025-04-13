@@ -1,10 +1,14 @@
 import json
 from cwq_base import CWQDataset
 
-path = CWQDataset.get_dataset_path('ComplexWebQuestions_dev.json')
+path = CWQDataset.get_dataset_path('ComplexWebQuestions_dev_ssample200.json')
 
 config = {
     'path': path,
+    'random_seed': 42,
+    'sample_size': 200,
+    'stratify': True,
+    'columns': ['compositionality_type'],
 }
 
 print(f'Loading {config["path"]}')
