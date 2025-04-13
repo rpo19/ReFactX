@@ -12,7 +12,7 @@ ADDITIONAL_ARGS_ALL="${@:2}"
 for i in "${!MODELS[@]}"; do
   MODEL=${MODELS[$i]}
   INDEX=${INDEXES[$i]}
-  JOB_NAME="${MODEL}_${DATASET}"
+  JOB_NAME="$(basename $MODEL)_$(basename $DATASET)"
   GPUS_NUM=${GPUS_NUM_PER_MODEL[$i]}
   NODES_NUM=${NODES_NUM_PER_MODEL[$i]}
   MEM=${MEM_PER_MODEL[$i]}
