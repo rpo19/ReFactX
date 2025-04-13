@@ -15,7 +15,7 @@ while read PREDICTION_FILE; do
     echo "Error: Prediction file $PREDICTION_FILE does not exist!" >&2
     exit 1
   fi
-  JOB_NAME="judge_$PREDICTION_FILE"
+  JOB_NAME="judge_$(basename $PREDICTION_FILE)"
   SBATCH_ARGS="--job-name=$JOB_NAME \
         --output=logs/$JOB_NAME_%j_out.log \
         --error=logs/$JOB_NAME_%j_err.log \
@@ -42,10 +42,6 @@ while read PREDICTION_FILE; do
 
   ITERATION_COUNT=$((ITERATION_COUNT + 1))
 
-  if [ "$DEBUG" == "true" ]; then
-    echo "Debug mode enabled. Breaking after first iteration."
-    break
-  fi
 done
 
 # Print to file a log of the variables used
