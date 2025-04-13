@@ -160,7 +160,7 @@ def judge_predictions(model_name, dataset_path, input_file, fix_predictions, no_
         # TODO add few shot examples?
         for i in range(len(evaluation)):
             question = dataset.get_question(i)
-            assert evaluation[i]['question'] == question
+            assert evaluation[i]['question'] == question, (f"Question mismatch: {evaluation[i]['question']} != {question}")
             correct_answer = dataset.get_answer(i)
             predicted_answer = evaluation[i]['prediction']
             if question and correct_answer and predicted_answer:
