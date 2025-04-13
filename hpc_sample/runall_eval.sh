@@ -57,4 +57,6 @@ echo "Additional args: $ADDITIONAL_ARGS" >> logs/runall_$LOG_DATE.log
 echo "Job name: $JOB_NAME" >> logs/runall_$LOG_DATE.log
 
 echo "${#MODELS[@]} jobs submitted for dataset $DATASET."
-squeue --me
+if [ "$DEBUG" != "true" ]; then
+  squeue --me
+fi

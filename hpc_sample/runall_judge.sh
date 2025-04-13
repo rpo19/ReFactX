@@ -58,4 +58,6 @@ echo "Judge batch size: $JUDGE_BATCH_SIZE" >> logs/runall_$LOG_DATE.log
 echo "Additional args per model: ${JUDGE_ADDITIONAL_ARGS_PER_MODEL[@]}" >> logs/runall_$LOG_DATE.log
 
 echo "${#PREDICTION_FILES[@]} jobs submitted."
-squeue --me
+if [ "$DEBUG" != "true" ]; then
+  squeue --me
+fi
