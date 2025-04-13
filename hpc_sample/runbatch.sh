@@ -1,21 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=jobname
-#SBATCH --nodes=1
-#SBATCH --time=01:00:00
-#SBATCH --partition=part1
-#SBATCH --gres=gpu:1
-#SBATCH --mem=16G
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --output=job_output.out      # Standard output
-#SBATCH --error=job_error.out        # Standard error
 
-#module load module1
+source env.sh
 
-#source /opt/share/conda.sh # load conda
+INDEX=$1
+MODEL=$2
+DATASET=$3
+ADDITIONAL_ARGS=$4
 
-export HF_HUB_CACHE=/tmp/huggingface/home/hub
-mkdir -p $HF_HUB_CACHE
-
-python eval.py --index phi4_index --model phi4_model --dataset mintaka_sample_dev mdz-hpc-phi4-mintaka-sample-dev mdz-hpc-phi4-mintaka-sample-dev.out
-
+cd ../..
+python eval.py --index $INDEX --model $MODEL --dataset $DATASET $ADDITIONAL_ARGS
