@@ -17,8 +17,8 @@ while read PREDICTION_FILE; do
   fi
   JOB_NAME="judge_$(basename $PREDICTION_FILE)"
   SBATCH_ARGS="--job-name=$JOB_NAME \
-        --output=logs/$JOB_NAME_%j_out.log \
-        --error=logs/$JOB_NAME_%j_err.log \
+        --output=logs/${JOB_NAME}_%j_out.log \
+        --error=logs/${JOB_NAME}_%j_err.log \
         --partition=$PARTITION \
         --gres=gpu:$JUDGE_NUM_GPUS \
         --nodes=1 \
