@@ -35,18 +35,21 @@ def logrotate(file_name, dataset_length=None, metadata=None):
     dataset_start_from = 0
     while True:
         if os.path.isfile(f'{file_name}.{idx}'):
+            print(f'Found file: {file_name}.{idx}. Checking if it is complete.')
             if dataset_length is not None:
                 with open(f'{file_name}.{idx}', 'r') as fd:
                     prev_output = fd.readlines()
                     header = json.loads(prev_output[0])
                     prev_output = prev_output[1:]
                     prev_dataset_length = len(prev_output)
-                if prev_dataset_length < dataset_length and eq_metadata(header, metadata):
-                    dataset_start_from = prev_dataset_length
-                    print(f'Found incomplete run file: {file_name}.{idx}. Continuing from {dataset_start_from}.')
-                    break
-            idx += 1
-        if not os.path.isfile(f'{file_name}.{idx}'):
+                if prev_dataset_length < dataset_length:
+                    if eq_metadata(header, metadata):
+                        dataset_start_from = prev_dataset_length
+                        print(f'Found incomplete run file: {file_name}.{idx}. Continuing from {dataset_start_from}.')
+                        break
+                    else:
+                        print(f'Found incomplete run file: {file_name}.{idx}, but metadata mismatch. Ignoring it.')
+        else:
             break
         idx += 1
 
