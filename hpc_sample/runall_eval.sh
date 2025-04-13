@@ -37,14 +37,9 @@ for i in "${!MODELS[@]}"; do
 
   if [ "$DEBUG" == "true" ]; then
     echo $SBATCH_ARGS
-  fi
-
-  # Run the task
-  sbatch $SBATCH_ARGS
-
-  if [ "$DEBUG" == "true" ]; then
-    echo "Debug mode enabled. Breaking after first iteration."
-    break
+  else
+    # Run the task
+    sbatch $SBATCH_ARGS
   fi
 done
 
