@@ -25,6 +25,11 @@ for i in "${!PREDICTION_FILES[@]}"; do
         $JUDGE_DEVICE_MAP \
         $JUDGE_BATCH_SIZE \
         ${JUDGE_ADDITIONAL_ARGS_PER_MODEL[$i]} # e.g. --wandb
+
+  if [ "$DEBUG" == "true" ]; then
+    echo "Debug mode enabled. Breaking after first iteration."
+    break
+  fi
 done
 
 # Print to file a log of the variables used
