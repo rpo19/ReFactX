@@ -19,7 +19,7 @@ for i in "${!MODELS[@]}"; do
   TIME_LIMIT=${TIME_LIMIT_PER_MODEL[$i]}
   ADDITIONAL_ARGS="${ADDITIONAL_ARGS_ALL} ${ADDITIONAL_ARGS_PER_MODEL[$i]}"
 
-  sbatch runeval.sh --job-name=$JOB_NAME \
+  CMD=sbatch --job-name=$JOB_NAME \
         --output=logs/${JOB_NAME}_%j_out.log \
         --error=logs/${JOB_NAME}_%j_err.log \
         --partition=$PARTITION \
@@ -29,10 +29,18 @@ for i in "${!MODELS[@]}"; do
         --cpus-per-task=1 \
         --mem=$MEM \
         --time=$TIME_LIMIT \
+        runeval.sh \
         $INDEX \
         $MODEL \
         $DATASET \
         $ADDITIONAL_ARGS # e.g. --wandb
+
+  if [ "$DEBUG" == "true" ]; then
+    echo $CMD
+  fi
+
+  # Run the command
+  $CMD
 
   if [ "$DEBUG" == "true" ]; then
     echo "Debug mode enabled. Breaking after first iteration."

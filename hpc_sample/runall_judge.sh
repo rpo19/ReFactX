@@ -15,7 +15,7 @@ for i in "${!PREDICTION_FILES[@]}"; do
     exit 1
   fi
   JOB_NAME="judge_$PREDICTION_FILE"
-  sbatch runjudge.sh --job-name=$JOB_NAME \
+  CMD=sbatch --job-name=$JOB_NAME \
         --output=logs/$JOB_NAME_%j_out.log \
         --error=logs/$JOB_NAME_%j_err.log \
         --partition=$PARTITION \
@@ -25,11 +25,19 @@ for i in "${!PREDICTION_FILES[@]}"; do
         --cpus-per-task=1 \
         --mem=$JUDGE_MEM \
         --time=$JUDGE_TIME_LIMIT \
+        runjudge.sh \
         $JUDGE_MODEL \
         $PREDICTION_FILE \
         $JUDGE_DEVICE_MAP \
         $JUDGE_BATCH_SIZE \
         ${JUDGE_ADDITIONAL_ARGS_PER_MODEL[$i]} # e.g. --wandb
+
+  if [ "$DEBUG" == "true" ]; then
+    echo $CMD
+  fi
+
+  # Run the command
+  $CMD
 
   if [ "$DEBUG" == "true" ]; then
     echo "Debug mode enabled. Breaking after first iteration."
