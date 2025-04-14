@@ -63,6 +63,8 @@ def main(index_config_path, model_config_path, question, num_beams, max_new_toke
             print('Insert question. (CTRL+C to exit).')
             question = input('> ')
 
+        states.reset()
+
         prompted_texts = [model_config.apply_prompt_template(question)]
         print(prompted_texts[0])
 
@@ -83,6 +85,8 @@ def main(index_config_path, model_config_path, question, num_beams, max_new_toke
                 kwargs={'constrained_state': states},  # passing state
                 **generation_config,
             )
+
+        states.beam_permutation() # final permutation to match final beams
 
         torch.cuda.empty_cache()
 
