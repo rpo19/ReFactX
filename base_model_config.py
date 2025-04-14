@@ -17,7 +17,7 @@ class ModelConfig():
             **load_model_args
             )
     def __init__(self, model_name, switch_pattern, newline_token, load_model = True, load_model_args = None, device_map = 'cuda',
-                model_class = AutoModelForCausalLM, torch_dtype='bfloat32'):
+                model_class = AutoModelForCausalLM, torch_dtype=torch.float32):
         self.model_name = model_name
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.tokenizer.pad_token = self.tokenizer.eos_token
