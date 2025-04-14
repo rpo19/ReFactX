@@ -2,6 +2,17 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import re
 
 class ModelConfig():
+    def load_model(self, load_model_args = None, device_map = 'cuda', torch_dtype='bfloat32'):
+        print(f'Loading {self.model_name}')
+        if load_model_args is None:
+            load_model_args = {}
+        if 'device_map' not in load_model_args and device_map is not None:
+            load_model_args['device_map'] = device_map
+        if 'torch_dtype' not in load_model_args and torch_dtype is not None:
+            load_model_args['torch_dtype'] = torch_dtype
+        self.model = self.model_class.from_pretrained(self.model_name,
+            **load_model_args
+            )
     def __init__(self, model_name, switch_pattern, newline_token, load_model = True, load_model_args = None, device_map = 'cuda',
                 model_class = AutoModelForCausalLM, torch_dtype='bfloat32'):
         self.model_name = model_name
@@ -14,16 +25,10 @@ class ModelConfig():
         #     bnb_4bit_quant_type='nf4',
         #     bnb_4bit_compute_dtype='bfloat16')
         self.model_class = model_class
+        self.load_model_args = load_model_args
         self.model_class_name = str(model_class)
         if load_model:
-            print(f'Loading {self.model_name}')
-            if load_model_args is None:
-                load_model_args = {}
-            if 'device_map' not in load_model_args and device_map is not None:
-                load_model_args['device_map'] = device_map
-            self.model = model_class.from_pretrained(self.model_name,
-                **load_model_args
-                )
+            self.load_model(self.load_model_args, device_map, torch_dtype)
         self.switch_pattern = switch_pattern # "Fact:" after newline
         self.newline_token = newline_token
         # self.answer_tokens = answer_tokens # "Answer:" after newline
@@ -184,7 +189,7 @@ Answer: I don't know.'''
 
         self.answer_pattern = re.compile(r'Answer: (.*)\.?')
 
-        self.skip_serialize = set(['skip_serialize','tokenizer', 'model', 'index', 'answer_pattern', 'model_class'])
+        self.skip_serialize = set(['skip_serialize','tokenizer', 'model', 'index', 'answer_pattern', 'model_class', 'load_model_args'])
 
     def apply_prompt_template(self, question=None):
         if question is None:
