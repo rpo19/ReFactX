@@ -13,6 +13,7 @@ services:
       - ./server.crt:/var/lib/postgresql/data/server.crt:ro
       - ./server.key:/var/lib/postgresql/data/server.key:ro
   nginx:
+    restart: $RESTART_POLICY
     image: nginx:1.26
     ports:
       - $NGINX_LISTEN:443
@@ -22,6 +23,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./.htpasswd:/etc/nginx/.htpasswd:ro
   api:
+    restart: $RESTART_POLICY
     build:
       context: ./api
       additional_contexts:
