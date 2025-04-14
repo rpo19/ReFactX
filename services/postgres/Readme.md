@@ -66,24 +66,6 @@ psql "sslmode=disable dbname=postgres host=host port=5432 user=user"
 # should give error
 ```
 
-### Redis with TLS
-#### Create redis.conf and set a strong password
-Copy `redis.conf.sample` to `redis.conf` and edit the password at the end of the file.
-#### Enable TLS in redis.conf
-Uncomment the lines after `TLS` at the end of the file and comment the Unsecure `port 6379`.
-#### Start redis
-It will use the same `server.crt` and `server.key` as postgres.
-```
-sudo docker compose -f docker-compose-tls.yml up -d redis
-```
-#### Check if TLS is working
-Connect from somewhere else and run some commands. (Replace configs like user and host).
-```
-redis-cli --tls -h host -p port --askpass --cacert ca.crt
-# then run some commands
-set mykey 12
-get mykey
-```
 ### Modify Listen Address
 Now that TLS is enabled you may want to reach postgres and redis from other machines. Just modify the listen address in the `.env` file to e.g. `0.0.0.0` for listening on all interfaces.
 ### Setup clients
