@@ -12,8 +12,9 @@ import sys
 @click.option('--model', 'model_config_path', default='qwen25_1B_model', help='Model module to import.')
 @click.option('--question', default=None, help='Question to process (if any: interactive mode).')
 @click.option('--num-beams', default=1, help='Number of beams for beam search.')
-@click.option('--generation-config', 'generation_config_str', default="max_new_tokens=512,do_sample=False,temperature=None,top_k=None", help='Generation config (e.g. "max_new_tokens=512,top_k=5").')
-def main(index_config_path, model_config_path, question, num_beams, generation_config_str):
+@click.option('--max-new-tokens', default=512, help='Number of max_new_tokens.')
+@click.option('--generation-config', 'generation_config_str', default="do_sample=False,temperature=None,top_k=None,top_p=None,min_p=None", help='Generation config (e.g. "max_new_tokens=512,top_k=5").')
+def main(index_config_path, model_config_path, question, num_beams, max_new_tokens, generation_config_str):
     try:
         generation_config = eval(f'dict({generation_config_str})')
     except Exception as e:
@@ -60,7 +61,7 @@ def main(index_config_path, model_config_path, question, num_beams, generation_c
     while True:
         if interactive_mode:
             print('Insert question. (CTRL+C to exit).')
-            question = input('>')
+            question = input('> ')
 
         prompted_texts = [model_config.apply_prompt_template(question)]
         print(prompted_texts[0])
@@ -75,6 +76,7 @@ def main(index_config_path, model_config_path, question, num_beams, generation_c
                 **inputs,
                 logits_processor=logits_processor_list,
                 streamer=auto_streamer,
+                max_new_tokens=max_new_tokens,
                 num_beams=num_beams,
                 num_return_sequences=num_beams,
                 use_cache=True,
