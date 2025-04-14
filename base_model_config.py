@@ -1,8 +1,11 @@
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import re
+import torch
 
 class ModelConfig():
-    def load_model(self, load_model_args = None, device_map = 'cuda', torch_dtype='bfloat32'):
+    def load_model(self, load_model_args = None, device_map = 'cuda', torch_dtype=torch.float32):
+        if isinstance(torch_dtype, str):
+            torch_dtype = getattr(torch, torch_dtype)
         print(f'Loading {self.model_name}')
         if load_model_args is None:
             load_model_args = {}
