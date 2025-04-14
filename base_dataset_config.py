@@ -11,7 +11,7 @@ class QADataset(Dataset):
     def preprocess(self, dataset):
         return dataset
 
-    def __init__(self, dataset, config, preprocess=True):
+    def __init__(self, dataset, config, preprocess=True, name='QADataset'):
         self.dataset = dataset
         self.config = config
         if preprocess:
@@ -83,6 +83,40 @@ class QADataset(Dataset):
 
     def get_question_type(self, i):
         return 'unknown'
+
+    '''
+    Usage:
+    ```
+        from datasets import Dataset
+        ds = Dataset.from_generator(QADataset.to_verl(prompt_fn))
+        ds.to_parquet(path)
+    ```
+    '''
+    def to_verl(self, prompt_fn=None):
+        if prompt_fn is None:
+            prompt_fn = lambda question: question
+
+        for i in range(len(self)):
+            question = self.get_question(i)
+            prompt = prompt_fn(question)
+            # TODO system prompt
+            data = {
+                "data_source": self.name,
+                "prompt": [{
+                    "role": "user",
+                    "content": prompt,
+                }],
+                "ability": "math",
+                "reward_model": {
+                    "style": "rule",
+                    "ground_truth": self.get_answer(i)
+                },
+                "extra_info": {
+                    'index': i,
+                    "question": question,
+                }
+            }
+            yield data
 
     @staticmethod
     def get_dataset_path(dataset_name):
