@@ -30,17 +30,7 @@ services:
         repo: ../..
     environment:
       INDEX_CONFIG_PATH: api_index.py
-      WORKERS_NUM: 4
+      WORKERS_NUM: $API_WORKERS_NUM
       POSTGRES_BASE_URL: $POSTGRES_BASE_URL
     volumes:
       - ./api_index.py:/app/api_index.py:ro
-  redis:
-    image: redis:7
-    command: redis-server /usr/local/etc/redis/redis.conf
-    ports:
-      - $REDIS_LISTEN:6379
-    volumes:
-      - $REDIS_DATA:/data
-      - ./redis.conf:/usr/local/etc/redis/redis.conf
-      - ./server.crt:/usr/local/etc/redis/server.crt:ro
-      - ./server.key:/usr/local/etc/redis/server.key:ro
