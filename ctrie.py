@@ -174,7 +174,7 @@ class DictIndex(Index):
             for level in prev_levels:
                 level[0] += 1
 
-    def next_tokens(self, sequence):
+    def next_tokens(self, sequence, **kwargs):
         level = self.tree
         cursor = 0
         level_cursor = 0
