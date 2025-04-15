@@ -110,31 +110,41 @@ def get_answered(predictions, evaluation):
 
     return answered_metrics, answered, dontknow, final_answers, final_answers_idx
 
-def get_exact_match(evaluation, dataset, idx=None):
+def get_exact_match(evaluation, dataset, idx=None, ignore_case=True):
     if idx is None:
         idx = range(len(evaluation))
     exact_match = np.zeros((len(idx),))
     j = 0
     for i in idx:
-        if evaluation[i]['prediction'] == dataset.get_answer(i):
+        prediction = evaluation[i]['prediction']
+        gt = dataset.get_answer(i)
+        if ignore_case:
+            prediction = prediction.lower()
+            gt = gt.lower()
+        if prediction == gt:
             exact_match[j] = 1
         j += 1
     return exact_match
 
-def get_inclusion_match(evaluation, dataset, idx=None):
+def get_inclusion_match(evaluation, dataset, idx=None, ignore_case=True):
     if idx is None:
         idx = range(len(evaluation))
     inclusion_match = np.zeros((len(idx),))
     j = 0
     for i in idx:
-        if dataset.get_answer(i) in evaluation[i]['prediction']:
+        prediction = evaluation[i]['prediction']
+        gt = dataset.get_answer(i)
+        if ignore_case:
+            prediction = prediction.lower()
+            gt = gt.lower()
+        if gt in prediction or prediction in gt: # double side
             inclusion_match[j] = 1
         j += 1
     return inclusion_match
 
 # ## BLEU, METEOR, ROUGE
 
-def get_other_metrics(evaluation, dataset, name='other_metrics', idx=None, do_print=True):
+def get_other_metrics(evaluation, dataset, name='other_metrics', idx=None, do_print=True, ignore_case=True):
     if idx is None:
         idx = range(len(evaluation))
     bleu_1 = np.zeros((len(idx),))
@@ -144,8 +154,11 @@ def get_other_metrics(evaluation, dataset, name='other_metrics', idx=None, do_pr
     j = 0
     for i in idx:
         reference = dataset.get_answer(i)
-        reference_list = reference.split()
         hypothesis = evaluation[i]['prediction']
+		if ignore_case:
+			reference = reference.lower()
+			hypothesis = hypothesis.lower()
+        reference_list = reference.split()
         hypothesis_list = hypothesis.split()
         bleu_1[j] = nltk.translate.bleu_score.sentence_bleu([reference_list], hypothesis_list, weights=(1,))
         bleu_4[j] = nltk.translate.bleu_score.sentence_bleu([reference_list], hypothesis_list, weights=(0.25, 0.25, 0.25, 0.25))
