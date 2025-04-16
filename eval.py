@@ -66,7 +66,7 @@ def get_utc_date_and_time():
 @click.option("--index", "index_config_path", required=True, help="Index configuration module (without .py).")
 @click.option("--model", "model_config_path", required=True, help="Model configuration module (without .py).")
 @click.option("--dataset", "dataset_config_path", required=True, help="Dataset configuration module (without .py).")
-@click.option("--wandb", "wandb", is_flag=True, help="Log in wandb")
+@click.option("--wandb", "wandb", is_flag=True, default=False, help="Log in wandb")
 @click.option("--unconstrained-generation", is_flag=True, help="Unconstrained generation")
 @click.option("--debug", is_flag=True, help="Print debug information.")
 @click.option("--continue", 'continue_from_previous_run', is_flag=True, help="Continue previous run if not concluded (and if config was the same).")
@@ -129,8 +129,11 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                 config=metadata_plus,
                 name=f"{experiment_name}_{get_utc_date_and_time()}",
             )
-
-        assert index_config.rootkey > max(model_config.tokenizer.vocab.values())
+        try:
+            if index_config.rootkey <= max(model_config.tokenizer.vocab.values()):
+                print('WARNING: rootkey could interfere with model tokens (if using postgres index)')
+        except:
+            print('WARNING: rootkey could interfere with model tokens (if using postgres index)')
 
         num_states = model_config.batch_size * model_config.generate_args.get('num_beams', 1)
         states = ConstrainedStateList(
