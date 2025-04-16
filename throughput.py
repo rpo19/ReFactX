@@ -5,24 +5,20 @@ import importlib
 import click
 import time
 from transformers import LogitsProcessor, LogitsProcessorList
+from transformers import TextStreamer
 
 class TimingLogitsProcessor(LogitsProcessor):
-    def __init__(self, constrained_state): # considering only 1 constrained state
+    def __init__(self): # considering only 1 constrained state
         self.timings = []
         self.last_time = None
-        self.constrained_state = constrained_state
 
     def __call__(self, input_ids, scores):
         now = time.time()
-        if last_time is not None:
+        if self.last_time is not None:
             elapsed = now - self.last_time
             self.timings.append(elapsed)
         self.last_time = now
 
-        if not self.constrained_state.is_constrained():
-            # always constrain: continuously generate triples
-            # reset should be automatical
-            self.constrained_state.state = 1
         return scores
 
     def report(self):
@@ -34,19 +30,51 @@ class TimingLogitsProcessor(LogitsProcessor):
         }
         return _report
 
+class AlwaysConstrainedLogitsProcessor(ConstrainedLogitsProcessor):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
+        assert input_ids.shape[0] == len(self.states), \
+            f'Error: number of states ({len(self.states)}) should match `batch_size * num_beams` ({input_ids.shape[0]})'
+
+        self.states.beam_permutation()
+
+        for i in range(input_ids.shape[0]):
+            if not self.states.beam_is_done(i):
+                sequence = input_ids[i].tolist()
+
+                if not self.states[i].first_call():
+                    last_token = sequence[-1]
+                    self.states[i].update(last_token)
+
+                self.states[i].state = 1 # FORCE ALWAYS CONSTRAINED GENERATION
+
+                if self.states[i].is_constrained(): # odd number means constrained generation
+                    # constrained generation
+                    constrain_generation_sequence = sequence[len(sequence) - self.states[i].get_cursor():]
+                    scores[[i],:] = self.constrained_generation(
+                        constrain_generation_sequence, scores[[i],:], state=self.states[i])
+
+                # else:
+                #     # normal generation
+                #     # scores are not altered
+                #     pass
+
+        return scores
+
 @click.command()
-@click.option('--model', 'model_name', required=True, help="HuggingFace model to load.")
+@click.option('--model', 'model_config_path', required=True, help="HuggingFace model to load.")
 @click.option("--index", "index_config_path", required=True, help="Index configuration module (without .py).")
 @click.option('--max-tokens', required=True, default=512, help="Tokens to generate.")
 @click.option('--device-map', required=False, default='cuda', help="Where to load the model.")
 @click.option("--output", "output_file", required=False, default=None, type=click.Path(), help="Output file for the results.")
 @click.option("--unconstrained-generation", is_flag=True, help="Unconstrained generation")
+@click.option("--debug", is_flag=True, help="Debug with streamer (Slow).")
 @click.option('--torch-dtype', required=False, default='bfloat16', help="Torch dtype for loading the model.")
-def judge_predictions(model_name, max_tokens, device_map, output_file, unconstrained_generation, torch_dtype):
+def main(model_config_path, index_config_path, max_tokens, device_map, output_file, unconstrained_generation, debug, torch_dtype):
     batch_size = 1
-    model_config.batch_size = batch_size
     nun_beams = 1
-    model_config.generate_args['num_beams'] = 1
 
     prompt = [{
         'role': 'system',
@@ -67,6 +95,9 @@ def judge_predictions(model_name, max_tokens, device_map, output_file, unconstra
     model_module = importlib.import_module(model_config_path)
     model_config = getattr(model_module, 'model_config')
 
+    # going single batch single beam for throughput calculation
+    model_config.batch_size = batch_size
+    model_config.generate_args['num_beams'] = 1
 
     try:
         if index_config.rootkey <= max(model_config.tokenizer.vocab.values()):
@@ -88,46 +119,43 @@ def judge_predictions(model_name, max_tokens, device_map, output_file, unconstra
         batch_size = model_config.batch_size,
         pad_token_id = model_config.generate_args['pad_token_id'])
 
-    constrained_processor = ConstrainedLogitsProcessor(
+    constrained_processor = AlwaysConstrainedLogitsProcessor(
         index=index_config.index,
         end_token=model_config.newline_token,
         states=states,
         tokenizer=model_config.tokenizer
         )
-    timingprocessor = TimingLogitsProcessor(states[0])
+    timingprocessor = TimingLogitsProcessor()
     logits_processor_list = LogitsProcessorList([
         constrained_processor,
-        timingprocessor
+        timingprocessor,
     ])
     if unconstrained_generation:
         logits_processor_list = LogitsProcessorList([timingprocessor])
 
-    dataloader = DataLoader(dataset, batch_size=model_config.batch_size, shuffle=False)
-
-    # cache the prompt only when batch_size == 1 or the padding is right
-    # otherwise if padding left the prompt will change for each batch because of padding
-    cache_prompt = model_config.generate_args.get('use_cache', False) and (
-                model_config.batch_size == 1 or model_config.tokenizer_args.get('padding_side')=='right')
+    if debug:
+        streamer = TextStreamer(model_config.tokenizer)
+    else:
+        streamer = None
 
     model_config.model.eval()
     with torch.no_grad():
 
         tokenized = model_config.tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True)
 
-        states.reset() # reset caches
-
         batch_inputs = model_config.tokenizer(
             tokenized,
             return_tensors='pt',
-        ).to(self.model.device)
+        ).to(model_config.model.device)
 
         output = model_config.model.generate(
             **batch_inputs,
             logits_processor=logits_processor_list,
             do_sample=True,
-            temperature=2,
+            temperature=2.,
+            streamer=streamer,
             use_cache=True,
-            max_tokens=max_tokens,
+            max_new_tokens=max_tokens,
             eos_token_id=None,
             kwargs = {'constrained_state': states}, # passing state
         )
@@ -136,7 +164,7 @@ def judge_predictions(model_name, max_tokens, device_map, output_file, unconstra
 
     with open(output_file, 'w') as f:
         dump = {
-            'config': dict(model_name=model_name, max_tokens=max_tokens, device_map=device_map, unconstrained_generation=unconstrained_generation, torch_dtype=torch_dtype),
+            'config': dict(model_config_path=model_config_path, index_config_path=index_config_path, max_tokens=max_tokens, device_map=device_map, unconstrained_generation=unconstrained_generation, torch_dtype=torch_dtype),
             'timings': timingprocessor.report()
         }
         json.dump(dump, f)
