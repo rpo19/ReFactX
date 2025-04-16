@@ -2,9 +2,11 @@
 set -e
 set -o pipefail
 
+: "${ENV_FILE:=env.sh}"
+
 mkdir -p logs
 
-source env.sh
+source "$ENV_FILE"
 
 DATASET=$1
 ADDITIONAL_ARGS_ALL="${@:2}"

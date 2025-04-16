@@ -24,7 +24,7 @@ class IndexConfig():
         self.batch_size = batch_size
         self.add_special_tokens = add_special_tokens
 
-        self.skip_serialize = set(['skip_serialize', 'index'])
+        self.skip_serialize = set(['skip_serialize', 'index', 'tokenizer'])
 
     def load_from_path(self, dataset_path):
         actual_path = QADataset.get_dataset_path(dataset_path)

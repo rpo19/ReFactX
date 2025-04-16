@@ -7,8 +7,6 @@ config = {
 }
 
 print(f'Loading {config["path"]}')
-with open(config['path']) as fd:
-    raw_dataset = json.load(fd)
 
 dataset = BIDataset([], config)
 dataset.load_from_path(path)
