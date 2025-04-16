@@ -13,7 +13,9 @@ class BIDataset(QADataset):
                 df = pd.read_csv(myfile)
         self.dataset = df.to_dict(orient='records')
     def get_question_type(self, i):
-        # Optionally, extract the type of question (e.g., single-hop or multi-hop)
-        return self.dataset[i]['type']
-    def get_question_type(self, i):
-        return self.dataset[i]['query_type']
+        return self.dataset[i]['query_type:']
+    def get_question_from_sample(self, sample) -> str:
+        return sample['question:']
+    def get_answer(self, i) -> str:
+        answer = self.dataset[i]['answer:']
+        return answer

@@ -65,12 +65,7 @@ class QADataset(Dataset):
         # Return an instance of the dynamically created class
         return DynamicQuestionsDataset(self.dataset, self.config, preprocess=False)
 
-    """
-    Array of correct answers.
-    """
     def get_answer(self, i) -> str:
-        # answers = [{'answer': answer, 'aliases': []} for answer in self.dataset[i]['answers']]
-        # Answer1 (Alias1.1, Alias1.2), Answer2 (Alias2.1, Alias2.2) OR Answer1 (Alias1.1, Alias1.2)
         answer = self.dataset[i]['answer']
         return answer
 
@@ -92,16 +87,19 @@ class QADataset(Dataset):
         ds.to_parquet(path)
     ```
     '''
-    def to_verl(self, prompt_fn=None):
+    def to_verl(self, prompt_fn=None, name=None):
         if prompt_fn is None:
             prompt_fn = lambda question: question
+
+        if name is None:
+            name = self.name
 
         for i in range(len(self)):
             question = self.get_question(i)
             prompt = prompt_fn(question)
             # TODO system prompt
             data = {
-                "data_source": self.name,
+                "data_source": name,
                 "prompt": [{
                     "role": "user",
                     "content": prompt,
