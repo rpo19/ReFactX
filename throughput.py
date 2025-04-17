@@ -102,6 +102,7 @@ def main(model_config_path, index_config_path, max_tokens, device_map, output_fi
         states=states,
         tokenizer=model_config.tokenizer
         )
+    timingprocessor = TimingLogitsProcessor()
     logits_processor_list = LogitsProcessorList([
         constrained_processor,
     ])
