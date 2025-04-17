@@ -1,4 +1,6 @@
 # TODO add percentage max_tokens
+# TODO check final answers count: judge > final_answers...
+# TODO calculate P R F1
 from copy import deepcopy
 import sys
 import json
