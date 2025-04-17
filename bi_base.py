@@ -23,10 +23,6 @@ Process:
 
     You explain your reasoning step by step and provide a detailed answer, justifying it based on the facts.
 
-    Before answering you ensure that there are no additional facts to find before giving a complete answer.
-
-    You must find ALL the answers and include them ALL in the final complete answer.
-
     You conclude with a short and concise answer that must be grounded by the facts you found.
 
 This knowledge base is complete. If a fact is not present we assume that facts is false.
@@ -34,32 +30,6 @@ This knowledge base is complete. If a fact is not present we assume that facts i
 After generating facts, please reason on top of the facts you find and avoid generating lot of useless facts.
 
 You must always follow these instructions precisely and ensure your responses adhere strictly to this prompt.'''
-    },
-    {
-        "role": "user",
-        "content": "Which countries share a border with Spain?"
-    },
-    {
-        "role": "assistant",
-        "content": '''Reasoning: To answer this question, I need to find ALL the countries that share a border with Spain. Only after finding ALL of them I can give a complete answer.
-Fact: <Spain> <shares border with> <Portugal> .
-I found Portugal, but I need to find ALL the countries that share a border with Spain.
-Fact: <Spain> <shares border with> <France> .
-I found Portugal and France but I need to find ALL the countries that share a border with Spain.
-Fact: <Spain> <shares border with> <Andorra> .
-Fact: <Spain> <shares border with> <Gibraltar> .
-Let me see if it there are more countries that share a border with Spain.
-Fact: <Spain> <shares border with> <Morocco> .
-Fact: <Spain> <diplomatic relation> <Italy> .
-Fact: <Spain> <diplomatic relation> <Greece> .
-Fact: <Spain> <contains the administrative territorial entity> <Ceuta> .
-This facts are not about countries that border with Spain.
-Fact:  <Spain> <currency> <Euro> .
-Also this fact is not about borders.
-I think I found ALL the countries that share a border with Spain.
-Long answer: Spain shares borders with Portugal, France, Andorra, Gibraltar, and Morocco.
-
-Answer: Portugal, France, Andorra, Gibraltar, Morocco.'''
     },
             {
                 'role': 'user',
@@ -122,6 +92,27 @@ Long answer: Johnny Depp was born on June 9, 1963, while Brad Pitt was born on D
 
 Answer: Yes.
 '''
+    },
+    {
+        "role": "user",
+        "content": "Which countries share a border with Spain?"
+    },
+    {
+        "role": "assistant",
+        "content": '''Reasoning: To answer this question, I need to find all the countries that have a land border with Spain.
+Fact: <Spain> <shares border with> <Portugal> .
+Fact: <Spain> <shares border with> <France> .
+Fact: <Spain> <shares border with> <Andorra> .
+I found Portugal, France, and Andorra. But let me see if it there are more countries that share a border with Spain.
+Fact: <Spain> <shares border with> <Gibraltar> .
+Fact: <Spain> <shares border with> <Morocco> .
+Fact: <Spain> <diplomatic relation> <Italy> .
+This fact is about diplomatic relations and not borders.
+Fact: <Spain> <diplomatic relation> <Greece> .
+Also this fact is not about borders. I'm not able to find other countries bordering with Spain.
+Long answer: Spain shares borders with Portugal, France, Andorra, Gibraltar, and Morocco.
+
+Answer: Portugal, France, Andorra, Gibraltar, Morocco.'''
     },
     {
         'role': 'user',
