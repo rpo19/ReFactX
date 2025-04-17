@@ -119,6 +119,27 @@ Long answer: Based on the description, Napoleon Bonaparte held power in France a
 Answer: From 1799 to 1814, and in 1815.'''
     },
     {
+        "role": "user",
+        "content": "Which countries share a border with Spain?"
+    },
+    {
+        "role": "assistant",
+        "content": '''Reasoning: To answer this question, I need to find all the countries that have a land border with Spain.
+Fact: <Spain> <shares border with> <Portugal> .
+Fact: <Spain> <shares border with> <France> .
+Fact: <Spain> <shares border with> <Andorra> .
+I found Portugal, France, and Andorra. But let me see if it there are more countries that share a border with Spain.
+Fact: <Spain> <shares border with> <Gibraltar> .
+Fact: <Spain> <shares border with> <Morocco> .
+Fact: <Spain> <diplomatic relation> <Italy> .
+This fact is about diplomatic relations and not borders.
+Fact: <Spain> <diplomatic relation> <Greece> .
+Also this fact is not about borders. I'm not able to find other countries bordering with Spain.
+Long answer: Spain shares borders with Portugal, France, Andorra, Gibraltar, and Morocco.
+
+Answer: Portugal, France, Andorra, Gibraltar, Morocco.'''
+    },
+    {
         'role': 'user',
         'content': '''In which books of A Song of Ice and Fire is Jon Snow not the Lord Commander of the Night's Watch?'''
     },
