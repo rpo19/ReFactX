@@ -18,4 +18,12 @@ class BIDataset(QADataset):
         return sample['question:']
     def get_answer(self, i) -> str:
         answer = self.dataset[i]['answer:']
+        if answer.startswith('['):
+            try:
+                answer = json.loads(answer)
+            except:
+                pass
+        if isinstance(answer, list):
+            answer = ' ,'.join(answer)
+        assert isinstance(answer, str)
         return answer
