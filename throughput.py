@@ -7,6 +7,31 @@ import time
 from transformers import LogitsProcessor, LogitsProcessorList
 from transformers import TextStreamer
 
+class TimingLogitsProcessor(LogitsProcessor):
+    def __init__(self): # considering only 1 constrained state
+        self.timings = []
+        self.last_time = None
+
+    def __call__(self, input_ids, scores):
+        now = time.time()
+        if self.last_time is not None:
+            elapsed = now - self.last_time
+            self.timings.append(elapsed)
+        self.last_time = now
+
+        return scores
+
+    def report(self):
+        _report = {
+            'timings': self.timings,
+            'max': max(self.timings),
+            'min': min(self.timings),
+            'avg': sum(self.timings) / len(self.timings),
+            'sum': sum(self.timings),
+            'num': len(self.timings),
+        }
+        return _report
+
 class AlwaysConstrainedLogitsProcessor(ConstrainedLogitsProcessor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -105,9 +130,10 @@ def main(model_config_path, index_config_path, max_tokens, device_map, output_fi
     timingprocessor = TimingLogitsProcessor()
     logits_processor_list = LogitsProcessorList([
         constrained_processor,
+        timingprocessor,
     ])
     if unconstrained_generation:
-        logits_processor_list = LogitsProcessorList([])
+        logits_processor_list = LogitsProcessorList([timingprocessor])
 
     if debug:
         streamer = TextStreamer(model_config.tokenizer)
@@ -124,7 +150,6 @@ def main(model_config_path, index_config_path, max_tokens, device_map, output_fi
             return_tensors='pt',
         ).to(model_config.model.device)
 
-        start = time.time()
         output = model_config.model.generate(
             **batch_inputs,
             logits_processor=logits_processor_list,
@@ -136,7 +161,6 @@ def main(model_config_path, index_config_path, max_tokens, device_map, output_fi
             eos_token_id=None,
             kwargs = {'constrained_state': states}, # passing state
         )
-        elapsed = time.time() - start
 
         states.beam_permutation() # final permutation to match final beams
 
@@ -147,7 +171,7 @@ def main(model_config_path, index_config_path, max_tokens, device_map, output_fi
     with open(output_file, 'w') as f:
         dump = {
             'config': dict(model_config_path=model_config_path, index_config_path=index_config_path, max_tokens=max_tokens, device_map=device_map, unconstrained_generation=unconstrained_generation, torch_dtype=torch_dtype),
-            'elapsed': elapsed,
+            'timings': timingprocessor.report(),
             'output': output_str,
             'num_generated_tokens': num_generated_tokens,
         }
