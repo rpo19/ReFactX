@@ -157,9 +157,9 @@ def get_other_metrics(evaluation, dataset, name='other_metrics', idx=None, do_pr
     for i in idx:
         reference = dataset.get_answer(i)
         hypothesis = evaluation[i]['prediction']
-		if ignore_case:
-			reference = reference.lower()
-			hypothesis = hypothesis.lower()
+        if ignore_case:
+            reference = reference.lower()
+            hypothesis = hypothesis.lower()
         reference_list = reference.split()
         hypothesis_list = hypothesis.split()
         bleu_1[j] = nltk.translate.bleu_score.sentence_bleu([reference_list], hypothesis_list, weights=(1,))
