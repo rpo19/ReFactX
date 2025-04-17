@@ -26,7 +26,8 @@ class TimingLogitsProcessor(LogitsProcessor):
             'timings': self.timings,
             'max': max(self.timings),
             'min': min(self.timings),
-            'avg': sum(self.timings) / len(self.timings)
+            'avg': sum(self.timings) / len(self.timings),
+            'sum': sum(self.timings),
         }
         return _report
 
@@ -78,11 +79,11 @@ def main(model_config_path, index_config_path, max_tokens, device_map, output_fi
 
     prompt = [{
         'role': 'system',
-        'content': 'You are an excellent story teller and your stories are very long.'
+        'content': 'You just say random and completely unrelated facts.'
     },
     {
         'role': 'user',
-        'content': 'Hello, tell me a story, please.'
+        'content': 'Tell me something, please.'
     }]
 
     if index_config_path.endswith('.py'):
@@ -162,10 +163,13 @@ def main(model_config_path, index_config_path, max_tokens, device_map, output_fi
 
         states.beam_permutation() # final permutation to match final beams
 
+    output_str = tokenizer.decode(output[0])
+
     with open(output_file, 'w') as f:
         dump = {
             'config': dict(model_config_path=model_config_path, index_config_path=index_config_path, max_tokens=max_tokens, device_map=device_map, unconstrained_generation=unconstrained_generation, torch_dtype=torch_dtype),
-            'timings': timingprocessor.report()
+            'timings': timingprocessor.report(),
+            'output': output_str,
         }
         json.dump(dump, f)
 
