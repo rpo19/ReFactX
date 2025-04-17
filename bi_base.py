@@ -7,6 +7,7 @@ import pandas as pd
 
 # different prompt
 # there are no description and short description
+# TODO add example for multiple answers. e.g. which entities (more than one) own a company? 
 PROMPT_TEMPLATE = [
     {
         'role': 'system',
@@ -91,6 +92,27 @@ Long answer: Johnny Depp was born on June 9, 1963, while Brad Pitt was born on D
 
 Answer: Yes.
 '''
+    },
+    {
+        "role": "user",
+        "content": "Which countries share a border with Spain?"
+    },
+    {
+        "role": "assistant",
+        "content": '''Reasoning: To answer this question, I need to find all the countries that have a land border with Spain.
+Fact: <Spain> <shares border with> <Portugal> .
+Fact: <Spain> <shares border with> <France> .
+Fact: <Spain> <shares border with> <Andorra> .
+I found Portugal, France, and Andorra. But let me see if it there are more countries that share a border with Spain.
+Fact: <Spain> <shares border with> <Gibraltar> .
+Fact: <Spain> <shares border with> <Morocco> .
+Fact: <Spain> <diplomatic relation> <Italy> .
+This fact is about diplomatic relations and not borders.
+Fact: <Spain> <diplomatic relation> <Greece> .
+Also this fact is not about borders. I'm not able to find other countries bordering with Spain.
+Long answer: Spain shares borders with Portugal, France, Andorra, Gibraltar, and Morocco.
+
+Answer: Portugal, France, Andorra, Gibraltar, Morocco.'''
     },
     {
         'role': 'user',
