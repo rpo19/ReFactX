@@ -7,7 +7,7 @@ import pandas as pd
 
 # different prompt
 # there are no description and short description
-BI_BASE_PROMPT_TEMPLATE = [
+PROMPT_TEMPLATE = [
     {
         'role': 'system',
         'content': '''You are a helpful question-answering assistant that bases its answers on facts from a knowledge base and always respects the prompt.
@@ -113,6 +113,10 @@ Answer: No.'''
 ]
 
 class BIDataset(QADataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.prompt_template = PROMPT_TEMPLATE
+
     def load_from_path(self, dataset_path):
         bi_data_path2 = os.environ.get('BI_DATA_PATH2')
         if bi_data_path2 is None:

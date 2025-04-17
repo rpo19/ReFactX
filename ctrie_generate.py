@@ -6,7 +6,6 @@ from transformers import TextStreamer
 from transformers.generation.logits_process import LogitsProcessorList
 from ctrie import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex
 import sys
-from base_dataset_config import BASE_PROMPT_TEMPLATE
 
 @click.command()
 @click.option('--index', 'index_config_path', default='qwen25_index', help='Index module to import.')
@@ -15,7 +14,8 @@ from base_dataset_config import BASE_PROMPT_TEMPLATE
 @click.option('--num-beams', default=1, help='Number of beams for beam search.')
 @click.option('--max-new-tokens', default=512, help='Number of max_new_tokens.')
 @click.option('--generation-config', 'generation_config_str', default="do_sample=False,temperature=None,top_k=None,top_p=None,min_p=None", help='Generation config (e.g. "max_new_tokens=512,top_k=5").')
-def main(index_config_path, model_config_path, question, num_beams, max_new_tokens, generation_config_str):
+@click.option('--prompt-module', 'prompt_module_name', default="base_dataset_config", help='Module from which to import PROMPT_TEMPLATE.')
+def main(index_config_path, model_config_path, question, num_beams, max_new_tokens, generation_config_str, prompt_module_name):
     try:
         generation_config = eval(f'dict({generation_config_str})')
     except Exception as e:
@@ -31,6 +31,11 @@ def main(index_config_path, model_config_path, question, num_beams, max_new_toke
         model_config_path = model_config_path[:-3]
     model_module = importlib.import_module(model_config_path)
     model_config = getattr(model_module, 'model_config')
+
+    if prompt_module_name.endswith('.py'):
+        prompt_module_name = prompt_module_name[:-3]
+    prompt_module = importlib.import_module(prompt_module_name)
+    PROMPT_TEMPLATE = prompt_module.PROMPT_TEMPLATE
 
     streamer = TextStreamer(model_config.tokenizer)
 
@@ -66,7 +71,7 @@ def main(index_config_path, model_config_path, question, num_beams, max_new_toke
 
         states.reset()
 
-        prompted_texts = [model_config.apply_prompt_template(BASE_PROMPT_TEMPLATE, question)]
+        prompted_texts = [model_config.apply_prompt_template(PROMPT_TEMPLATE, question)]
         print(prompted_texts[0])
 
         inputs = model_config.tokenizer(prompted_texts, return_tensors='pt', padding=True, padding_side='right')
