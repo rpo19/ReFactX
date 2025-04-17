@@ -6,6 +6,7 @@ from transformers import TextStreamer
 from transformers.generation.logits_process import LogitsProcessorList
 from ctrie import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex
 import sys
+from base_dataset_config import BASE_PROMPT_TEMPLATE
 
 @click.command()
 @click.option('--index', 'index_config_path', default='qwen25_index', help='Index module to import.')
@@ -65,7 +66,7 @@ def main(index_config_path, model_config_path, question, num_beams, max_new_toke
 
         states.reset()
 
-        prompted_texts = [model_config.apply_prompt_template(question)]
+        prompted_texts = [model_config.apply_prompt_template(BASE_PROMPT_TEMPLATE, question)]
         print(prompted_texts[0])
 
         inputs = model_config.tokenizer(prompted_texts, return_tensors='pt', padding=True, padding_side='right')

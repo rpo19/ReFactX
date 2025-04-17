@@ -174,7 +174,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                 # only cache the prompt if padding_size is right
                 prompt_cache = DynamicCache()
                 inputs_prompt_begin = model_config.tokenizer(
-                    [model_config.apply_prompt_template()] * model_config.batch_size * model_config.generate_args.get('num_beams', 1),
+                    [model_config.apply_prompt_template(dataset.prompt_template)] * model_config.batch_size * model_config.generate_args.get('num_beams', 1),
                     return_tensors='pt',
                     padding=False)
                 inputs_prompt_begin.to(model_config.model.device)
@@ -192,7 +192,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                     print(f'\nBatch {batch_number}:')
                     for question in batch:
                         print(question)
-                prompted_batch = list(map(model_config.apply_prompt_template, batch))
+                prompted_batch = [model_config.apply_prompt_template(dataset.prompt_template, question) for question in batch]
 
                 states.reset() # reset caches
 
