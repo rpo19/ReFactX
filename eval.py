@@ -255,7 +255,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                             prompt=model_config.tokenizer.decode(output_i[:len(batch_inputs.input_ids[0])]),
                             full_sample=model_config.tokenizer.decode(output_i),
                             triples=list(map(model_config.tokenizer.decode, state.generated_triples)),
-
+                            new_tokens_generated=new_tokens_generated,
                             reached_max_tokens=reached_max_tokens,
                         )
                     output_fd.write(json.dumps(sample) + '\n')
