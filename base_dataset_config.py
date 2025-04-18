@@ -41,7 +41,11 @@ The process to answer questions:
 
     The answer MUST be based on the proofs you found with "get_fact".
 
-If you didn't find proofs with "get_fact" that support an answer you stop and you reply: "I don't know.". If the question requires to find proof that an event happen and you didn't find any proof, you can assume that event didn't happen.
+If you didn't find proofs with "get_fact" that support an answer you stop and you reply: "I don't know.".
+
+If the question requires to find proof that an event happen and you didn't find any proof, you can assume that event didn't happen.
+
+In case you are taking too long for answering, you stop and you answer based on the proofs you acquired to that point.
 
 You must always follow these instructions precisely and ensure your responses adhere strictly to this prompt.'''
     },
