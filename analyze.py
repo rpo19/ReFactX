@@ -27,6 +27,7 @@ def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, fina
         row = [question,
                 prediction['prediction'],
                 answer,
+                evaluation[i]['new_tokens_generated'],
                 EM[i],
                 IM[i],
                 bleu1[i],
@@ -45,12 +46,12 @@ def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, fina
             row.append(dataset.get_answer_type(dataset[i]))
 
         if judge_match is not None:
-            row.insert(5, judge_match[i])
+            row.insert(6, judge_match[i])
 
         yield row
 
 def get_evaldf(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4, meteor, rougeL, final_answers, dontknow, group = None, judge_match=None):
-    columns = ['Question', 'Prediction', 'Answer', 'EM', 'IM', 'BLEU1', 'B4', 'METEOR', 'ROUGEL', 'Answered', 'DontKnow', 'FULL prediction', 'FULL sample', 'Triples']
+    columns = ['Question', 'Prediction', 'Answer', 'NTokens', 'EM', 'IM', 'BLEU1', 'B4', 'METEOR', 'ROUGEL', 'Answered', 'DontKnow', 'FULL prediction', 'FULL sample', 'Triples']
     if judge_match is not None:
         columns.insert(5, 'Judge')
     if group:
@@ -194,6 +195,8 @@ def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answe
                      'Num 0 Triples',
                      'Percentage 0 Triples',
                      'Percentage 0 Triples (Final Answers)',
+                     'GenTokens avg',
+                     'GenTokens avg (Final Answers)',
                      'Exact Match',
                      'Exact Match (Final Answer)',
                      'Inclusion Match',
@@ -203,8 +206,8 @@ def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answe
         ]
 
     if judge_evaluation is not None:
-        group_columns.insert(11, 'Judge Match')
-        group_columns.insert(12, 'Judge Match (Final Answer)')
+        group_columns.insert(13, 'Judge Match')
+        group_columns.insert(14, 'Judge Match (Final Answer)')
 
     grouped_answered_metrics = pd.DataFrame(columns=group_columns)
 
@@ -242,6 +245,8 @@ def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answe
             '{}/{}'.format(sum(map(lambda x: x['triples'] == [], evaluation_g)), len(g_idx)),
             sum(map(lambda x: x['triples'] == [], evaluation_g)) / (len(g_idx) + sys.float_info.min),
             sum(1 for i in final_answers_g if evaluation[i]['triples'] == []) / (len(final_answers_g) + sys.float_info.min),
+            sum(evaluation[i]['new_tokens_generated'] for i in g_idx) / len(g_idx),
+            sum(evaluation[i]['new_tokens_generated'] for i in final_answers_g) / len(final_answers_g),
             exact_match_g.mean(),
             exact_match_g_final_answers.mean(),
             inclusion_match_g.mean(),
@@ -253,8 +258,8 @@ def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answe
         if judge_evaluation is not None:
             judge_match_g = get_judge_evaluation(judge_evaluation, idx=g_idx)
             judge_match_g_final_answers = get_judge_evaluation(judge_evaluation, idx=final_answers_g_idx)
-            row.insert(11, judge_match_g.mean())
-            row.insert(12, judge_match_g_final_answers.mean())
+            row.insert(13, judge_match_g.mean())
+            row.insert(14, judge_match_g_final_answers.mean())
 
         grouped_answered_metrics.loc[g] = row
 
