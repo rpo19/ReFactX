@@ -48,7 +48,7 @@ class ModelConfig():
             temperature = None,
             top_k = None,
             top_p = None,
-            max_new_tokens = 800,
+            max_new_tokens = 2000,
             pad_token_id = self.tokenizer.eos_token_id,
             use_cache = True,
             )
