@@ -243,12 +243,23 @@ class BIDataset(QADataset):
             with myzip.open('anony_queries_v0.csv', pwd=bi_data_path2.encode()) as myfile:
                 df = pd.read_csv(myfile)
         self.dataset = df.to_dict(orient='records')
-    def get_question_type(self, i):
-        return self.dataset[i]['query_type:']
+    def get_question_type(self, sample):
+        return sample['query_type:']
     def get_question_from_sample(self, sample) -> str:
         return sample['question:']
-    def get_answer(self, i) -> str:
-        answer = self.dataset[i]['answer:']
+    def get_answer_type(self, sample) -> str:
+        answer_type = 'simple'
+        answer = sample['answer:']
+        if answer.startswith('['):
+            try:
+                answer = json.loads(answer)
+            except:
+                pass
+        if isinstance(answer, list):
+            answer_type = 'list'
+        return answer_type
+    def get_answer_from_sample(self, sample) -> str:
+        answer = sample['answer:']
         if answer.startswith('['):
             try:
                 answer = json.loads(answer)

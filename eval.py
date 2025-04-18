@@ -91,6 +91,10 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
     if output_file is None:
         output_file = f'{experiment_name}.out'
 
+    prompt_length = model_config.tokenizer(model_config.apply_prompt_template(dataset.prompt_template),
+                    return_tensors='pt',
+                    padding=False)['input_ids'].shape[1]
+
     metadata_plus = {
         'index_config_path': index_config_path,
         'model_config_path': model_config_path,
@@ -99,7 +103,8 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         'date': get_utc_date_and_time(),
         'index_config': dict(index_config),
         'model_config': dict(model_config),
-        'dataset_config': dict(dataset.dump_config())
+        'dataset_config': dict(dataset.dump_config()),
+        'prompt_length': prompt_length,
     }
 
     if continue_from_previous_run:
