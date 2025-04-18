@@ -3,15 +3,13 @@
 from base_model_config import ModelConfig
 import time
 import numpy as np  # Import numpy for array handling
+import torch
 
 class DummyOutput():
-    def __init__(self, output: list):
+    def __init__(self, output):
         self.output = output
         self.past_key_values = []
-        self.shape = [len(output)]
-        if self.shape[0] > 0:
-            if isinstance(output[0], list):
-                self.shape.append(len(output[0]))
+        self.shape = output.shape
 
     def __iter__(self):
         # Make the class iterable by returning an iterator over numpy arrays
@@ -33,14 +31,17 @@ class DummyModel():
 
     def generate(self, *args, **kwargs):
         # time.sleep(2)
-        return DummyOutput([[12] * 40])  # dummy output
+        output = kwargs.get('input_ids')
+        new_tokens = torch.ones((output.shape[0], 40), dtype=int) * 12
+        output = torch.cat([output, new_tokens], axis=1)
+        return DummyOutput(output)  # dummy output
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         return cls()
 
     def __call__(self, *args, **kwds):
-        return DummyOutput([12])
+        return DummyOutput(torch.tensor([12]))
 
 model_config = ModelConfig(
     model_name='Qwen/Qwen2.5-3B-Instruct',  # for the tokenizer
