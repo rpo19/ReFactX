@@ -354,9 +354,15 @@ class QADataset(Dataset):
         # Return an instance of the dynamically created class
         return DynamicQuestionsDataset(self.dataset, self.config, preprocess=False)
 
+    def get_answer_type(self, sample) -> str:
+        return 'simple'
+
     def get_answer(self, i) -> str:
-        answer = self.dataset[i]['answer']
-        return answer
+        sample = self.dataset[i]
+        return self.get_answer_from_sample(sample)
+
+    def get_answer_from_sample(self, sample) -> str:
+        return sample['answer']
 
     def get_question_from_sample(self, sample) -> str:
         return sample['question']
@@ -365,7 +371,7 @@ class QADataset(Dataset):
         sample = self.dataset[i]
         return self.get_question_from_sample(sample)
 
-    def get_question_type(self, i):
+    def get_question_type(self, sample):
         return 'unknown'
 
     '''

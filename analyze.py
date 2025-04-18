@@ -179,9 +179,10 @@ def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answe
     print('--- Groups ---')
     complexityType = {}
     for i in range(len(evaluation)):
-        if not dataset.get_question_type(i) in complexityType:
-            complexityType[dataset.get_question_type(i)] = []
-        complexityType[dataset.get_question_type(i)].append(i)
+        question_type = dataset.get_question_type(dataset[i])
+        if not question_type in complexityType:
+            complexityType[question_type] = []
+        complexityType[question_type].append(i)
 
     complexity_stats = {k:len(v) / (len(evaluation) + sys.float_info.min) for k,v in complexityType.items()}
 

@@ -1,12 +1,17 @@
 from base_dataset_config import QADataset
 
 class CWQDataset(QADataset):
-    def get_question_type(self, i):
+    def get_question_type(self, sample):
         # Optionally, extract the type of question (e.g., single-hop or multi-hop)
-        return self.dataset[i]['compositionality_type']
-    def get_answer(self, i):
+        return sample['compositionality_type']
+    def get_answer_type(self, sample):
+        answer_type = 'simple'
+        if len(sample['answers']) > 1:
+            answer_type = 'list'
+        return answer_type
+    def get_answer_from_sample(self, sample):
         textual_answer = ''
-        for answer in self.dataset[i]['answers']:
+        for answer in sample['answers']:
             aliases = answer.get('aliases', [])
             textual_answer += answer['answer'] + ' '
             if aliases:
