@@ -93,7 +93,16 @@ def get_answered(predictions, evaluation):
     final_answers = answered - dontknow
 
     # Create a metrics table
-    metrics_columns = ['Num', 'Percentage Answered', 'Percentage Don\'t Know', 'Final Answers (Answered - Don\'t Know)',  'Num 0 Triples', 'Percentage 0 Triples', 'Percentage 0 Triples (Final Answers)', 'Percentage Max Tokens']
+    metrics_columns = ['Num', 'Percentage Answered', 'Percentage Don\'t Know', 'Final Answers (Answered - Don\'t Know)',
+    'Num 0 Triples', 'Percentage 0 Triples', 'Percentage 0 Triples (Final Answers)', 'Percentage Max Tokens',
+    'New tokens (min, avg, max)', 'New tokens (Final Answers)']
+    new_tokens = [evaluation[i]['new_tokens_generated'] for i in predictions]
+    new_tokens_msg = '{} {} {}'.format(min(new_tokens), sum(new_tokens) / len(new_tokens), max(new_tokens))
+    new_tokens_final = [evaluation[i]['new_tokens_generated'] for i in final_answers]
+    if len(new_tokens_final) > 0:
+        new_tokens_final_msg = '{} {} {}'.format(min(new_tokens_final), sum(new_tokens_final) / len(new_tokens_final), max(new_tokens_final))
+    else:
+        new_tokens_final_msg = '- - -'
     metrics_values = [
         len(evaluation),
         len(answered) / (len(evaluation) + sys.float_info.min),
@@ -103,6 +112,8 @@ def get_answered(predictions, evaluation):
         sum(map(lambda x: x['triples'] == [], evaluation)) / (len(evaluation) + sys.float_info.min),
         sum(1 for i in final_answers if evaluation[i]['triples'] == []) / (len(final_answers) + sys.float_info.min),
         sum(map(lambda x: x['reached_max_tokens'] == True, evaluation)) / (len(evaluation) + sys.float_info.min),
+        new_tokens_msg,
+        new_tokens_final_msg,
     ]
     answered_metrics = print_metrics('Answered Metrics', metrics_columns, metrics_values)
 
