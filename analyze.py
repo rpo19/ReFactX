@@ -24,11 +24,6 @@ def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, fina
 
         assert prediction['question'] == question
 
-        if group is not None:
-            group_name = dataset.get_question_type(i)
-        else:
-            group_name = None
-
         row = [question,
                 prediction['prediction'],
                 answer,
@@ -46,7 +41,8 @@ def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, fina
             ]
 
         if group is not None:
-            row.append(group_name)
+            row.append(dataset.get_question_type(dataset[i]))
+            row.append(dataset.get_answer_type(dataset[i]))
 
         if judge_match is not None:
             row.insert(5, judge_match[i])
@@ -58,7 +54,8 @@ def get_evaldf(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4
     if judge_match is not None:
         columns.insert(5, 'Judge')
     if group:
-        columns.append('Group')
+        columns.append('Type')
+        columns.append('AnsType')
     data = pd_generator(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4, meteor, rougeL, final_answers, dontknow, group = group, judge_match=judge_match)
     evaldf = pd.DataFrame(data, columns = columns)
     return evaldf
@@ -175,14 +172,15 @@ def get_other_metrics(evaluation, dataset, name='other_metrics', idx=None, do_pr
 
     return other_df, bleu_1, bleu_4, meteor, rougeL
 
-def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answers, judge_evaluation=None):
+def grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answers, group_fn, judge_evaluation=None):
     print('--- Groups ---')
+
     complexityType = {}
     for i in range(len(evaluation)):
-        question_type = dataset.get_question_type(dataset[i])
-        if not question_type in complexityType:
-            complexityType[question_type] = []
-        complexityType[question_type].append(i)
+        sample_type = group_fn(dataset[i])
+        if not sample_type in complexityType:
+            complexityType[sample_type] = []
+        complexityType[sample_type].append(i)
 
     complexity_stats = {k:len(v) / (len(evaluation) + sys.float_info.min) for k,v in complexityType.items()}
 
@@ -404,7 +402,8 @@ def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding
 
     # ## Group
     if group is not None:
-        complexity_df, grouped_answered_metrics = grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answers, judge_evaluation=judge_evaluation)
+        complexity_df, grouped_answered_metrics = grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answers, dataset.get_question_type, judge_evaluation=judge_evaluation)
+        complexity_df_answer, grouped_answered_metrics_answer = grouped_analysis(evaluation, dataset, group, answered, dontknow, final_answers, dataset.get_answer_type, judge_evaluation=judge_evaluation)
 
     # ## Excel
 
@@ -424,8 +423,10 @@ def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding
         other_metrics_all.to_excel(writer, sheet_name="Other metrics")
         other_metrics_answered.to_excel(writer, sheet_name="Other metrics (Only answered)")
         if group is not None:
-            complexity_df.to_excel(writer, sheet_name="Complexity distribution")
-            grouped_answered_metrics.to_excel(writer, sheet_name="Grouped metrics")
+            complexity_df.to_excel(writer, sheet_name="Question-type distribution")
+            grouped_answered_metrics.to_excel(writer, sheet_name="Question-type metrics")
+            complexity_df_answer.to_excel(writer, sheet_name="Anwer-type distribution")
+            grouped_answered_metrics_answer.to_excel(writer, sheet_name="Anwer-type metrics")
         metadata_gen = [
             ('dataset_path', dataset_path),
             ('input_file', infile),
