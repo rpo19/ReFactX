@@ -82,7 +82,7 @@ def judge_predictions(model_name, dataset_path, input_file, fix_predictions, no_
     model.pad_token_id = tokenizer.eos_token_id
 
     if outfile is None:
-        outfile = f"{os.path.basename(input_file)}_llm_as_a_judge_results.out"
+        outfile = f"{input_file}_llm_as_a_judge_results.out"
 
     evaluation_raw = []
     with open(input_file) as fd:
