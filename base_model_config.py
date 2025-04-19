@@ -45,10 +45,10 @@ class ModelConfig():
             num_beams = 3,
             num_return_sequences = 1,
             do_sample = False,
-            temperature = None,
+            temperature = 0.6,
             top_k = None,
-            top_p = None,
-            max_new_tokens = 2000,
+            top_p = 0.95,
+            max_new_tokens = 1000,
             pad_token_id = self.tokenizer.eos_token_id,
             use_cache = True,
             )
