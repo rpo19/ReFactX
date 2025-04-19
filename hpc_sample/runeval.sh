@@ -8,4 +8,9 @@ DATASET=$3
 ADDITIONAL_ARGS=$4
 
 cd ..
-python eval.py --index $INDEX --model $MODEL --dataset $DATASET $ADDITIONAL_ARGS
+CURRENT_COMMIT=$(git rev-parse --short HEAD)
+CURRENT_DATE=$(date +"%Y%m%d_%H%M%S")
+LOGDIR=logs_${CURRENT_DATE}_${CURRENT_COMMIT}
+mkdir -p $LOGDIR
+
+python eval.py --index $INDEX --model $MODEL --dataset $DATASET $ADDITIONAL_ARGS --logdir $LOGDIR

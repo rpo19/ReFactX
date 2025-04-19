@@ -428,7 +428,7 @@ def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding
     if outfile:
         xlsx_file = outfile
     else:
-        xlsx_file = f'{dataset_name}_{os.path.basename(infile)}.xlsx'
+        xlsx_file = f'{infile}.xlsx'
     if not force:
         assert not os.path.isfile(xlsx_file), f'Error: {xlsx_file} already exists'
     print(f'Writing {xlsx_file}')

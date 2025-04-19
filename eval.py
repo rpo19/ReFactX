@@ -70,7 +70,8 @@ def get_utc_date_and_time():
 @click.option("--unconstrained-generation", is_flag=True, help="Unconstrained generation")
 @click.option("--debug", is_flag=True, help="Print debug information.")
 @click.option("--continue", 'continue_from_previous_run', is_flag=True, help="Continue previous run if not concluded (and if config was the same).")
-def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb, unconstrained_generation, debug, continue_from_previous_run):
+@click.option("--log-dir", default='.', help="Log dir (only use if --output is not specified).")
+def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb, unconstrained_generation, debug, continue_from_previous_run, log_dir):
     if index_config_path.endswith('.py'):
         index_config_path = index_config_path[:-3]
     index_module = importlib.import_module(index_config_path)
@@ -90,6 +91,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         experiment_name = f'{os.path.basename(dataset_config_path)}.{os.path.basename(model_config_path)}.{os.path.basename(index_config_path)}'
     if output_file is None:
         output_file = f'{experiment_name}.out'
+        output_file = os.path.join(log_dir, output_file)
 
     prompt_length = model_config.tokenizer(model_config.apply_prompt_template(dataset.prompt_template),
                     return_tensors='pt',
