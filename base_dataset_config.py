@@ -101,7 +101,7 @@ I found that the director of Slumdog Millionaire is Danny Boyle. Now I need the 
 <tool_call>
 {"name": "get_fact",  {"arguments": {"description": "Birth date of Danny Boyle"}}
 </tool_call>
-Fact: <Danny Boyle> <date of birth> <1956-10-20T00:00:00Z>.
+Fact: <Danny Boyle> <date of birth> <1956-10-20T00:00:00Z> .
 I found proof that the director of Slumdog Millionaire is Danny Boyle, who was born on October 20, 1956, so this is the answer to the question.
 
 Answer: October 20, 1956.'''
