@@ -5,6 +5,7 @@ from psycopg import sql
 from copy import deepcopy
 import requests
 from requests.adapters import HTTPAdapter, Retry
+import math
 
 class EmptyIndexException(Exception):
     pass
@@ -880,6 +881,9 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
         self.states.beam_permutation()
 
+        # TODO create a mask of zeros same shape as scores and same device
+        mask = torch.zeros_like(scores)
+
         for i in range(input_ids.shape[0]):
             if not self.states.beam_is_done(i):
                 sequence = input_ids[i].tolist()
@@ -890,18 +894,21 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
                 if self.states[i].is_constrained(): # odd number means constrained generation
                     # constrained generation
+                    mask[i] = -math.inf # set for all tokens by default
                     constrain_generation_sequence = sequence[len(sequence) - self.states[i].get_cursor():]
-                    scores[[i],:] = self.constrained_generation(
-                        constrain_generation_sequence, scores[[i],:], state=self.states[i])
+                    self.constrained_generation(
+                        constrain_generation_sequence, mask, i, state=self.states[i])
 
                 # else:
                 #     # normal generation
                 #     # scores are not altered
                 #     pass
 
-        return scores
+        scores_processed = scores + mask
 
-    def constrained_generation(self, sequence, scores: torch.FloatTensor, state):
+        return scores_processed
+
+    def constrained_generation(self, sequence, mask: torch.FloatTensor, mask_idx, state):
 
         possible_tokens, _ = self.index.next_tokens(sequence, state = state)
         try:
@@ -932,9 +939,5 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             # ensure to reset after eof triple
             state.end_of_triple_reset()
 
-        possible_scores = scores[:, possible_tokens]
+        mask[mask_idx, possible_tokens] = 0
 
-        scores[:,:] = -float('inf')
-        scores[:, possible_tokens] = possible_scores
-
-        return scores
