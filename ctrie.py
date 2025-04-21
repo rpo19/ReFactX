@@ -841,6 +841,7 @@ class ConstrainedState():
 
         elif self.state == self.BEGIN_SWITCH:
             if new_token in self.begin_pattern_current:
+                self.begin_pattern_current = self.begin_pattern_current[new_token]
                 if len(self.begin_pattern_current) == 0: # reached pattern leaf
                     state = self.CONSTRAINED_GENERATION
                     self.begin_pattern_current = self.begin_pattern # reset pattern
