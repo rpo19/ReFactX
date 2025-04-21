@@ -703,7 +703,8 @@ class ConstrainedState():
         # switching to constrain generation
         self.BEGIN_SWITCH = 2
         # if the switch pattern is finally found --> CONSTRAINED_GENERATION
-        self.begin_pattern = begin_pattern
+        self.begin_pattern = begin_pattern # {'<': {'fact':{'>':{}}, '_<': {'fact':{'>':{}}}
+        self.begin_pattern_current = self.begin_pattern
         # if end_pattern is found --> NORMAL_GENERATION
         self.end_pattern = end_pattern
 
@@ -750,6 +751,7 @@ class ConstrainedState():
     def __json__(self, copy=True):
         return {
             'begin_pattern': self.begin_pattern,
+            'begin_pattern_current': self.begin_pattern_current,
             'end_pattern': self.end_pattern,
             'state': self.state,
             'history': self.history,
@@ -762,6 +764,7 @@ class ConstrainedState():
 
     def from_json(self, data, copy=True):
         self.begin_pattern = data['begin_pattern']
+        self.begin_pattern_current = data['begin_pattern_current']
         self.end_pattern = data['end_pattern']
         self.state = data['state']
 
@@ -783,6 +786,7 @@ class ConstrainedState():
     def dump(self, copy=True):
         return {
             'begin_pattern': self.begin_pattern,
+            'begin_pattern_current': self.begin_pattern_current,
             'end_pattern': self.end_pattern,
             'state': self.state,
             'history': self.history,
@@ -795,6 +799,7 @@ class ConstrainedState():
 
     def load(self, data, copy=True):
         self.begin_pattern = data['begin_pattern']
+        self.begin_pattern_current = data['begin_pattern_current']
         self.end_pattern = data['end_pattern']
         self.state = data['state']
 
@@ -808,6 +813,7 @@ class ConstrainedState():
 
     def copy(self, other, copy=True):
         self.begin_pattern = other.begin_pattern
+        self.begin_pattern_current = other.begin_pattern_current
         self.end_pattern = other.end_pattern
         self.state = other.state
 
@@ -825,16 +831,19 @@ class ConstrainedState():
         state = self.state
         self.cursor += 1
         if self.state == self.NORMAL_GENERATION:
-            if new_token == self.begin_pattern[0]:
-                if len(self.begin_pattern) == 1:
+            if new_token in self.begin_pattern_current:
+                self.begin_pattern_current = self.begin_pattern_current[new_token]
+                if len(self.begin_pattern_current) == 0: # reached pattern leaf
                     state = self.CONSTRAINED_GENERATION
+                    self.begin_pattern_current = self.begin_pattern # reset pattern
                 else:
                     state = self.BEGIN_SWITCH
 
         elif self.state == self.BEGIN_SWITCH:
-            if new_token == self.begin_pattern[self.cursor]:
-                if self.cursor == len(self.begin_pattern) - 1:
+            if new_token in self.begin_pattern_current:
+                if len(self.begin_pattern_current) == 0: # reached pattern leaf
                     state = self.CONSTRAINED_GENERATION
+                    self.begin_pattern_current = self.begin_pattern # reset pattern
             else:
                 rollback = True
 

@@ -1,9 +1,12 @@
 from base_model_config import ModelConfig
 
+SWITCH_PATTERN = {27: {34210: {29: {}}}, 366: {34210: {29: {}}}} # <fact> or _<fact>
+NEWLINE_TOKEN = 198
+
 model_config = ModelConfig(
     model_name = 'microsoft/phi-4',
-    switch_pattern = [17873, 25], # "Fact:" after newline
-    newline_token = 198,
+    switch_pattern = SWITCH_PATTERN, # "Fact:" after newline
+    newline_token = NEWLINE_TOKEN,
     # load_model = False
     device_map='auto',
 )
