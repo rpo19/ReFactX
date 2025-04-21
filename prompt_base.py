@@ -342,6 +342,13 @@ def get_prompt_template(system_prompt=SYSTEM_PROMPT,
 
     prompt_template = []
 
+    system_prompt=system_prompt.format(fact_command=fact_command)
+    answer_type=answer_type.format(fact_command=fact_command)
+    description=description.format(fact_command=fact_command)
+    do_not_know=do_not_know.format(fact_command=fact_command)
+    assume_not=assume_not.format(fact_command=fact_command)
+    too_long=too_long.format(fact_command=fact_command)
+
     process = process_template.format(system_prompt=system_prompt, answer_type=answer_type, fact_command=fact_command, description=description, do_not_know=do_not_know, assume_not=assume_not, too_long=too_long, custom_prompt=custom_prompt)
 
     prompt_template.append({
