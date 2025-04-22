@@ -52,7 +52,7 @@ class IndexConfig():
             for inverse_mapping in inverse_mappings:
                 yield {'head': triple['tail'], 'tail': triple['head'], 'relation': inverse_mapping}
 
-    def load_from_path(self, dataset_path):
+    def load_from_path(self, dataset_path, enrich=True):
         actual_path = QADataset.get_dataset_path(dataset_path)
         bi_data_path2 = os.environ.get('BI_DATA_PATH2')
         if bi_data_path2 is None:
@@ -64,7 +64,8 @@ class IndexConfig():
         # lowercase relations
         self.raw_triples['relation'] = self.raw_triples['relation'].apply(lambda x: x.lower())
         self.raw_triples = self.raw_triples.to_dict(orient='records')
-        self.raw_triples = list(self.enrich_relations())
+        if enrich:
+            self.raw_triples = list(self.enrich_relations())
         self.transform_triples()
         self.tokenize_triples()        
 
