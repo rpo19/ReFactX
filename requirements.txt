@@ -18,3 +18,4 @@ nltk
 rouge-score
 pandas
 openpyxl
+matplotlib
