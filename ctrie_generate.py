@@ -6,16 +6,33 @@ from transformers import TextStreamer
 from transformers.generation.logits_process import LogitsProcessorList
 from ctrie import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex
 import sys
+import os
+import json
 
 @click.command()
 @click.option('--index', 'index_config_path', default='qwen25_index', help='Index module to import.')
 @click.option('--model', 'model_config_path', default='qwen25_1B_model', help='Model module to import.')
-@click.option('--question', default=None, help='Question to process (if any: interactive mode).')
-@click.option('--num-beams', default=1, help='Number of beams for beam search.')
-@click.option('--max-new-tokens', default=512, help='Number of max_new_tokens.')
-@click.option('--generation-config', 'generation_config_str', default="do_sample=False,temperature=None,top_k=None,top_p=None,min_p=None", help='Generation config (e.g. "max_new_tokens=512,top_k=5").')
-@click.option('--prompt-module', 'prompt_module_name', default="base_dataset_config", help='Module from which to import PROMPT_TEMPLATE.')
-def main(index_config_path, model_config_path, question, num_beams, max_new_tokens, generation_config_str, prompt_module_name):
+@click.option('--generation-config', 'generation_config_str', default="num_beams=1,max_new_tokens=512,do_sample=False,temperature=None,top_k=None,top_p=None,min_p=None", help='Generation config (e.g. "max_new_tokens=512,top_k=5").')
+@click.option('--prompt-module', 'prompt_module_name', required=False, default="base_dataset_config", help='Module from which to import PROMPT_TEMPLATE.')
+@click.option('--prompt', default=None, help='Prompt (str or json) to use.')
+def main(index_config_path, model_config_path, generation_config_str, prompt_module_name, prompt):
+    prepare(index_config_path, model_config_path, generation_config_str, prompt_module_name, prompt)
+    interactive()
+
+def prepare(index_config_path=None,
+    model_config_path=None,
+    num_beams=None,
+    max_new_tokens=None,
+    generation_config_str=None,
+    prompt_module_name=None):
+
+    global model_config
+    global PROMP_TEMPLATE
+    global states
+    global logits_processor_list
+    global auto_streamer
+    global num_return_sequences
+
     try:
         generation_config = eval(f'dict({generation_config_str})')
     except Exception as e:
@@ -32,10 +49,21 @@ def main(index_config_path, model_config_path, question, num_beams, max_new_toke
     model_module = importlib.import_module(model_config_path)
     model_config = getattr(model_module, 'model_config')
 
-    if prompt_module_name.endswith('.py'):
-        prompt_module_name = prompt_module_name[:-3]
-    prompt_module = importlib.import_module(prompt_module_name)
-    PROMPT_TEMPLATE = prompt_module.PROMPT_TEMPLATE
+    assert prompt_module_name is not None or prompt is not None, 'Error: either --prompt-module or --prompt must be set.'
+    if prompt_module_name:
+        if prompt_module_name.endswith('.py'):
+            prompt_module_name = prompt_module_name[:-3]
+        prompt_module = importlib.import_module(prompt_module_name)
+        PROMPT_TEMPLATE = prompt_module.PROMPT_TEMPLATE
+    else:
+        try:
+            PROMPT_TEMPLATE = json.loads(prompt)
+        except:
+            print('Cannot load the prompt as JSON. Loading it as the system prompt.')
+            PROMPT_TEMPLATE = {
+                'role': 'system',
+                'content': prompt
+            }
 
     streamer = TextStreamer(model_config.tokenizer)
 
@@ -60,14 +88,25 @@ def main(index_config_path, model_config_path, question, num_beams, max_new_toke
         constrained_processor
     ])
 
+    num_return_sequences = num_beams
+    use_cache = True
+
     model_config.model.eval()
 
-    interactive_mode = question is None
+def interactive(print_out=True, print_triples=True):
+    global model_config
+    global PROMP_TEMPLATE
+    global states
+    global logits_processor_list
+    global auto_streamer
+    global num_return_sequences
 
     while True:
-        if interactive_mode:
-            print('Insert question. (CTRL+C to exit).')
+        print('Insert question. (CTRL+C to exit).')
+        try:
             question = input('> ')
+        except EOFError:
+            return
 
         states.reset()
 
@@ -86,8 +125,8 @@ def main(index_config_path, model_config_path, question, num_beams, max_new_toke
                 streamer=auto_streamer,
                 max_new_tokens=max_new_tokens,
                 num_beams=num_beams,
-                num_return_sequences=num_beams,
-                use_cache=True,
+                num_return_sequences=num_return_sequences,
+                use_cache=use_cache,
                 kwargs={'constrained_state': states},  # passing state
                 **generation_config,
             )
@@ -98,18 +137,17 @@ def main(index_config_path, model_config_path, question, num_beams, max_new_toke
 
         print('Elapsed', time.time() - start)
 
-        # print beam search results
-        _from = len(inputs.input_ids[0])
-        for i in range(out.shape[0]):
-            print('-' * 30, sum(out[i][_from:]), len(out[i][_from:]))
-            print(model_config.tokenizer.decode(out[i][_from:]))
+        if print_out:
+            # print beam search results
+            _from = len(inputs.input_ids[0])
+            for i in range(out.shape[0]):
+                print('-' * 30, sum(out[i][_from:]), len(out[i][_from:]))
+                print(model_config.tokenizer.decode(out[i][_from:]))
 
-        # print triples
-        for i, triple in enumerate(states[0].generated_triples):
-            print(i, model_config.tokenizer.decode(triple)[:-1], triple, end='\n')
-
-        if not interactive_mode:
-            break
+        if print_triples:
+            # print triples
+            for i, triple in enumerate(states[0].generated_triples):
+                print(i, model_config.tokenizer.decode(triple)[:-1], triple, end='\n')
 
 if __name__ == '__main__':
     main()
