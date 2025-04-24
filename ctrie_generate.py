@@ -60,10 +60,10 @@ def prepare(index_config_path=None,
             PROMPT_TEMPLATE = json.loads(prompt)
         except:
             print('Cannot load the prompt as JSON. Loading it as the system prompt.')
-            PROMPT_TEMPLATE = {
+            PROMPT_TEMPLATE = [{
                 'role': 'system',
                 'content': prompt
-            }
+            }]
 
     streamer = TextStreamer(model_config.tokenizer)
 
