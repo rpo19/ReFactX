@@ -21,8 +21,6 @@ def main(index_config_path, model_config_path, generation_config_str, prompt_mod
 
 def prepare(index_config_path=None,
     model_config_path=None,
-    num_beams=None,
-    max_new_tokens=None,
     generation_config_str=None,
     prompt_module_name=None,
     prompt=None):
@@ -32,11 +30,12 @@ def prepare(index_config_path=None,
     global states
     global logits_processor_list
     global auto_streamer
-    global num_return_sequences
+    global generation_config
 
     try:
         generation_config = eval(f'dict({generation_config_str})')
     except Exception as e:
+        print(generation_config_str)
         print(f"Error parsing generation config: {e}")
         sys.exit(1)
 
@@ -68,6 +67,7 @@ def prepare(index_config_path=None,
 
     streamer = TextStreamer(model_config.tokenizer)
 
+    num_beams = generation_config.get('num_beams', 1)
     auto_streamer = streamer if num_beams == 1 else None
 
     states = ConstrainedStateList(
@@ -89,9 +89,6 @@ def prepare(index_config_path=None,
         constrained_processor
     ])
 
-    num_return_sequences = num_beams
-    use_cache = True
-
     model_config.model.eval()
 
 def interactive(print_out=True, print_triples=True):
@@ -100,7 +97,7 @@ def interactive(print_out=True, print_triples=True):
     global states
     global logits_processor_list
     global auto_streamer
-    global num_return_sequences
+    global generation_config
 
     while True:
         print('Insert question. (CTRL+C to exit).')
@@ -124,10 +121,6 @@ def interactive(print_out=True, print_triples=True):
                 **inputs,
                 logits_processor=logits_processor_list,
                 streamer=auto_streamer,
-                max_new_tokens=max_new_tokens,
-                num_beams=num_beams,
-                num_return_sequences=num_return_sequences,
-                use_cache=use_cache,
                 kwargs={'constrained_state': states},  # passing state
                 **generation_config,
             )
