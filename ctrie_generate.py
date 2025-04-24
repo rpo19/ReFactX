@@ -24,10 +24,11 @@ def prepare(index_config_path=None,
     num_beams=None,
     max_new_tokens=None,
     generation_config_str=None,
-    prompt_module_name=None):
+    prompt_module_name=None,
+    prompt=None):
 
     global model_config
-    global PROMP_TEMPLATE
+    global PROMPT_TEMPLATE
     global states
     global logits_processor_list
     global auto_streamer
@@ -95,7 +96,7 @@ def prepare(index_config_path=None,
 
 def interactive(print_out=True, print_triples=True):
     global model_config
-    global PROMP_TEMPLATE
+    global PROMPT_TEMPLATE
     global states
     global logits_processor_list
     global auto_streamer
