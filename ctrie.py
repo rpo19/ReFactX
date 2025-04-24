@@ -846,6 +846,7 @@ class ConstrainedState():
                     state = self.CONSTRAINED_GENERATION
                     self.begin_pattern_current = self.begin_pattern # reset pattern
             else:
+                self.begin_pattern_current = self.begin_pattern # reset pattern
                 rollback = True
 
         elif self.state == self.CONSTRAINED_GENERATION:
