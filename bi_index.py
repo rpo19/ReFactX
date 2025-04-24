@@ -27,14 +27,38 @@ class IndexConfig():
         self.batch_size = batch_size
         self.add_special_tokens = add_special_tokens
 
+        # X -> has role in A -> cotrolled by -> B 
+        # A -> ultimate controller B
+        '''
+        |-> “X -> has role in A ->  controlled by B”
+|-> “A -> ultimate controller B : quanti società A controlla direttamente.”
+|-> “A -> ultimate controller B : quanti società B controlla direttamente.”
+Tu
+10:57
+quante società sono controllate dall'ultimate controller di A?
+Tu
+11:00
+chi ricopre un ruolo in società controllate da B?
+
+|-> “X -> has role in A ->  controlled by B”
+|-> “A -> ultimate controller B : quanti società A controlla direttamente.”
+|-> “A -> ultimate controller B : quanti società B controlla direttamente.”
+Tu
+10:57
+quante società sono controllate dall'ultimate controller di A?
+Tu
+11:00
+chi ricopre un ruolo in società controllate da B?
+'''
+
         # TODO explain them in a prompt? # experiment both with and without
         self.relmapping = {
-            'role': dict(mappings=['has role in']),
-            'own': dict(mappings=['owns'], inverse=['owned by']),
-            'control': dict(mappings=['controls'], inverse=['controlled by']),
+                'role': dict(mappings=['has role in']), # non implica altre relazioni: e.g., CEO pur non avendo share # anche azienda ruolo in altra aziende.
+            'own': dict(mappings=['owns'], inverse=['owned by']), # ha % di share
+            'control': dict(mappings=['controls'], inverse=['controlled by']), # controls implica ownership # ultimate control -> coontrol
             'ultimate_control': dict(mappings=['ultimately controls', 'ultimate controller of', 'controls ultimately'], inverse=['ultimately controlled by', 'controlled ultimately by']),
-            'has_holdings': dict(mappings=['has holdings in']),
-            'reachable': dict(mappings=['connected to', 'reachable from'], reflexive=True),
+            'has_holdings': dict(mappings=['has holdings in']), # non necessariamente shares, ma ha possibilità di votare o altre. non necessariamente collegate a own
+            'reachable': dict(mappings=['connected to', 'reachable from'], reflexive=True), # non solo connesse con altre relazioni (grafo già tutto connesso)
         }
 
         self.skip_serialize = set(['skip_serialize', 'index', 'tokenizer', 'raw_triples', 'verbalized_triples'])
