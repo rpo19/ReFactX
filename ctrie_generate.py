@@ -98,6 +98,7 @@ def ask(question=None, print_out=True, print_triples=True):
     global logits_processor_list
     global auto_streamer
     global generation_config
+    global out
 
     interactive = not question
 
