@@ -17,7 +17,7 @@ import json
 @click.option('--prompt', default=None, help='Prompt (str or json) to use.')
 def main(index_config_path, model_config_path, generation_config_str, prompt_module_name, prompt):
     prepare(index_config_path, model_config_path, generation_config_str, prompt_module_name, prompt)
-    interactive()
+    ask()
 
 def prepare(index_config_path=None,
     model_config_path=None,
@@ -91,7 +91,7 @@ def prepare(index_config_path=None,
 
     model_config.model.eval()
 
-def interactive(print_out=True, print_triples=True):
+def ask(question=None, print_out=True, print_triples=True):
     global model_config
     global PROMPT_TEMPLATE
     global states
@@ -99,12 +99,15 @@ def interactive(print_out=True, print_triples=True):
     global auto_streamer
     global generation_config
 
+    interactive = not question
+
     while True:
-        print('Insert question. (CTRL+C to exit).')
-        try:
-            question = input('> ')
-        except EOFError:
-            return
+        if interactive:
+            print('Insert question. (CTRL+C to exit).')
+            try:
+                question = input('> ')
+            except EOFError:
+                return
 
         states.reset()
 
@@ -142,6 +145,9 @@ def interactive(print_out=True, print_triples=True):
             # print triples
             for i, triple in enumerate(states[0].generated_triples):
                 print(i, model_config.tokenizer.decode(triple)[:-1], triple, end='\n')
+
+        if not interactive:
+            break
 
 if __name__ == '__main__':
     main()
