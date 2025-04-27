@@ -6,6 +6,7 @@ import click
 import time
 from transformers import LogitsProcessor, LogitsProcessorList
 from transformers import TextStreamer
+import math
 
 class TimingLogitsProcessor(LogitsProcessor):
     def __init__(self): # considering only 1 constrained state
@@ -41,6 +42,7 @@ class AlwaysConstrainedLogitsProcessor(ConstrainedLogitsProcessor):
             f'Error: number of states ({len(self.states)}) should match `batch_size * num_beams` ({input_ids.shape[0]})'
 
         self.states.beam_permutation()
+        mask = torch.zeros_like(scores)
 
         for i in range(input_ids.shape[0]):
             if not self.states.beam_is_done(i):
@@ -54,27 +56,29 @@ class AlwaysConstrainedLogitsProcessor(ConstrainedLogitsProcessor):
 
                 if self.states[i].is_constrained(): # odd number means constrained generation
                     # constrained generation
+                    mask[i] = -math.inf # set for all tokens by default
                     constrain_generation_sequence = sequence[len(sequence) - self.states[i].get_cursor():]
-                    scores[[i],:] = self.constrained_generation(
-                        constrain_generation_sequence, scores[[i],:], state=self.states[i])
+                    self.constrained_generation(
+                        constrain_generation_sequence, mask, i, state=self.states[i])
 
                 # else:
                 #     # normal generation
                 #     # scores are not altered
                 #     pass
 
-        return scores
+        scores_processed = scores + mask
+
+        return scores_processed
 
 @click.command()
 @click.option('--model', 'model_config_path', required=True, help="HuggingFace model to load.")
 @click.option("--index", "index_config_path", required=True, help="Index configuration module (without .py).")
 @click.option('--max-tokens', required=True, default=512, help="Tokens to generate.")
-@click.option('--device-map', required=False, default='cuda', help="Where to load the model.")
 @click.option("--output", "output_file", required=False, default=None, type=click.Path(), help="Output file for the results.")
 @click.option("--unconstrained-generation", is_flag=True, help="Unconstrained generation")
 @click.option("--debug", is_flag=True, help="Debug with streamer (Slow).")
 @click.option('--torch-dtype', required=False, default='bfloat16', help="Torch dtype for loading the model.")
-def main(model_config_path, index_config_path, max_tokens, device_map, output_file, unconstrained_generation, debug, torch_dtype):
+def main(model_config_path, index_config_path, max_tokens, output_file, unconstrained_generation, debug, torch_dtype):
     batch_size = 1
     nun_beams = 1
 
@@ -170,7 +174,7 @@ def main(model_config_path, index_config_path, max_tokens, device_map, output_fi
 
     with open(output_file, 'w') as f:
         dump = {
-            'config': dict(model_config_path=model_config_path, index_config_path=index_config_path, max_tokens=max_tokens, device_map=device_map, unconstrained_generation=unconstrained_generation, torch_dtype=torch_dtype),
+            'config': dict(model_config_path=model_config_path, index_config_path=index_config_path, max_tokens=max_tokens, unconstrained_generation=unconstrained_generation, torch_dtype=torch_dtype),
             'timings': timingprocessor.report(),
             'output': output_str,
             'num_generated_tokens': num_generated_tokens,
