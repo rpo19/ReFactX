@@ -1,4 +1,4 @@
-FACT_COMMAND = '<fact>'
+FACT_COMMAND = 'Fact:'
 
 SYSTEM_PROMPT = '''You are a helpful question-answering assistant that bases its answers on facts from a knowledge base and always respects the prompt.
 '''

@@ -1,6 +1,6 @@
 from base_model_config import ModelConfig
 
-SWITCH_PATTERN = {27: {34210: {29: {}}}, 366: {34210: {29: {}}}} # <fact> or _<fact>
+SWITCH_PATTERN = {17873: {25: {}}, 34210: {25: {}}, 37812: {25: {}}, 2144: {25: {}}}
 NEWLINE_TOKEN = 198
 
 class LlamaModelConfig(ModelConfig):
