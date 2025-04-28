@@ -49,16 +49,25 @@ quante società sono controllate dall'ultimate controller di A?
 Tu
 11:00
 chi ricopre un ruolo in società controllate da B?
+
+CONTROL             3756
+ROLE                1970
+OWN_less_05         1868
+ULTIMATE_CONTROL    1216
+OWN_geq_05           998
+HAS_HOLDINGS         298
+Name: count, dtype: int6
 '''
 
         # TODO explain them in a prompt? # experiment both with and without
         self.relmapping = {
                 'role': dict(mappings=['has role in']), # non implica altre relazioni: e.g., CEO pur non avendo share # anche azienda ruolo in altra aziende.
-            'own': dict(mappings=['owns'], inverse=['owned by']), # ha % di share
+            'own_less_05': dict(mappings=['owns minority'], inverse=['owned by (minority)']), # ha % di share
+            'own_geq_05': dict(mappings=['owns majority'], inverse=['owned by (majority)']), # ha % di share
             'control': dict(mappings=['controls'], inverse=['controlled by']), # controls implica ownership # ultimate control -> coontrol
             'ultimate_control': dict(mappings=['ultimately controls', 'ultimate controller of', 'controls ultimately'], inverse=['ultimately controlled by', 'controlled ultimately by']),
             'has_holdings': dict(mappings=['has holdings in']), # non necessariamente shares, ma ha possibilità di votare o altre. non necessariamente collegate a own
-            'reachable': dict(mappings=['connected to', 'reachable from'], reflexive=True), # non solo connesse con altre relazioni (grafo già tutto connesso)
+            # 'reachable': dict(mappings=['connected to', 'reachable from'], reflexive=True), # non solo connesse con altre relazioni (grafo già tutto connesso)
         }
 
         self.skip_serialize = set(['skip_serialize', 'index', 'tokenizer', 'raw_triples', 'verbalized_triples'])
