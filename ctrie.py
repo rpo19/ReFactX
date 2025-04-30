@@ -644,55 +644,96 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
                 print('Found empty tree.')
 
 class ConstrainedStateList():
+    # states is list of list [batch_size, num_beams]
     def __init__(self, states, pad_token_id, num_beams = 1, batch_size = 1):
         self.states = states
+        assert isinstance(states, list) and isinstance(states[0], list), 'ERROR: states is not a list of lists'
+        assert len(states) == batch_size and len(states[0]) == num_beams, 'ERROR: states size does not match batch_size or num_beams'
         self.num_beams = num_beams
-        self.batch_size = batch_size # TODO last batch could be different
-        self.beam_scores = []
-        self.beam_next_tokens = []
-        self.beam_idx = [] # place to save beam indexes permutation
+        self.batch_size = batch_size # used for computing beam id
+        self.beam_idx = [] # torch.tensor([-1]*batch_size*num_beams).view(batch_size,num_beams,1) # running beam idx
+        self.beam_sent_finished = torch.tensor([False]*batch_size*num_beams).view(batch_size,num_beams) # place to save beam indexes permutation
         self.pad_token_id = pad_token_id
 
     def __getitem__(self, key):
-        if isinstance(key, slice):
+        if isinstance(key, tuple):
+            batch_key, beam_key = key
+
+            if isinstance(batch_key, int) and isinstance(beam_key, int):
+                return self.states[batch_key][beam_key]
+            else:
+                # Convert int to slice to normalize
+                if isinstance(batch_key, int):
+                    batch_key = slice(batch_key, batch_key + 1)
+                if isinstance(beam_key, int):
+                    beam_key = slice(beam_key, beam_key + 1)
+
+                # Slice the states
+                sliced_states = [row[beam_key] for row in self.states[batch_key]]
+
+                new_batch_size = len(sliced_states)
+                new_num_beams = len(sliced_states[0]) if sliced_states else 0
+
+                return ConstrainedStateList(
+                    sliced_states,
+                    pad_token_id=self.pad_token_id,
+                    num_beams=new_num_beams,
+                    batch_size=new_batch_size
+                )
+
+        elif isinstance(key, slice):
             return ConstrainedStateList(
                 self.states[key],
-                pad_token_id = self.pad_token_id,
-                num_beams = self.num_beams,
-                batch_size = self.batch_size)  # Return a new instance with sliced data
+                pad_token_id=self.pad_token_id,
+                num_beams=self.num_beams,
+                batch_size=len(self.states[key])
+            )
         elif isinstance(key, int):
-            return self.states[key]  # Return a single item
+            return self.states[key]
         else:
             raise TypeError(f"Invalid argument type: {type(key)}")
 
     def __len__(self):
-        return len(self.states)
+        return len(self.states) * len(self.states[0])
 
     def reset(self):
-        for state in self.states:
-            state.reset()
+        for batch in self.states:
+            for state in batch:
+                state.reset()
 
-    def beam_is_done(self, i):
-        if len(self.beam_scores) == 0:
-            # not yet initialized
-            return False
-
-        _done = self.beam_scores[i] == 0 and \
-        self.beam_next_tokens[i] == self.pad_token_id and \
-        self.beam_idx[i] == 0
-
-        return _done
+    def get_batch_idx(self, idx):
+        return int(idx // self.num_beams)
+    
+    def get_beam_idx(self, idx):
+        return int(idx % self.num_beams)
+    
+    def get_last_beam_z(self):
+        z = -1
+        ids = (self.beam_idx[0, 0] != -1).nonzero(as_tuple=False).squeeze()
+        if ids.numel() > 0:
+            if ids.dim() == 0:
+                z = ids.item()
+            else:
+                z = ids[-1].item()
+        return z
 
     def beam_permutation(self):
         if len(self.beam_idx) > 0: # ignore first call
-            assert len(self.beam_idx) == self.num_beams * self.batch_size, f'ERROR: beam_idx size unexpected: {len(self.beam_idx)} != {self.num_beams} * {self.batch_size}'
-            copies = [state.dump(copy=False) for state in self.states]
-            for i, (state, beam_i) in enumerate(zip(self.states, self.beam_idx)):
-                if not self.beam_is_done(i):
-                    assert i // self.num_beams == beam_i // self.num_beams, \
-                        f'ERROR: permutating between different batches! {beam_i} --> {i}, with num_beams {self.num_beams}'
-                    if i != beam_i:
-                        state.load(copies[beam_i], copy=True)
+            self.beam_idx.shape[0] * self.beam_idx.shape[1] == self.num_beams * self.batch_size, f'ERROR: beam_idx size unexpected: {len(self.beam_idx)} != {self.num_beams} * {self.batch_size}'
+            copies = self[:,:] # new object
+            last_beam_z = self.get_last_beam_z()
+            # skip first call
+            if last_beam_z >= 0:
+                for batch_idx in range(self.beam_idx.shape[0]):
+                    for num_beam in range(self.beam_idx.shape[1]):
+                        if not self.beam_sent_finished[batch_idx, num_beam]:
+                            replacement_idx = self.beam_idx[batch_idx, num_beam, last_beam_z]
+                            replacement_batch_idx = self.get_batch_idx(replacement_idx)
+                            local_beam_idx = self.get_beam_idx(replacement_idx)
+                            assert replacement_batch_idx == batch_idx, f'ERROR: permutating between different batches! {replacement_batch_idx} --> {batch_idx}, with num_beams {self.num_beams}. replacement_idx {replacement_idx}'
+                            # copy only when to change
+                            if num_beam != local_beam_idx:
+                                self.states[batch_idx][num_beam].copy(copies[batch_idx, local_beam_idx], copy=True)
 
 class ConstrainedState():
     def __init__(self, begin_pattern, end_pattern, cache_index, subtree_cache, oneleaf_cache, state=0) -> None:
@@ -896,19 +937,21 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         mask = torch.zeros_like(scores)
 
         for i in range(input_ids.shape[0]):
-            if not self.states.beam_is_done(i):
+            batch_idx = self.states.get_batch_idx(i)
+            beam_i = self.states.get_beam_idx(i)
+            if not self.states.beam_sent_finished[batch_idx, beam_i]:
                 sequence = input_ids[i].tolist()
 
-                if not self.states[i].first_call():
+                if not self.states[batch_idx, beam_i].first_call():
                     last_token = sequence[-1]
-                    self.states[i].update(last_token)
+                    self.states[batch_idx, beam_i].update(last_token)
 
-                if self.states[i].is_constrained(): # odd number means constrained generation
+                if self.states[batch_idx, beam_i].is_constrained(): # odd number means constrained generation
                     # constrained generation
                     mask[i] = -math.inf # set for all tokens by default
-                    constrain_generation_sequence = sequence[len(sequence) - self.states[i].get_cursor():]
+                    constrain_generation_sequence = sequence[len(sequence) - self.states[batch_idx, beam_i].get_cursor():]
                     self.constrained_generation(
-                        constrain_generation_sequence, mask, i, state=self.states[i])
+                        constrain_generation_sequence, mask, i, state=self.states[batch_idx, beam_i])
 
                 # else:
                 #     # normal generation
