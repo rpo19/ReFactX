@@ -21,3 +21,4 @@ hpc
 **/htpasswd
 wandb
 **/logs
+transformers
