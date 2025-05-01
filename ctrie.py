@@ -720,7 +720,14 @@ class ConstrainedStateList():
     def beam_permutation(self):
         if len(self.beam_idx) > 0: # ignore first call
             self.beam_idx.shape[0] * self.beam_idx.shape[1] == self.num_beams * self.batch_size, f'ERROR: beam_idx size unexpected: {len(self.beam_idx)} != {self.num_beams} * {self.batch_size}'
-            copies = self[:,:] # new object
+            # copies = self[:,:] # new object
+            copies = []
+            for batch_i in range(self.batch_size):
+                batch_copies = []
+                for beam_i in range(self.num_beams):
+                    batch_copies.append(self[batch_i, beam_i].dump())
+                copies.append(batch_copies)
+            # copies = [[self[batch_i, beam_i].dump() for beam_i in range(self.num_beams)] for batch_i in range(self.batch_size)]
             last_beam_z = self.get_last_beam_z()
             # skip first call
             if last_beam_z >= 0:
@@ -733,7 +740,8 @@ class ConstrainedStateList():
                             assert replacement_batch_idx == batch_idx, f'ERROR: permutating between different batches! {replacement_batch_idx} --> {batch_idx}, with num_beams {self.num_beams}. replacement_idx {replacement_idx}'
                             # copy only when to change
                             if num_beam != local_beam_idx:
-                                self.states[batch_idx][num_beam].copy(copies[batch_idx, local_beam_idx], copy=True)
+                                # self.states[batch_idx][num_beam].copy(copies[batch_idx][local_beam_idx], copy=True)
+                                self.states[batch_idx][num_beam].load(copies[batch_idx][local_beam_idx], copy=True)
 
 class ConstrainedState():
     def __init__(self, begin_pattern, end_pattern, cache_index, subtree_cache, oneleaf_cache, state=0) -> None:
