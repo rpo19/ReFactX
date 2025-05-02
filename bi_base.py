@@ -5,9 +5,27 @@ import pandas as pd
 import json
 from prompt_base import get_prompt_template, get_few_shot
 
+RELATION_DESCRIPTION = """
+The facts use these relations:
+
+- 'has role in' / 'role held by': Indicates that one entity has a role in another (e.g., a person is CEO of a company). This does not imply ownership or control.
+
+- 'owns minority' / 'owned by (minority)': Indicates that the subject owns less than 50% of the other entity.
+
+- 'owns majority' / 'owned by (majority)': Indicates that the subject owns 50% or more of the other entity.
+
+- 'controls' / 'controlled by': Indicates that the subject has control over the other entity, usually implying significant ownership or influence.
+
+- 'ultimately controls' / 'ultimately controlled by':
+  Indicates that the subject is the ultimate or final controller of the other entity, possibly through intermediate layers.
+
+- 'has holdings in' / 'held by': Indicates that the subject holds a stake or interest (e.g., voting rights) in the other entity, not necessarily through share ownership.
+"""
+
 PROMPT_TEMPLATE = get_prompt_template(
                         description='',
-                        few_shot_examples=get_few_shot('no_descr.mh_slumdog,no_descr.asnot_clinton,no_descr.count_spain'))
+                        few_shot_examples=get_few_shot('no_descr.mh_slumdog,no_descr.asnot_clinton,no_descr.count_spain'),
+                        custom_prompt=RELATION_DESCRIPTION)
 
 # TODO this dataset assumes it is complete: if there is no evidence that proves something, then it is false.
 

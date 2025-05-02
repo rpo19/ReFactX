@@ -61,12 +61,12 @@ Name: count, dtype: int6
 
         # TODO explain them in a prompt? # experiment both with and without
         self.relmapping = {
-                'role': dict(mappings=['has role in']), # non implica altre relazioni: e.g., CEO pur non avendo share # anche azienda ruolo in altra aziende.
+            'role': dict(mappings=['has role in'],inverse=['role held by']), # non implica altre relazioni: e.g., CEO pur non avendo share # anche azienda ruolo in altra aziende.
             'own_less_05': dict(mappings=['owns minority'], inverse=['owned by (minority)']), # ha % di share
             'own_geq_05': dict(mappings=['owns majority'], inverse=['owned by (majority)']), # ha % di share
             'control': dict(mappings=['controls'], inverse=['controlled by']), # controls implica ownership # ultimate control -> coontrol
-            'ultimate_control': dict(mappings=['ultimately controls', 'ultimate controller of', 'controls ultimately'], inverse=['ultimately controlled by', 'controlled ultimately by']),
-            'has_holdings': dict(mappings=['has holdings in']), # non necessariamente shares, ma ha possibilità di votare o altre. non necessariamente collegate a own
+            'ultimate_control': dict(mappings=['ultimately controls'], inverse=['ultimately controlled by']),
+            'has_holdings': dict(mappings=['has holdings in'], inverse=['held by']), # non necessariamente shares, ma ha possibilità di votare o altre. non necessariamente collegate a own
             # 'reachable': dict(mappings=['connected to', 'reachable from'], reflexive=True), # non solo connesse con altre relazioni (grafo già tutto connesso)
         }
 
