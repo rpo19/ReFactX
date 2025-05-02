@@ -644,19 +644,20 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
                 print('Found empty tree.')
 
 class ConstrainedStateList():
-    # states is list of list [batch_size, num_beams]
-    def __init__(self, states, pad_token_id, num_beams = 1, batch_size = 1):
+    # states is list of list [num_batches, num_beams]
+    def __init__(self, states, pad_token_id, num_beams = 1, num_batches = 1):
         self.states = states
         assert isinstance(states, list) and isinstance(states[0], list), 'ERROR: states is not a list of lists'
-        assert len(states) == batch_size and len(states[0]) == num_beams, 'ERROR: states size does not match batch_size or num_beams'
+        assert len(states) == num_batches and len(states[0]) == num_beams, 'ERROR: states size does not match num_batches or num_beams'
         self.num_beams = num_beams
-        self.batch_size = batch_size # used for computing beam id
-        self.beam_idx = [] # torch.tensor([-1]*batch_size*num_beams).view(batch_size,num_beams,1) # running beam idx
-        self.beam_sent_finished = torch.tensor([False]*batch_size*num_beams).view(batch_size,num_beams) # place to save beam indexes permutation
+        self.num_batches = num_batches # used for computing beam id
+        self.beam_idx = [] # torch.tensor([-1]*num_batches*num_beams).view(num_batches,num_beams,1) # running beam idx
+        self.beam_sent_finished = torch.tensor([False]*num_batches*num_beams).view(num_batches,num_beams) # place to save beam indexes permutation
         self.pad_token_id = pad_token_id
 
     def __getitem__(self, key):
         if isinstance(key, tuple):
+            # TODO test # seems it is not working as expected
             batch_key, beam_key = key
 
             if isinstance(batch_key, int) and isinstance(beam_key, int):
@@ -671,14 +672,14 @@ class ConstrainedStateList():
                 # Slice the states
                 sliced_states = [row[beam_key] for row in self.states[batch_key]]
 
-                new_batch_size = len(sliced_states)
+                new_num_batches = len(sliced_states)
                 new_num_beams = len(sliced_states[0]) if sliced_states else 0
 
                 return ConstrainedStateList(
                     sliced_states,
                     pad_token_id=self.pad_token_id,
                     num_beams=new_num_beams,
-                    batch_size=new_batch_size
+                    num_batches=new_num_batches
                 )
 
         elif isinstance(key, slice):
@@ -686,7 +687,7 @@ class ConstrainedStateList():
                 self.states[key],
                 pad_token_id=self.pad_token_id,
                 num_beams=self.num_beams,
-                batch_size=len(self.states[key])
+                num_batches=len(self.states[key])
             )
         elif isinstance(key, int):
             return self.states[key]
@@ -719,15 +720,15 @@ class ConstrainedStateList():
 
     def beam_permutation(self):
         if len(self.beam_idx) > 0: # ignore first call
-            self.beam_idx.shape[0] * self.beam_idx.shape[1] == self.num_beams * self.batch_size, f'ERROR: beam_idx size unexpected: {len(self.beam_idx)} != {self.num_beams} * {self.batch_size}'
+            self.beam_idx.shape[0] * self.beam_idx.shape[1] == self.num_beams * self.num_batches, f'ERROR: beam_idx size unexpected: {len(self.beam_idx)} != {self.num_beams} * {self.num_batches}'
             # copies = self[:,:] # new object
             copies = []
-            for batch_i in range(self.batch_size):
+            for batch_i in range(self.num_batches):
                 batch_copies = []
                 for beam_i in range(self.num_beams):
                     batch_copies.append(self[batch_i, beam_i].dump())
                 copies.append(batch_copies)
-            # copies = [[self[batch_i, beam_i].dump() for beam_i in range(self.num_beams)] for batch_i in range(self.batch_size)]
+            # copies = [[self[batch_i, beam_i].dump() for beam_i in range(self.num_beams)] for batch_i in range(self.num_batches)]
             last_beam_z = self.get_last_beam_z()
             # skip first call
             if last_beam_z >= 0:
@@ -937,7 +938,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
         assert input_ids.shape[0] == len(self.states), \
-            f'Error: number of states ({len(self.states)}) should match `batch_size * num_beams` ({input_ids.shape[0]})'
+            f'Error: number of states ({len(self.states)}) should match `num_batches * num_beams` ({input_ids.shape[0]})'
 
         self.states.beam_permutation()
 

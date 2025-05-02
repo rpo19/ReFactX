@@ -13,7 +13,7 @@ import json
 @click.option('--index', 'index_config_path', default='qwen25_index', help='Index module to import.')
 @click.option('--model', 'model_config_path', default='qwen25_1B_model', help='Model module to import.')
 @click.option('--generation-config', 'generation_config_str', default="num_beams=1,max_new_tokens=512,do_sample=False,temperature=None,top_k=None,top_p=None,min_p=None", help='Generation config (e.g. "max_new_tokens=512,top_k=5").')
-@click.option('--prompt-module', 'prompt_module_name', required=False, default="base_dataset_config", help='Module from which to import PROMPT_TEMPLATE.')
+@click.option('--prompt-module', 'prompt_module_name', required=False, default="prompt_base", help='Module from which to import PROMPT_TEMPLATE.')
 @click.option('--prompt', default=None, help='Prompt (str or json) to use.')
 def main(index_config_path, model_config_path, generation_config_str, prompt_module_name, prompt):
     prepare(index_config_path, model_config_path, generation_config_str, prompt_module_name, prompt)
@@ -23,7 +23,9 @@ def prepare(index_config_path=None,
     model_config_path=None,
     generation_config_str=None,
     prompt_module_name=None,
-    prompt=None):
+    prompt=None,
+    num_batches=1,
+    ):
 
     global model_config
     global PROMPT_TEMPLATE
@@ -70,17 +72,19 @@ def prepare(index_config_path=None,
     num_beams = generation_config.get('num_beams', 1)
     auto_streamer = streamer if num_beams == 1 else None
 
-    states = ConstrainedStateList(
-        [ConstrainedState(
-                    begin_pattern=model_config.switch_pattern,
-                    end_pattern=model_config.newline_token,
-                    cache_index=DictIndex(end_of_triple=index_config.index.end_of_triple),
-                    subtree_cache=DictIndex(end_of_triple=index_config.index.end_of_triple),
-                    oneleaf_cache=DictIndex(end_of_triple=index_config.index.end_of_triple)
-                ) for _ in range(num_beams)],
+    states_lol = [[ConstrainedState(
+            begin_pattern = model_config.switch_pattern,
+            end_pattern = model_config.newline_token,
+            cache_index = DictIndex(end_of_triple=index_config.index.end_of_triple),
+            subtree_cache = DictIndex(end_of_triple=index_config.index.end_of_triple),
+            oneleaf_cache = DictIndex(end_of_triple=index_config.index.end_of_triple)
+        ) for _ in range(num_beams)] 
+            for _ in range(num_batches)]
+
+    states = ConstrainedStateList(states_lol,
                 num_beams=num_beams,
-                batch_size=1,
-                pad_token_id=model_config.tokenizer.eos_token_id)
+                num_batches = num_batches,
+                pad_token_id = model_config.tokenizer.eos_token_id)
 
     constrained_processor = ConstrainedLogitsProcessor(
         index=index_config.index,
@@ -143,11 +147,10 @@ def ask(question=None, print_out=True, print_triples=True):
                 print(model_config.tokenizer.decode(out[i][_from:]))
 
         if print_triples:
-            # print triples
-            if len(triples) == 0:
-                print('--- No triples generated. ---')
-            for i, triple in enumerate(states[0].generated_triples):
-                print(i, model_config.tokenizer.decode(triple)[:-1], triple, end='\n')
+            for batch_i in range(states.num_batches):
+                for beam_i in range(states.num_beams):
+                    for triple in states[batch_i, beam_i].generated_triples:
+                        print(batch_i, beam_i, model_config.tokenizer.decode(triple)[:-1], triple, end='\n')
 
         if not interactive:
             break
