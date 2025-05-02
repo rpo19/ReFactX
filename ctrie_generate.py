@@ -144,7 +144,7 @@ def ask(question=None, print_out=True, print_triples=True):
 
         if print_triples:
             # print triples
-            if len(triples) == 0:
+            if len(states[0].generated_triples) == 0:
                 print('--- No triples generated. ---')
             for i, triple in enumerate(states[0].generated_triples):
                 print(i, model_config.tokenizer.decode(triple)[:-1], triple, end='\n')
