@@ -153,18 +153,22 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         except:
             print('WARNING: rootkey could interfere with model tokens (if using postgres index)')
 
-        num_states = model_config.batch_size * model_config.generate_args.get('num_beams', 1)
-        states = ConstrainedStateList(
-            [ConstrainedState(
-                    begin_pattern = model_config.switch_pattern,
-                    end_pattern = model_config.newline_token,
-                    cache_index = DictIndex(end_of_triple=index_config.end_of_triple),
-                    subtree_cache = DictIndex(end_of_triple=index_config.end_of_triple),
-                    oneleaf_cache = DictIndex(end_of_triple=index_config.end_of_triple),
-                ) for _ in range(num_states)],
-            num_beams=model_config.generate_args.get('num_beams', 1),
-            batch_size = model_config.batch_size,
-            pad_token_id = model_config.generate_args['pad_token_id'])
+        num_batches = model_config.batch_size
+        num_beams = model_config.generate_args.get('num_beams', 1)
+
+        states_lol = [[ConstrainedState(
+                begin_pattern = model_config.switch_pattern,
+                end_pattern = model_config.newline_token,
+                cache_index = DictIndex(end_of_triple=index_config.index.end_of_triple),
+                subtree_cache = DictIndex(end_of_triple=index_config.index.end_of_triple),
+                oneleaf_cache = DictIndex(end_of_triple=index_config.index.end_of_triple)
+            ) for _ in range(num_beams)] 
+                for _ in range(num_batches)]
+
+        states = ConstrainedStateList(states_lol,
+                    num_beams=num_beams,
+                    num_batches = num_batches,
+                    pad_token_id = model_config.tokenizer.eos_token_id)
 
         constrained_processor = ConstrainedLogitsProcessor(
             index=index_config.index,
@@ -229,8 +233,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
 
                 if len(states) != batch_inputs.input_ids.shape[0] * model_config.generate_args.get('num_beams', 1):
                     assert batch_number == len(dataloader) - 1
-                    states = states[:batch_inputs.input_ids.shape[0] * model_config.generate_args.get('num_beams', 1)]
-                    states.batch_size = batch_inputs.input_ids.shape[0]
+                    states = states[:batch_inputs.input_ids.shape[0], :model_config.generate_args.get('num_beams', 1)]
                     constrained_processor.states = states
 
                 output = model_config.model.generate(
@@ -243,14 +246,14 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
 
                 states.beam_permutation() # final permutation to match final beams
 
-                state_idx_generator = range(0, num_states, model_config.generate_args.get('num_beams', 1))
-                for question, prompted_question, output_i, state_idx in zip(batch, prompted_batch, output, state_idx_generator):
+                # iter all questions in the batch
+                for i, (question, prompted_question, output_i) in enumerate(zip(batch, prompted_batch, output)):
                     full_prediction = model_config.tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):])
                     prediction = model_config.get_prediction(full_prediction)
                     prediction_complete = bool(prediction)
                     # TODO also save worse beams
 
-                    state = states[state_idx] # TODO check if states are permuted before or after beam step
+                    state = states[i, 0] # first state of the batch is the best beam
 
                     new_tokens_generated = 0
                     pad_token_id = model_config.generate_args.get('pad_token_id')
