@@ -109,6 +109,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         'model_config': dict(model_config),
         'dataset_config': dict(dataset.dump_config()),
         'prompt_length': prompt_length,
+        'constrained': 'no' if unconstrained_generation else 'yes',
     }
 
     if continue_from_previous_run:
