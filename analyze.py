@@ -295,6 +295,7 @@ def get_judge_evaluation(judge_evaluation, idx=None):
 @click.option('--dataset', 'dataset_path', required=False, default=None, help='Path to the dataset configuration file.')
 @click.option('--infile', required=False, help='Path to the input file.')
 @click.option('--outfile', required=False, default=None, help='Path to the output xlsx file (automatic if missing).')
+@click.option('--json-outfile', required=False, default=None, help='Path to the output json file (automatic if missing).')
 @click.option('--fix-predictions', is_flag=True, default=False, help='Fix (missing) predictions in the evaluation.')
 @click.option('--fix-max-tokens', is_flag=True, default=False, help='Fix (wrong) reached_max_tokens calculations.')
 @click.option('--padding-pattern', required=False, default=r'(<\|eot_id\|>|<\|im_end\|>)$', help='Path to the dataset configuration file.')
@@ -303,7 +304,7 @@ def get_judge_evaluation(judge_evaluation, idx=None):
 @click.option('--force', is_flag=True, default=False, help='Overwrite outfile if existing.')
 @click.option('--group', is_flag=True, required=False, default=None, help='Calculate grouped metrics (e.g. by question type).')
 @click.option('--judge', required=False, help="Path to the llm-as-a-judge output file.")
-def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding_pattern, no_fix_none_prediction, split_pattern, force, group, judge):
+def main(dataset_path, infile, outfile, json_outfile, fix_predictions, fix_max_tokens, padding_pattern, no_fix_none_prediction, split_pattern, force, group, judge):
 
     judge_evaluation = None
     if judge:
@@ -461,6 +462,28 @@ def main(dataset_path, infile, outfile, fix_predictions, fix_max_tokens, padding
         metadata_df = pd.DataFrame(metadata_gen, columns=['Key', 'Value'])
         metadata_df.to_excel(writer, sheet_name="Metadata", index=False)
 
+    if not json_outfile:
+        json_outfile = f'{infile}.analyzed.json'
+    if not force:
+        assert not os.path.isfile(json_outfile), f'Error: {json_outfile} already exists'
+    with open(json_outfile, 'w') as jfd:
+        jout = {
+            'metadata': metadata_gen,
+            'evaldf': evaldf.to_dict(),
+            'answered_metrics': answered_metrics.to_dict(),
+            'em_im_metrics': em_im_metrics.to_dict(),
+            'other_metrics_all': other_metrics_all.to_dict(),
+            'other_metrics_answered': other_metrics_answered.to_dict(),
+        }
+        if group is not None:
+            jout.update({
+                'complexity_df': complexity_df.to_dict(),
+                'grouped_answered_metrics': grouped_answered_metrics.to_dict(),
+                'complexity_df_answer': complexity_df_answer.to_dict(),
+                'grouped_answered_metrics_answer': grouped_answered_metrics_answer.to_dict(),
+            })
+        json.dump(jout, jfd, indent=2)
+        jfd.write('\n')
 
 if __name__ == '__main__':
     main()
