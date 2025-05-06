@@ -53,7 +53,7 @@ def pd_generator(evaluation, dataset, EM, IM, bleu1, bleu4, meteor, rougeL, fina
 def get_evaldf(evaluation, dataset, exact_match, inclusion_match, bleu_1, bleu_4, meteor, rougeL, final_answers, dontknow, group = None, judge_match=None):
     columns = ['Question', 'Prediction', 'Answer', 'NTokens', 'EM', 'IM', 'BLEU1', 'B4', 'METEOR', 'ROUGEL', 'Answered', 'DontKnow', 'FULL prediction', 'FULL sample', 'Triples']
     if judge_match is not None:
-        columns.insert(5, 'Judge')
+        columns.insert(6, 'Judge')
     if group:
         columns.append('Type')
         columns.append('AnsType')
