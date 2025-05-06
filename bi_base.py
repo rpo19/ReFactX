@@ -55,7 +55,9 @@ class BIDataset(QADataset):
         answer = sample['answer:']
         if answer.startswith('['):
             try:
-                answer = json.loads(answer)
+                answer_list = json.loads(answer.replace("'",'"'))
+                assert isinstance(answer_list, list)
+                answer = answer_list
             except:
                 pass
         if isinstance(answer, list):
@@ -65,10 +67,11 @@ class BIDataset(QADataset):
         answer = sample['answer:']
         if answer.startswith('['):
             try:
-                answer = json.loads(answer)
+                answer_list = json.loads(answer.replace("'",'"'))
+                assert isinstance(answer_list, list)
+                answer = answer_list
             except:
                 pass
         if isinstance(answer, list):
-            answer = ' ,'.join(answer)
-        assert isinstance(answer, str)
+            answer = ', '.join(answer)
         return answer
