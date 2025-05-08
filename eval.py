@@ -67,6 +67,7 @@ def get_utc_date_and_time():
 @click.option("--index", "index_config_path", required=True, help="Index configuration module (without .py).")
 @click.option("--model", "model_config_path", required=True, help="Model configuration module (without .py).")
 @click.option("--dataset", "dataset_config_path", required=True, help="Dataset configuration module (without .py).")
+@click.option("--prompt", "prompt_config_path", required=False, default=None, help="Dataset configuration module (without .py).")
 @click.option("--wandb", "wandb", is_flag=True, default=False, help="Log in wandb")
 @click.option("--unconstrained-generation", is_flag=True, help="Unconstrained generation")
 @click.option("--debug", is_flag=True, help="Print debug information.")
@@ -89,13 +90,21 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
     dataset_module = importlib.import_module(dataset_config_path)
     dataset = getattr(dataset_module, 'dataset').questions_dataset()
 
+    if prompt_config_path:
+        if prompt_config_path.endswith('.py'):
+            prompt_config_path = prompt_config_path[:-3]
+        prompt_module = importlib.import_module(prompt_config_path)
+        PROMPT_TEMPLATE = getattr(prompt_module, 'PROMPT_TEMPLATE')
+    else:
+        PROMPT_TEMPLATE = dataset.prompt_template
+
     if experiment_name is None:
         experiment_name = f'{os.path.basename(dataset_config_path)}.{os.path.basename(model_config_path)}.{os.path.basename(index_config_path)}'
     if output_file is None:
         output_file = f'{experiment_name}.out'
         output_file = os.path.join(log_dir, output_file)
 
-    prompt_length = model_config.tokenizer(model_config.apply_prompt_template(dataset.prompt_template),
+    prompt_length = model_config.tokenizer(model_config.apply_prompt_template(PROMPT_TEMPLATE),
                     return_tensors='pt',
                     padding=False)['input_ids'].shape[1]
 
@@ -192,7 +201,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                 # only cache the prompt if padding_size is right
                 prompt_cache = DynamicCache()
                 inputs_prompt_begin = model_config.tokenizer(
-                    [model_config.apply_prompt_template(dataset.prompt_template)] * model_config.batch_size * model_config.generate_args.get('num_beams', 1),
+                    [model_config.apply_prompt_template(PROMPT_TEMPLATE)] * model_config.batch_size * model_config.generate_args.get('num_beams', 1),
                     return_tensors='pt',
                     padding=False)
                 inputs_prompt_begin.to(model_config.model.device)
@@ -210,7 +219,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                     print(f'\nBatch {batch_number}:')
                     for question in batch:
                         print(question)
-                prompted_batch = [model_config.apply_prompt_template(dataset.prompt_template, question) for question in batch]
+                prompted_batch = [model_config.apply_prompt_template(PROMPT_TEMPLATE, question) for question in batch]
 
                 ctrie.CONSTRAINED_STATES.reset() # reset caches
 
