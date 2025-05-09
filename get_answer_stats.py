@@ -2,6 +2,9 @@ import json
 import sys
 import pandas as pd
 from pathlib import Path
+import os
+
+DEBUG = os.environ.get('DEBUG', False)
 
 # Mapping of raw dataset file names to pretty names (None means ignore)
 DATASET_RENAME = {
@@ -32,7 +35,7 @@ METRIC_RENAME = {
     "Percentage 0 Triples (Final Answers)": None,
     "Percentage Max Tokens": "MaxT",
     # Add more as needed
-    "Num": None,  # filtered out
+    "Num": "NUM" if DEBUG else None,  # filtered out
     "New tokens (min, avg, max)": None,
     "New tokens (Final Answers)": None,
 }
