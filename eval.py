@@ -66,7 +66,7 @@ def get_utc_date_and_time():
 @click.option("--index", "index_config_path", required=True, help="Index configuration module (without .py).")
 @click.option("--model", "model_config_path", required=True, help="Model configuration module (without .py).")
 @click.option("--dataset", "dataset_config_path", required=True, help="Dataset configuration module (without .py).")
-@click.option("--prompt", "prompt_config_path", required=False, default=None, help="Dataset configuration module (without .py).")
+@click.option("--prompt", "prompt_config_path", required=False, default=None, help="Prompt configuration module (without .py).")
 @click.option("--wandb", "wandb", is_flag=True, default=False, help="Log in wandb")
 @click.option("--unconstrained-generation", is_flag=True, help="Unconstrained generation")
 @click.option("--debug", is_flag=True, help="Print debug information.")
@@ -115,6 +115,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         'index_config': dict(index_config),
         'model_config': dict(model_config),
         'dataset_config': dict(dataset.dump_config()),
+        'prompt': PROMPT_TEMPLATE,
         'prompt_length': prompt_length,
         'constrained': 'no' if unconstrained_generation else 'yes',
     }
