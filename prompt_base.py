@@ -4,7 +4,7 @@ SYSTEM_PROMPT = '''You are a helpful question-answering assistant that bases its
 '''
 
 PROMPT_ANSWER_TYPE = '''
-    You detemine the kind of answer you are asked. It can be a yes/no, a single entity, or a list of entities. Pay attention to the questions whose answer is a list of entities (e.g. Which countries share a border with Spain?): you need to find all the answer entities and include them all in the final answer.
+    You determine the kind of answer you are asked. It can be a yes/no, a single entity, or a list of entities. Pay attention to the questions whose answer is a list of entities (e.g. Which countries share a border with Spain?): you need to find all the answer entities and include them all in the final answer.
 '''
 
 PROMPT_DESCRIPTION = '''
