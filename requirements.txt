@@ -19,3 +19,4 @@ rouge-score
 pandas
 openpyxl
 matplotlib
+scikit-learn
