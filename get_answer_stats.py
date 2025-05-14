@@ -42,7 +42,7 @@ METRIC_RENAME = {
 
 # Define your preferred order
 METRIC_ORDER = [
-    "Ans.",
+    "Ans",
     "DNK",
     "0F",
     "MaxT",

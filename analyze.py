@@ -89,7 +89,7 @@ def print_metrics(title, columns, values, do_print=True):
 def get_answered(predictions, evaluation):
     # only the answered
     answered = set([i for i in predictions if evaluation[i].get('prediction', '')])
-    dontknow = set([i for i in predictions if evaluation[i].get('prediction', '').startswith("I don't know")])
+    dontknow = set([i for i in predictions if evaluation[i].get('prediction', '').lower().startswith("i don't know")])
     final_answers = answered - dontknow
 
     # Create a metrics table
