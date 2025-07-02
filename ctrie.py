@@ -325,13 +325,13 @@ class Cache():
     def __init__(self, cache_db):
         self.cache_db = cache_db
 
-    # key --> (children, childrenleaves, oneleaf, subtree)
+    # key --> (children, childrenleaves, subtree)
     def add(self, sequence):
         pass
 
     def next_tokens(self, sequence, **kwargs):
-        next_tokens, oneleaf_cache, subtree_cache = None, None, None
-        return next_tokens, oneleaf_cache, subtree_cache
+        next_tokens, subtree_cache = None, None
+        return next_tokens, subtree_cache
 
 class PostgresTrieIndex(Index):
     def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name, cache: Cache = None, return_state = False, do_count_leaves=False):
@@ -363,29 +363,19 @@ class PostgresTrieIndex(Index):
 
         sequence = [self.rootkey] + sequence
 
-        _next_tokens_cache = None
-        try:
-            _next_tokens_cache, _ = state.oneleaf_cache.next_tokens(sequence)
-        except EmptyIndexException:
-            pass
-        except TripleNotFoundException:
-            pass
-
         _next_tokens = {}
         if len(sequence) <= self.switch_parameter:
             postgres_seq = sequence[:self.switch_parameter] # max length of sequences indexed in postgres
 
             _next_tokens = self._next_tokens_from_postgresql(postgres_seq, state = state)
         else:
-            # continue in the subtree
+            # continue in the subtree (added previously)
             try:
                 _next_tokens, _ = state.subtree_cache.next_tokens(sequence)
             except EmptyIndexException:
                 pass
             except TripleNotFoundException:
                 pass
-
-        self._merge_next_tokens(_next_tokens_cache, _next_tokens)
 
         if len(_next_tokens) == 0:
             if self.triple_is_valid(sequence):
@@ -397,7 +387,6 @@ class PostgresTrieIndex(Index):
 
         extra = {
             'found_subtree': len(sequence) > self.switch_parameter,
-            'tokens_from_oneleaf': _next_tokens_cache
             }
         if self.return_state:
             extra['state'] = state
@@ -407,15 +396,13 @@ class PostgresTrieIndex(Index):
     def _next_tokens_from_postgresql(self, sequence, state):
         found_in_cache = False
         if self.cache:
-            # key --> (children, childrenleaves, oneleaf, subtree)
+            # key --> (children, childrenleaves, subtree)
             # better saving entire or incremental cache?
             # better entire to reduce computation
-            _next_tokens, new_oneleaf_cache, new_subtree_cache = self.cache.next_tokens(sequence)
+            _next_tokens, new_subtree_cache = self.cache.next_tokens(sequence)
             found_in_cache = _next_tokens is not None
             if found_in_cache:
                 # do not reset the cache if not found
-                if new_oneleaf_cache:
-                    state.oneleaf_cache = new_oneleaf_cache
                 if new_subtree_cache:
                     state.subtree_cache = new_subtree_cache
 
@@ -428,46 +415,33 @@ class PostgresTrieIndex(Index):
             if len(query_result) > 0:
                 totalnumleaves = 0
                 totalnumleaves_subtree = 0
-                totalnumleaves_oneleaf = 0
                 for row, (query_id, children, subtree, numleaves, childrenleaves) in enumerate(query_result):
                     totalnumleaves += numleaves
-                    if numleaves == 1:
-                        totalnumleaves_oneleaf += 1
-                        # triple finish
-                        # children is the entire triple
-                        child = children[0]
-                        if child not in _next_tokens:
+                    for child, childleaves in zip(children, childrenleaves):
+                        if (child not in _next_tokens):
                             _next_tokens[child] = 0
-                        _next_tokens[child] += 1
-                        # save the rest in cache
-                        current_tree = state.oneleaf_cache.to_dict([*sequence, *children], numleaves)
-                        merge_numleaves = state.oneleaf_cache.merge(current_tree, update_numleaves=True)
-                    else:
-                        for child, childleaves in zip(children, childrenleaves):
-                            if (child not in _next_tokens):
-                                _next_tokens[child] = 0
-                            _next_tokens[child] += childleaves
+                        _next_tokens[child] += childleaves
 
-                        if subtree:
-                            totalnumleaves_subtree += numleaves
-                            subtree = pickle.loads(subtree)
-                            current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
-                            if self.do_count_leaves and numleaves != state.subtree_cache.count_leaves(current_tree):
-                                print('WARNING: number of leaves does not match after COUNT LEAVES.')
+                    if subtree:
+                        totalnumleaves_subtree += numleaves
+                        subtree = pickle.loads(subtree)
+                        current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
+                        if self.do_count_leaves and numleaves != state.subtree_cache.count_leaves(current_tree):
+                            print('WARNING: number of leaves does not match after COUNT LEAVES.')
 
-                            merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
-                            numleaves_diff = totalnumleaves_subtree - merge_numleaves
-                            if numleaves_diff != 0:
-                                # TODO debug
-                                # reduce all the upper numleaves by the difference
-                                # WORKAROUND to solve duplicates (or wrong count) problem
-                                print('WARNING: number of leaves does not match.')
+                        merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
+                        numleaves_diff = totalnumleaves_subtree - merge_numleaves
+                        if numleaves_diff != 0:
+                            # TODO debug
+                            # reduce all the upper numleaves by the difference
+                            # WORKAROUND to solve duplicates (or wrong count) problem
+                            print('WARNING: number of leaves does not match.')
 
             # TODO maybe do it only when there is no subtree cache to save space and bandwidth
             # (first calls are the slowest)
             if self.cache:
                 try:
-                    self.cache.add(sequence, _next_tokens, state.oneleaf_cache, state.subtree_cache)
+                    self.cache.add(sequence, _next_tokens, state.subtree_cache)
                 except Exception as e:
                     print('WARNING: failed to populate cache', e)
 
@@ -501,15 +475,13 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
     def _next_tokens_from_postgresql(self, sequence, state):
         found_in_cache = False
         if self.cache:
-            # key --> (children, childrenleaves, oneleaf, subtree)
+            # key --> (children, childrenleaves, subtree)
             # better saving entire or incremental cache?
             # better entire to reduce computation
-            _next_tokens, new_oneleaf_cache, new_subtree_cache = self.cache.next_tokens(sequence)
+            _next_tokens, new_subtree_cache = self.cache.next_tokens(sequence)
             found_in_cache = _next_tokens is not None
             if found_in_cache:
                 # do not reset the cache if not found
-                if new_oneleaf_cache:
-                    state.oneleaf_cache = new_oneleaf_cache
                 if new_subtree_cache:
                     state.subtree_cache = new_subtree_cache
 
@@ -529,46 +501,33 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
             if len(query_result) > 0:
                 totalnumleaves = 0
                 totalnumleaves_subtree = 0
-                totalnumleaves_oneleaf = 0
                 for row, (query_id, children, subtree, numleaves, childrenleaves) in enumerate(query_result):
                     totalnumleaves += numleaves
-                    if numleaves == 1:
-                        totalnumleaves_oneleaf += 1
-                        # triple finish
-                        # children is the entire triple
-                        child = children[0]
-                        if child not in _next_tokens:
+                    for child, childleaves in zip(children, childrenleaves):
+                        if (child not in _next_tokens):
                             _next_tokens[child] = 0
-                        _next_tokens[child] += 1
-                        # save the rest in cache
-                        current_tree = state.oneleaf_cache.to_dict([*sequence, *children], numleaves)
-                        merge_numleaves = state.oneleaf_cache.merge(current_tree, update_numleaves=True)
-                    else:
-                        for child, childleaves in zip(children, childrenleaves):
-                            if (child not in _next_tokens):
-                                _next_tokens[child] = 0
-                            _next_tokens[child] += childleaves
+                        _next_tokens[child] += childleaves
 
-                        if subtree:
-                            totalnumleaves_subtree += numleaves
-                            subtree = pickle.loads(subtree)
-                            current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
-                            if self.do_count_leaves and numleaves != state.subtree_cache.count_leaves(current_tree):
-                                print('WARNING: number of leaves does not match after COUNT LEAVES.')
+                    if subtree:
+                        totalnumleaves_subtree += numleaves
+                        subtree = pickle.loads(subtree)
+                        current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
+                        if self.do_count_leaves and numleaves != state.subtree_cache.count_leaves(current_tree):
+                            print('WARNING: number of leaves does not match after COUNT LEAVES.')
 
-                            merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
-                            numleaves_diff = totalnumleaves_subtree - merge_numleaves
-                            if numleaves_diff != 0:
-                                # TODO debug
-                                # reduce all the upper numleaves by the difference
-                                # WORKAROUND to solve duplicates (or wrong count) problem
-                                print('WARNING: number of leaves does not match.')
+                        merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
+                        numleaves_diff = totalnumleaves_subtree - merge_numleaves
+                        if numleaves_diff != 0:
+                            # TODO debug
+                            # reduce all the upper numleaves by the difference
+                            # WORKAROUND to solve duplicates (or wrong count) problem
+                            print('WARNING: number of leaves does not match.')
 
             # TODO maybe do it only when there is no subtree cache to save space and bandwidth
             # (first calls are the slowest)
             if self.cache:
                 try:
-                    self.cache.add(sequence, _next_tokens, state.oneleaf_cache, state.subtree_cache)
+                    self.cache.add(sequence, _next_tokens, state.subtree_cache)
                 except Exception as e:
                     print('WARNING: failed to populate cache', e)
 
@@ -616,30 +575,24 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
         while len(stack) > 0:
             key, level = stack.pop()
             if len(level[1]) > 0: # otherwise nothing to do
-                if level[0] == 1: # 1 leaf -> children is the sequence to the end of triple
-                    children = level[1]
-                    childrenleaves = []
-                    if len(children) > 0:
-                        yield key, children, level[0], childrenleaves, None
-                else:
-                    if isinstance(level[1][0], dict):
-                        # branch here
-                        children = list(level[1][0].keys())
-                        childrenleaves = [level[1][0][child][0] for child in children]
-                        next_levels = [level[1][0][child] for child in children]
-                    else: # is int -> only 1 child
-                        children = [level[1][0]]
-                        childrenleaves = [level[0]] # same numleaves as parent
-                        next_levels = [[level[0], level[1][1:]]]
+                if isinstance(level[1][0], dict):
+                    # branch here
+                    children = list(level[1][0].keys())
+                    childrenleaves = [level[1][0][child][0] for child in children]
+                    next_levels = [level[1][0][child] for child in children]
+                else: # is int -> only 1 child
+                    children = [level[1][0]]
+                    childrenleaves = [level[0]] # same numleaves as parent
+                    next_levels = [[level[0], level[1][1:]]]
 
-                    if len(key) >= self.switch_parameter:
-                        yield key, children, level[0], childrenleaves, pickle.dumps(level[1])
-                    else:
-                        for child, next_level in zip(children, next_levels):
-                            stack.append((key + [child], next_level))
-                        if len(children) > 0:
-                            # skip adding empty keys to save space
-                            yield key, children, level[0], childrenleaves, None
+                if len(key) >= self.switch_parameter:
+                    yield key, children, level[0], childrenleaves, pickle.dumps(level[1])
+                else:
+                    for child, next_level in zip(children, next_levels):
+                        stack.append((key + [child], next_level))
+                    if len(children) > 0:
+                        # skip adding empty keys to save space
+                        yield key, children, level[0], childrenleaves, None
             else:
                 print('Found empty tree.')
 
@@ -745,7 +698,7 @@ class ConstrainedStateList():
                                 self.states[batch_idx][num_beam].load(copies[batch_idx][local_beam_idx], copy=True)
 
 class ConstrainedState():
-    def __init__(self, begin_pattern, end_pattern, cache_index, subtree_cache, oneleaf_cache, state=0) -> None:
+    def __init__(self, begin_pattern, end_pattern, cache_index, subtree_cache, state=0) -> None:
 
         self.NORMAL_GENERATION = 0 # even numbers for normal
         self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
@@ -768,7 +721,6 @@ class ConstrainedState():
         self.generated_triples = []
 
         self.subtree_cache = subtree_cache
-        self.oneleaf_cache = oneleaf_cache
 
         self._first_call = True
 
@@ -788,7 +740,6 @@ class ConstrainedState():
 
     def end_of_triple_reset(self):
         self.subtree_cache.reset()
-        self.oneleaf_cache.reset()
 
     def reset(self):
         self.state = 0
@@ -808,7 +759,6 @@ class ConstrainedState():
             'cursor': self.cursor,
             'generated_triples': self.generated_triples.copy() if copy else self.generated_triples,
             'cache_index': self.cache_index.__json__(copy),
-            'oneleaf_cache': self.oneleaf_cache.__json__(copy),
             'subtree_cache': self.subtree_cache.__json__(copy),
         }
 
@@ -825,11 +775,9 @@ class ConstrainedState():
         if copy:
             self.cache_index = DictIndex(end_of_triple=data['cache_index']['end_of_triple'], tree=deepcopy(data['cache_index']['tree']))
             self.subtree_cache = DictIndex(end_of_triple=data['subtree_cache']['end_of_triple'], tree=deepcopy(data['subtree_cache']['tree']))
-            self.oneleaf_cache = DictIndex(end_of_triple=data['oneleaf_cache']['end_of_triple'], tree=deepcopy(data['oneleaf_cache']['tree']))
         else:
             self.cache_index = DictIndex(**data['cache_index'])
             self.subtree_cache = DictIndex(**data['subtree_cache'])
-            self.oneleaf_cache = DictIndex(**data['oneleaf_cache'])
 
         return self
 
@@ -843,7 +791,6 @@ class ConstrainedState():
             'cursor': self.cursor,
             'generated_triples': self.generated_triples.copy() if copy else self.generated_triples,
             'cache_index': self.cache_index.copy() if copy else self.cache_index,
-            'oneleaf_cache': self.oneleaf_cache.copy() if copy else self.oneleaf_cache,
             'subtree_cache': self.subtree_cache.copy() if copy else self.subtree_cache,
         }
 
@@ -859,7 +806,6 @@ class ConstrainedState():
         self.generated_triples = data['generated_triples'].copy() if copy else data['generated_triples']
         self.cache_index = deepcopy(data['cache_index']) if copy else data['cache_index']
         self.subtree_cache = deepcopy(data['subtree_cache']) if copy else data['subtree_cache']
-        self.oneleaf_cache = deepcopy(data['oneleaf_cache']) if copy else data['oneleaf_cache']
 
     def copy(self, other, copy=True):
         self.begin_pattern = other.begin_pattern
@@ -873,7 +819,6 @@ class ConstrainedState():
         self.generated_triples = other.generated_triples.copy() if copy else other.generated_triples
         self.cache_index = deepcopy(other.cache_index) if copy else other.cache_index
         self.subtree_cache = deepcopy(other.subtree_cache) if copy else other.subtree_cache
-        self.oneleaf_cache = deepcopy(other.oneleaf_cache) if copy else other.oneleaf_cache
 
 
     def update(self, new_token):
