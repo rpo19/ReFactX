@@ -102,12 +102,11 @@ Actual values:
 @click.option("--initial-tokens-file", default='', help="File containing all the initial tokens. One per line")
 @click.option("--json-tokens", required=False, help="JSON tokens")
 @click.option("--dump-subtree-cache", required=False, default=False, is_flag=True, help="Dump subtree cache")
-@click.option("--dump-oneleaf-cache", required=False, default=False, is_flag=True, help="Dump oneleaf cache")
 @click.option("--verbose", required=False, default=False, is_flag=True, help="Verbose mode")
 @click.option("--generations", required=False, default=1, help="Number of triples to generate")
 @click.option("--add-special-tokens", required=False, is_flag=True, help="Add special tokens when tokenizing initial tokens")
 def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey, end_of_triple, model_name, flush_cache, switch_parameter,
-        random_seed, initial_tokens, initial_tokens_file, json_tokens, dump_subtree_cache, dump_oneleaf_cache, verbose, generations, add_special_tokens):
+        random_seed, initial_tokens, json_tokens, dump_subtree_cache, verbose, generations, add_special_tokens):
     if index_module:
 
         if index_module.endswith('.py'):
@@ -183,20 +182,47 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
                 end_pattern = [],
                 cache_index = DictIndex(end_of_triple=index.end_of_triple),
                 subtree_cache = DictIndex(end_of_triple=index.end_of_triple),
-                oneleaf_cache = DictIndex(end_of_triple=index.end_of_triple)
             )
 
     print_initial_tokens_numleaves = True
 
     with TimeMeasure(tag=f'Total time (Max generations: {generations})', verbose=True) as tm:
-        for initial_tokens in tqdm(all_initial_tokens):
-            for i in range(1, generations+1):
-                print(i, '-'*30)
-                sequence = []
-                initial_tokens_run = initial_tokens.copy()
-                while True:
-                    n = len(sequence)
-                    with TimeMeasure(tag=f'Query {n}', verbose=verbose) as tm:
+        for i in range(1, generations+1):
+            print(i, '-'*30)
+            sequence = []
+            initial_tokens_run = initial_tokens.copy()
+            while True:
+                n = len(sequence)
+                with TimeMeasure(tag=f'Query {n}', verbose=verbose) as tm:
+                    if verbose:
+                        print(sequence)
+                        print(tokenizer.decode(sequence))
+                    possible_tokens_dict, extra = index.next_tokens(sequence, state=state)
+                    possible_tokens_dict_debug = possible_tokens_dict.copy()
+                    if verbose and extra and extra.get('found_subtree'):
+                        print('found_subtree')
+                    try:
+                        visited_tokens, _ = state.cache_index.next_tokens(sequence)
+                        # print(visited_tokens, end=' = ')
+                        state.cache_index.subtract_tokens(possible_tokens_dict, visited_tokens)
+                        # print(possible_tokens)
+                    except EmptyIndexException:
+                        # ignore when the cache index is empty
+                        pass
+                    except TripleNotFoundException:
+                        # ignore if triple not in cache index
+                        pass
+
+                if dump_subtree_cache and len(state.subtree_cache) > 0:
+                    print('DUMP - subtree cache:')
+                    print(state.subtree_cache)
+
+                possible_tokens = list(possible_tokens_dict.keys()) if possible_tokens_dict else []
+
+                if len(possible_tokens) > 0:
+                    try:
+                        next_token = choose(possible_tokens, initial_tokens_run)
+                        numleaves = possible_tokens_dict[next_token]
                         if verbose:
                             print(sequence)
                             print(tokenizer.decode(sequence))
@@ -255,8 +281,18 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
                         state.cache_add(sequence)
                         state.end_of_triple_reset()
                         break
+                else:
+                    if verbose:
+                        print('.')
+                    if not sequence[-1] == end_of_triple:
+                        print('ERROR: invalid triple!', sequence)
+                    else:
+                        print(sequence)
+                    state.cache_add(sequence)
+                    state.end_of_triple_reset()
+                    break
 
-                print('triple: "{}"'.format(tokenizer.decode(sequence)))
+            print('triple: "{}"'.format(tokenizer.decode(sequence)))
 
 
 if __name__ == "__main__":
