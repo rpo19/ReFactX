@@ -88,12 +88,11 @@ Actual values:
 @click.option("--initial-tokens", default='', help="Initial tokens")
 @click.option("--json-tokens", required=False, help="JSON tokens")
 @click.option("--dump-subtree-cache", required=False, default=False, is_flag=True, help="Dump subtree cache")
-@click.option("--dump-oneleaf-cache", required=False, default=False, is_flag=True, help="Dump oneleaf cache")
 @click.option("--verbose", required=False, default=False, is_flag=True, help="Verbose mode")
 @click.option("--generations", required=False, default=1, help="Number of triples to generate")
 @click.option("--add-special-tokens", required=False, is_flag=True, help="Add special tokens when tokenizing initial tokens")
 def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey, end_of_triple, model_name, flush_cache, switch_parameter,
-        random_seed, initial_tokens, json_tokens, dump_subtree_cache, dump_oneleaf_cache, verbose, generations, add_special_tokens):
+        random_seed, initial_tokens, json_tokens, dump_subtree_cache, verbose, generations, add_special_tokens):
     if index_module:
 
         if index_module.endswith('.py'):
@@ -164,7 +163,6 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
                 end_pattern = [],
                 cache_index = DictIndex(end_of_triple=index.end_of_triple),
                 subtree_cache = DictIndex(end_of_triple=index.end_of_triple),
-                oneleaf_cache = DictIndex(end_of_triple=index.end_of_triple)
             )
 
     print_initial_tokens_numleaves = True
@@ -200,10 +198,6 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
                     print('DUMP - subtree cache:')
                     print(state.subtree_cache)
 
-                if dump_oneleaf_cache and len(state.oneleaf_cache) > 0:
-                    print('DUMP - oneleaf cache:')
-                    print(state.oneleaf_cache)
-
                 possible_tokens = list(possible_tokens_dict.keys()) if possible_tokens_dict else []
 
                 if len(possible_tokens) > 0:
@@ -222,9 +216,6 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
                     except InputTokenException as e:
                         print(e)
                         break
-
-                    if verbose and extra and extra.get('tokens_from_oneleaf', False) and next_token in extra.get('tokens_from_oneleaf', {}):
-                        print('chose token from oneleaf')
                 else:
                     if verbose:
                         print('.')
