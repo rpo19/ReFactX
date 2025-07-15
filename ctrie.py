@@ -613,7 +613,7 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
 
 class ConstrainedStateList():
     # states is list of list [num_batches, num_beams]
-    def __init__(self, states, pad_token_id, num_beams = 1, num_batches = 1):
+    def __init__(self, states, pad_token_id, num_beams = 1, num_batches = 1, debug=False, debug_tokenizer=None):
         self.states = states
         assert isinstance(states, list) and isinstance(states[0], list), 'ERROR: states is not a list of lists'
         assert len(states) == num_batches and len(states[0]) == num_beams, 'ERROR: states size does not match num_batches or num_beams'
@@ -621,6 +621,12 @@ class ConstrainedStateList():
         self.num_batches = num_batches # used for computing beam id
         self.beam_idx = [] # torch.tensor([-1]*num_batches*num_beams).view(num_batches,num_beams,1) # running beam idx
         self.pad_token_id = pad_token_id
+
+        self.debug = debug
+        self.debug_tokenizer = debug_tokenizer
+        assert not self.debug or self.debug_tokenizer is not None
+
+        self.num_permutations = 0 # for debugging
 
     def __getitem__(self, key):
         if isinstance(key, tuple):
@@ -699,6 +705,12 @@ class ConstrainedStateList():
             last_beam_z = self.get_last_beam_z()
             # skip first call
             if last_beam_z >= 0:
+                if self.debug:
+                    for batch_idx in range(self.beam_idx.shape[0]):
+                        for num_beam in range(self.beam_idx.shape[1]):
+                            print((batch_idx, num_beam), end='')
+                            self.states[batch_idx][num_beam].print_debug(self.debug_tokenizer)
+
                 for batch_idx in range(self.beam_idx.shape[0]):
                     for num_beam in range(self.beam_idx.shape[1]):
                         replacement_idx = self.beam_idx[batch_idx, num_beam, last_beam_z]
@@ -709,9 +721,12 @@ class ConstrainedStateList():
                         if num_beam != local_beam_idx:
                             # self.states[batch_idx][num_beam].copy(copies[batch_idx][local_beam_idx], copy=True)
                             self.states[batch_idx][num_beam].load(copies[batch_idx][local_beam_idx], copy=True)
+                            self.num_permutations += 1
+                            if self.debug:
+                                print(f'permutation {self.num_permutations}: ({batch_idx},{local_beam_idx}) into {batch_idx}{num_beam}')
 
 class ConstrainedState():
-    def __init__(self, begin_pattern, end_pattern, cache_index, subtree_cache, state=0) -> None:
+    def __init__(self, begin_pattern, end_pattern, cache_index, subtree_cache, state=0, debug=False) -> None:
 
         self.NORMAL_GENERATION = 0 # even numbers for normal
         self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
@@ -736,6 +751,17 @@ class ConstrainedState():
         self.subtree_cache = subtree_cache
 
         self._first_call = True
+
+        self.debug = debug
+        self.debug_history = []
+
+    def print_debug(self, tokenizer, print_class=False, end_with_newline=True):
+        if print_class:
+            print('{} '.format(self), end='')
+        for item in self.debug_history:
+            print('{} ({}) --> {}, '.format(tokenizer.decode(item['token']), item['token'], item['state']), end='')
+        if end_with_newline:
+            print()
 
     def first_call(self):
         if self._first_call:
@@ -802,9 +828,11 @@ class ConstrainedState():
             'state': self.state,
             'history': self.history,
             'cursor': self.cursor,
-            'generated_triples': self.generated_triples.copy() if copy else self.generated_triples,
-            'cache_index': self.cache_index.copy() if copy else self.cache_index,
-            'subtree_cache': self.subtree_cache.copy() if copy else self.subtree_cache,
+            'generated_triples': deepcopy(self.generated_triples) if copy else self.generated_triples,
+            'cache_index': deepcopy(self.cache_index) if copy else self.cache_index,
+            'subtree_cache': deepcopy(self.subtree_cache) if copy else self.subtree_cache,
+            'debug': self.debug,
+            'debug_history': deepcopy(self.debug_history) if copy else self.debug_history,
         }
 
     def load(self, data, copy=True):
@@ -816,9 +844,12 @@ class ConstrainedState():
         self.history = data['history']
         self.cursor = data['cursor']
 
-        self.generated_triples = data['generated_triples'].copy() if copy else data['generated_triples']
+        self.generated_triples = deepcopy(data['generated_triples']) if copy else data['generated_triples']
         self.cache_index = deepcopy(data['cache_index']) if copy else data['cache_index']
         self.subtree_cache = deepcopy(data['subtree_cache']) if copy else data['subtree_cache']
+
+        self.debug = data['debug']
+        self.debug_history = deepcopy(data['debug_history']) if copy else data['debug_history']
 
     def copy(self, other, copy=True):
         self.begin_pattern = other.begin_pattern
@@ -832,6 +863,9 @@ class ConstrainedState():
         self.generated_triples = other.generated_triples.copy() if copy else other.generated_triples
         self.cache_index = deepcopy(other.cache_index) if copy else other.cache_index
         self.subtree_cache = deepcopy(other.subtree_cache) if copy else other.subtree_cache
+
+        self.debug = other.debug
+        self.debug_history = deepcopy(other.debug_history) if copy else other.debug_history
 
 
     def update(self, new_token):
@@ -865,6 +899,12 @@ class ConstrainedState():
             self._rollback()
         else:
             self._update_state(state)
+
+        if self.debug:
+            self.debug_history.append({
+                'state': self.state,
+                'token': new_token
+            })
 
     def _update_state(self, state, initial_cursor = 0):
         if state != self.state:
