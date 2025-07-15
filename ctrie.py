@@ -688,7 +688,7 @@ class ConstrainedStateList():
 
     def beam_permutation(self):
         if len(self.beam_idx) > 0: # ignore first call
-            self.beam_idx.shape[0] * self.beam_idx.shape[1] == self.num_beams * self.num_batches, f'ERROR: beam_idx size unexpected: {len(self.beam_idx)} != {self.num_beams} * {self.num_batches}'
+            assert self.beam_idx.shape[0] * self.beam_idx.shape[1] == self.num_beams * self.num_batches, f'ERROR: beam_idx size unexpected: {len(self.beam_idx)} != {self.num_beams} * {self.num_batches}'
             # copies = self[:,:] # new object
             copies = []
             for batch_i in range(self.num_batches):
