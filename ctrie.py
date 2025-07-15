@@ -620,7 +620,6 @@ class ConstrainedStateList():
         self.num_beams = num_beams
         self.num_batches = num_batches # used for computing beam id
         self.beam_idx = [] # torch.tensor([-1]*num_batches*num_beams).view(num_batches,num_beams,1) # running beam idx
-        self.beam_sent_finished = torch.tensor([False]*num_batches*num_beams).view(num_batches,num_beams) # place to save beam indexes permutation
         self.pad_token_id = pad_token_id
 
     def __getitem__(self, key):
@@ -702,15 +701,14 @@ class ConstrainedStateList():
             if last_beam_z >= 0:
                 for batch_idx in range(self.beam_idx.shape[0]):
                     for num_beam in range(self.beam_idx.shape[1]):
-                        if not self.beam_sent_finished[batch_idx, num_beam]:
-                            replacement_idx = self.beam_idx[batch_idx, num_beam, last_beam_z]
-                            replacement_batch_idx = self.get_batch_idx(replacement_idx)
-                            local_beam_idx = self.get_beam_idx(replacement_idx)
-                            assert replacement_batch_idx == batch_idx, f'ERROR: permutating between different batches! {replacement_batch_idx} --> {batch_idx}, with num_beams {self.num_beams}. replacement_idx {replacement_idx}'
-                            # copy only when to change
-                            if num_beam != local_beam_idx:
-                                # self.states[batch_idx][num_beam].copy(copies[batch_idx][local_beam_idx], copy=True)
-                                self.states[batch_idx][num_beam].load(copies[batch_idx][local_beam_idx], copy=True)
+                        replacement_idx = self.beam_idx[batch_idx, num_beam, last_beam_z]
+                        replacement_batch_idx = self.get_batch_idx(replacement_idx)
+                        local_beam_idx = self.get_beam_idx(replacement_idx)
+                        assert replacement_batch_idx == batch_idx, f'ERROR: permutating between different batches! {replacement_batch_idx} --> {batch_idx}, with num_beams {self.num_beams}. replacement_idx {replacement_idx}'
+                        # copy only when to change
+                        if num_beam != local_beam_idx:
+                            # self.states[batch_idx][num_beam].copy(copies[batch_idx][local_beam_idx], copy=True)
+                            self.states[batch_idx][num_beam].load(copies[batch_idx][local_beam_idx], copy=True)
 
 class ConstrainedState():
     def __init__(self, begin_pattern, end_pattern, cache_index, subtree_cache, state=0) -> None:
@@ -908,19 +906,18 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         for i in range(input_ids.shape[0]):
             batch_idx = self.states.get_batch_idx(i)
             beam_i = self.states.get_beam_idx(i)
-            if not self.states.beam_sent_finished[batch_idx, beam_i]:
-                sequence = input_ids[i].tolist()
+            sequence = input_ids[i].tolist()
 
-                if not self.states[batch_idx, beam_i].first_call():
-                    last_token = sequence[-1]
-                    self.states[batch_idx, beam_i].update(last_token)
+            if not self.states[batch_idx, beam_i].first_call():
+                last_token = sequence[-1]
+                self.states[batch_idx, beam_i].update(last_token)
 
-                if self.states[batch_idx, beam_i].is_constrained(): # odd number means constrained generation
-                    # constrained generation
-                    mask[i] = -math.inf # set for all tokens by default
-                    constrain_generation_sequence = sequence[len(sequence) - self.states[batch_idx, beam_i].get_cursor():]
-                    self.constrained_generation(
-                        constrain_generation_sequence, mask, i, state=self.states[batch_idx, beam_i])
+            if self.states[batch_idx, beam_i].is_constrained(): # odd number means constrained generation
+                # constrained generation
+                mask[i] = -math.inf # set for all tokens by default
+                constrain_generation_sequence = sequence[len(sequence) - self.states[batch_idx, beam_i].get_cursor():]
+                self.constrained_generation(
+                    constrain_generation_sequence, mask, i, state=self.states[batch_idx, beam_i])
 
                 # else:
                 #     # normal generation
