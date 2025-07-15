@@ -1,7 +1,8 @@
 import torch
 from tqdm import tqdm
 from transformers import DynamicCache, LogitsProcessorList
-from ctrie import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex
+from ctrie import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex, patch_model
+import ctrie
 import json
 import importlib
 import os
@@ -165,7 +166,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
             ) for _ in range(num_beams)] 
                 for _ in range(num_batches)]
 
-        states = ConstrainedStateList(states_lol,
+        ctrie.CONSTRAINED_STATES = ConstrainedStateList(states_lol,
                     num_beams=num_beams,
                     num_batches = num_batches,
                     pad_token_id = model_config.tokenizer.eos_token_id)
@@ -173,7 +174,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         constrained_processor = ConstrainedLogitsProcessor(
             index=index_config.index,
             end_token=model_config.newline_token,
-            states=states,
+            states=ctrie.CONSTRAINED_STATES,
             tokenizer=model_config.tokenizer
             )
         logits_processor_list = LogitsProcessorList([
@@ -189,6 +190,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         cache_prompt = model_config.generate_args.get('use_cache', False) and (
                     model_config.batch_size == 1 or model_config.tokenizer_args.get('padding_side')=='right')
 
+        patch_model(model_config.model)
         model_config.model.eval()
         with torch.no_grad():
 
@@ -216,7 +218,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                         print(question)
                 prompted_batch = [model_config.apply_prompt_template(PROMPT_TEMPLATE, question) for question in batch]
 
-                states.reset() # reset caches
+                ctrie.CONSTRAINED_STATES.reset() # reset caches
 
                 batch_inputs = model_config.tokenize_fun(prompted_batch)
 
@@ -231,20 +233,19 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                 else:
                     past_key_values = None
 
-                if len(states) != batch_inputs.input_ids.shape[0] * model_config.generate_args.get('num_beams', 1):
+                if len(ctrie.CONSTRAINED_STATES) != batch_inputs.input_ids.shape[0] * model_config.generate_args.get('num_beams', 1):
                     assert batch_number == len(dataloader) - 1
-                    states = states[:batch_inputs.input_ids.shape[0], :model_config.generate_args.get('num_beams', 1)]
-                    constrained_processor.states = states
+                    ctrie.CONSTRAINED_STATES = ctrie.CONSTRAINED_STATES[:batch_inputs.input_ids.shape[0], :model_config.generate_args.get('num_beams', 1)]
+                    constrained_processor.states = ctrie.CONSTRAINED_STATES
 
                 output = model_config.model.generate(
                     **batch_inputs,
                     logits_processor=logits_processor_list,
                     **model_config.generate_args,
                     past_key_values=past_key_values,
-                    kwargs = {'constrained_state': states}, # passing state
                 )
 
-                states.beam_permutation() # final permutation to match final beams
+                ctrie.CONSTRAINED_STATES.beam_permutation() # final permutation to match final beams
 
                 # iter all questions in the batch
                 for i, (question, prompted_question, output_i) in enumerate(zip(batch, prompted_batch, output)):
@@ -253,7 +254,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                     prediction_complete = bool(prediction)
                     # TODO also save worse beams
 
-                    state = states[i, 0] # first state of the batch is the best beam
+                    state = ctrie.CONSTRAINED_STATES[i, 0] # first state of the batch is the best beam
 
                     new_tokens_generated = 0
                     pad_token_id = model_config.generate_args.get('pad_token_id')
