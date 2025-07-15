@@ -6,6 +6,21 @@ from copy import deepcopy
 import requests
 from requests.adapters import HTTPAdapter, Retry
 import math
+import types
+
+# must import and initialize
+CONSTRAINED_STATES = None
+
+def patch_model(model):
+    _get_running_beams_for_next_iteration_original = model.__class__._get_running_beams_for_next_iteration
+    
+    def _get_running_beams_for_next_iteration_patch(self,*args, **kwargs):
+        global CONSTRAINED_STATES
+        running_sequences, running_beam_scores, running_beam_indices = _get_running_beams_for_next_iteration_original(self, *args, **kwargs)
+        CONSTRAINED_STATES.beam_idx = running_beam_indices
+        return running_sequences, running_beam_scores, running_beam_indices    
+    
+    model._get_running_beams_for_next_iteration = types.MethodType(_get_running_beams_for_next_iteration_patch, model)
 
 class EmptyIndexException(Exception):
     pass
