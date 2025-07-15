@@ -1,10 +1,14 @@
 import pickle
+from transformers.generation.logits_process import LogitsProcessor
+import torch
 from psycopg import sql
 from copy import deepcopy
 import requests
 from requests.adapters import HTTPAdapter, Retry
 import os
 import gzip
+import math
+import types
 from tqdm import trange
 from urllib.parse import urlparse, parse_qs
 from transformers import ProcessorMixin
@@ -906,3 +910,356 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
                         yield key, children, level[0], childrenleaves, None
             else:
                 print('Found empty tree.')
+
+class ConstrainedStateList():
+    # states is list of list [num_batches, num_beams]
+    def __init__(self, states, pad_token_id, num_beams = 1, num_batches = 1):
+        self.states = states
+        assert isinstance(states, list) and isinstance(states[0], list), 'ERROR: states is not a list of lists'
+        assert len(states) == num_batches and len(states[0]) == num_beams, 'ERROR: states size does not match num_batches or num_beams'
+        self.num_beams = num_beams
+        self.num_batches = num_batches # used for computing beam id
+        self.beam_idx = [] # torch.tensor([-1]*num_batches*num_beams).view(num_batches,num_beams,1) # running beam idx
+        self.beam_sent_finished = torch.tensor([False]*num_batches*num_beams).view(num_batches,num_beams) # place to save beam indexes permutation
+        self.pad_token_id = pad_token_id
+
+    def __getitem__(self, key):
+        if isinstance(key, tuple):
+            # TODO test # seems it is not working as expected
+            batch_key, beam_key = key
+
+            if isinstance(batch_key, int) and isinstance(beam_key, int):
+                return self.states[batch_key][beam_key]
+            else:
+                # Convert int to slice to normalize
+                if isinstance(batch_key, int):
+                    batch_key = slice(batch_key, batch_key + 1)
+                if isinstance(beam_key, int):
+                    beam_key = slice(beam_key, beam_key + 1)
+
+                # Slice the states
+                sliced_states = [row[beam_key] for row in self.states[batch_key]]
+
+                new_num_batches = len(sliced_states)
+                new_num_beams = len(sliced_states[0]) if sliced_states else 0
+
+                return ConstrainedStateList(
+                    sliced_states,
+                    pad_token_id=self.pad_token_id,
+                    num_beams=new_num_beams,
+                    num_batches=new_num_batches
+                )
+
+        elif isinstance(key, slice):
+            return ConstrainedStateList(
+                self.states[key],
+                pad_token_id=self.pad_token_id,
+                num_beams=self.num_beams,
+                num_batches=len(self.states[key])
+            )
+        elif isinstance(key, int):
+            return self.states[key]
+        else:
+            raise TypeError(f"Invalid argument type: {type(key)}")
+
+    def __len__(self):
+        return len(self.states) * len(self.states[0])
+
+    def reset(self):
+        for batch in self.states:
+            for state in batch:
+                state.reset()
+
+    def get_batch_idx(self, idx):
+        return int(idx // self.num_beams)
+    
+    def get_beam_idx(self, idx):
+        return int(idx % self.num_beams)
+    
+    def get_last_beam_z(self):
+        z = -1
+        ids = (self.beam_idx[0, 0] != -1).nonzero(as_tuple=False).squeeze()
+        if ids.numel() > 0:
+            if ids.dim() == 0:
+                z = ids.item()
+            else:
+                z = ids[-1].item()
+        return z
+
+    def beam_permutation(self):
+        if len(self.beam_idx) > 0: # ignore first call
+            assert self.beam_idx.shape[0] * self.beam_idx.shape[1] == self.num_beams * self.num_batches, f'ERROR: beam_idx size unexpected: {len(self.beam_idx)} != {self.num_beams} * {self.num_batches}'
+            # copies = self[:,:] # new object
+            copies = []
+            for batch_i in range(self.num_batches):
+                batch_copies = []
+                for beam_i in range(self.num_beams):
+                    batch_copies.append(self[batch_i, beam_i].dump())
+                copies.append(batch_copies)
+            # copies = [[self[batch_i, beam_i].dump() for beam_i in range(self.num_beams)] for batch_i in range(self.num_batches)]
+            last_beam_z = self.get_last_beam_z()
+            # skip first call
+            if last_beam_z >= 0:
+                for batch_idx in range(self.beam_idx.shape[0]):
+                    for num_beam in range(self.beam_idx.shape[1]):
+                        if not self.beam_sent_finished[batch_idx, num_beam]:
+                            replacement_idx = self.beam_idx[batch_idx, num_beam, last_beam_z]
+                            replacement_batch_idx = self.get_batch_idx(replacement_idx)
+                            local_beam_idx = self.get_beam_idx(replacement_idx)
+                            assert replacement_batch_idx == batch_idx, f'ERROR: permutating between different batches! {replacement_batch_idx} --> {batch_idx}, with num_beams {self.num_beams}. replacement_idx {replacement_idx}'
+                            # copy only when to change
+                            if num_beam != local_beam_idx:
+                                # self.states[batch_idx][num_beam].copy(copies[batch_idx][local_beam_idx], copy=True)
+                                self.states[batch_idx][num_beam].load(copies[batch_idx][local_beam_idx], copy=True)
+
+class ConstrainedState():
+    def __init__(self, begin_pattern, end_pattern, cache_index, subtree_cache, state=0) -> None:
+
+        self.NORMAL_GENERATION = 0 # even numbers for normal
+        self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
+
+        # switching to constrain generation
+        self.BEGIN_SWITCH = 2
+        # if the switch pattern is finally found --> CONSTRAINED_GENERATION
+        self.begin_pattern = begin_pattern # {'<': {'fact':{'>':{}}, '_<': {'fact':{'>':{}}}
+        self.begin_pattern_current = self.begin_pattern
+        # if end_pattern is found --> NORMAL_GENERATION
+        self.end_pattern = end_pattern
+
+        self.state = state
+
+        self.history = () # (prev_state, prev_cursor)
+
+        self.cursor = 0 # how many tokens since last change in state
+
+        self.cache_index = cache_index
+        self.generated_triples = []
+
+        self.subtree_cache = subtree_cache
+
+        self._first_call = True
+
+    def first_call(self):
+        if self._first_call:
+            self._first_call = False
+            return True
+        else:
+            return False
+
+    def cache_add(self, sequence):
+        self.cache_index.add(sequence, new_leaf=True)
+        self.generated_triples.append(sequence)
+
+    def is_constrained(self):
+        return self.state % 2 == self.CONSTRAINED_GENERATION
+
+    def end_of_triple_reset(self):
+        self.subtree_cache.reset()
+
+    def reset(self):
+        self.state = 0
+        self.history = ()
+        self.cursor = 0
+        self.generated_triples = []
+        self.cache_index.reset()
+        self.end_of_triple_reset()
+
+    def __json__(self, copy=True):
+        return {
+            'begin_pattern': self.begin_pattern,
+            'begin_pattern_current': self.begin_pattern_current,
+            'end_pattern': self.end_pattern,
+            'state': self.state,
+            'history': self.history,
+            'cursor': self.cursor,
+            'generated_triples': self.generated_triples.copy() if copy else self.generated_triples,
+            'cache_index': self.cache_index.__json__(copy),
+            'subtree_cache': self.subtree_cache.__json__(copy),
+        }
+
+    def from_json(self, data, copy=True):
+        self.begin_pattern = data['begin_pattern']
+        self.begin_pattern_current = data['begin_pattern_current']
+        self.end_pattern = data['end_pattern']
+        self.state = data['state']
+
+        self.history = data['history']
+        self.cursor = data['cursor']
+
+        self.generated_triples = data['generated_triples'].copy() if copy else data['generated_triples']
+        if copy:
+            self.cache_index = DictIndex(end_of_triple=data['cache_index']['end_of_triple'], tree=deepcopy(data['cache_index']['tree']))
+            self.subtree_cache = DictIndex(end_of_triple=data['subtree_cache']['end_of_triple'], tree=deepcopy(data['subtree_cache']['tree']))
+        else:
+            self.cache_index = DictIndex(**data['cache_index'])
+            self.subtree_cache = DictIndex(**data['subtree_cache'])
+
+        return self
+
+    def dump(self, copy=True):
+        return {
+            'begin_pattern': self.begin_pattern,
+            'begin_pattern_current': self.begin_pattern_current,
+            'end_pattern': self.end_pattern,
+            'state': self.state,
+            'history': self.history,
+            'cursor': self.cursor,
+            'generated_triples': self.generated_triples.copy() if copy else self.generated_triples,
+            'cache_index': self.cache_index.copy() if copy else self.cache_index,
+            'subtree_cache': self.subtree_cache.copy() if copy else self.subtree_cache,
+        }
+
+    def load(self, data, copy=True):
+        self.begin_pattern = data['begin_pattern']
+        self.begin_pattern_current = data['begin_pattern_current']
+        self.end_pattern = data['end_pattern']
+        self.state = data['state']
+
+        self.history = data['history']
+        self.cursor = data['cursor']
+
+        self.generated_triples = data['generated_triples'].copy() if copy else data['generated_triples']
+        self.cache_index = deepcopy(data['cache_index']) if copy else data['cache_index']
+        self.subtree_cache = deepcopy(data['subtree_cache']) if copy else data['subtree_cache']
+
+    def copy(self, other, copy=True):
+        self.begin_pattern = other.begin_pattern
+        self.begin_pattern_current = other.begin_pattern_current
+        self.end_pattern = other.end_pattern
+        self.state = other.state
+
+        self.history = other.history  # Assuming it's immutable or should be shallow copied
+        self.cursor = other.cursor
+
+        self.generated_triples = other.generated_triples.copy() if copy else other.generated_triples
+        self.cache_index = deepcopy(other.cache_index) if copy else other.cache_index
+        self.subtree_cache = deepcopy(other.subtree_cache) if copy else other.subtree_cache
+
+
+    def update(self, new_token):
+        rollback = False
+        state = self.state
+        self.cursor += 1
+        if self.state == self.NORMAL_GENERATION:
+            if new_token in self.begin_pattern_current:
+                self.begin_pattern_current = self.begin_pattern_current[new_token]
+                if len(self.begin_pattern_current) == 0: # reached pattern leaf
+                    state = self.CONSTRAINED_GENERATION
+                    self.begin_pattern_current = self.begin_pattern # reset pattern
+                else:
+                    state = self.BEGIN_SWITCH
+
+        elif self.state == self.BEGIN_SWITCH:
+            if new_token in self.begin_pattern_current:
+                self.begin_pattern_current = self.begin_pattern_current[new_token]
+                if len(self.begin_pattern_current) == 0: # reached pattern leaf
+                    state = self.CONSTRAINED_GENERATION
+                    self.begin_pattern_current = self.begin_pattern # reset pattern
+            else:
+                self.begin_pattern_current = self.begin_pattern # reset pattern
+                rollback = True
+
+        elif self.state == self.CONSTRAINED_GENERATION:
+            if new_token == self.end_pattern:
+                state = self.NORMAL_GENERATION
+
+        if rollback:
+            self._rollback()
+        else:
+            self._update_state(state)
+
+    def _update_state(self, state, initial_cursor = 0):
+        if state != self.state:
+            self.history = (self.state, self.cursor)
+
+            self.state = state
+            self.cursor = initial_cursor
+
+    def get_cursor(self):
+        return self.cursor
+
+    def _rollback(self):
+        prev_state, prev_cursor = self.history
+        self.history = (self.state, self.cursor)
+        self.state = prev_state
+        self.cursor = prev_cursor + self.cursor
+
+class ConstrainedLogitsProcessor(LogitsProcessor):
+    def __init__(self, index, end_token, states, tokenizer=None, error_strategy=0):
+        self.index = index
+        self.end_token = end_token
+        self.states = states
+        self.error_strategy = error_strategy
+
+        self.ERROR_STRATEGY_WARN = 0
+        self.ERROR_STRATEGY_FAIL = 1
+
+        self.tokenizer=tokenizer # for debugging
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
+        assert input_ids.shape[0] == len(self.states), \
+            f'Error: number of states ({len(self.states)}) should match `num_batches * num_beams` ({input_ids.shape[0]})'
+
+        self.states.beam_permutation()
+
+        # TODO create a mask of zeros same shape as scores and same device
+        mask = torch.zeros_like(scores)
+
+        for i in range(input_ids.shape[0]):
+            batch_idx = self.states.get_batch_idx(i)
+            beam_i = self.states.get_beam_idx(i)
+            if not self.states.beam_sent_finished[batch_idx, beam_i]:
+                sequence = input_ids[i].tolist()
+
+                if not self.states[batch_idx, beam_i].first_call():
+                    last_token = sequence[-1]
+                    self.states[batch_idx, beam_i].update(last_token)
+
+                if self.states[batch_idx, beam_i].is_constrained(): # odd number means constrained generation
+                    # constrained generation
+                    mask[i] = -math.inf # set for all tokens by default
+                    constrain_generation_sequence = sequence[len(sequence) - self.states[batch_idx, beam_i].get_cursor():]
+                    self.constrained_generation(
+                        constrain_generation_sequence, mask, i, state=self.states[batch_idx, beam_i])
+
+                # else:
+                #     # normal generation
+                #     # scores are not altered
+                #     pass
+
+        scores_processed = scores + mask
+
+        return scores_processed
+
+    def constrained_generation(self, sequence, mask: torch.FloatTensor, mask_idx, state):
+
+        possible_tokens, _ = self.index.next_tokens(sequence, state = state)
+        try:
+            visited_tokens, _ = state.cache_index.next_tokens(sequence)
+            # print(visited_tokens, end=' = ')
+            state.cache_index.subtract_tokens(possible_tokens, visited_tokens)
+            # print(possible_tokens)
+        except EmptyIndexException:
+            # ignore when the cache index is empty
+            pass
+        except TripleNotFoundException:
+            # ignore if triple not in cache index
+            pass
+
+        possible_tokens = list(possible_tokens.keys()) # TODO transform subtract tokens in a prob modifier
+
+        if len(possible_tokens) == 0:
+            # end of constrained generation
+            # send end of string
+            if not self.index.triple_is_valid(sequence):
+                if self.error_strategy == self.ERROR_STRATEGY_FAIL:
+                    raise TripleNotFoundException(sequence)
+                elif self.error_strategy == self.ERROR_STRATEGY_WARN:
+                    print('WARNING:', TripleNotFoundException(sequence))
+            possible_tokens = [self.end_token]
+            generated_triple = sequence + [self.end_token]
+            state.cache_add(generated_triple)
+            # ensure to reset after eof triple
+            state.end_of_triple_reset()
+
+        mask[mask_idx, possible_tokens] = 0
