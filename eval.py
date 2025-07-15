@@ -70,9 +70,10 @@ def get_utc_date_and_time():
 @click.option("--wandb", "wandb", is_flag=True, default=False, help="Log in wandb")
 @click.option("--unconstrained-generation", is_flag=True, help="Unconstrained generation")
 @click.option("--debug", is_flag=True, help="Print debug information.")
+@click.option("--debug-states", is_flag=True, help="Print debug information about states (very verbose).")
 @click.option("--continue", 'continue_from_previous_run', is_flag=True, help="Continue previous run if not concluded (and if config was the same).")
 @click.option("--log-dir", default='.', help="Log dir (only use if --output is not specified).")
-def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb, unconstrained_generation, debug, continue_from_previous_run, log_dir):
+def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb, unconstrained_generation, debug, debug_states, continue_from_previous_run, log_dir):
     if index_config_path.endswith('.py'):
         index_config_path = index_config_path[:-3]
     index_module = importlib.import_module(index_config_path)
@@ -151,14 +152,17 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                 end_pattern = model_config.newline_token,
                 cache_index = DictIndex(end_of_triple=index_config.index.end_of_triple),
                 subtree_cache = DictIndex(end_of_triple=index_config.index.end_of_triple),
-                oneleaf_cache = DictIndex(end_of_triple=index_config.index.end_of_triple)
+                debug = debug_states
             ) for _ in range(num_beams)] 
                 for _ in range(num_batches)]
 
         ctrie.CONSTRAINED_STATES = ConstrainedStateList(states_lol,
                     num_beams=num_beams,
                     num_batches = num_batches,
-                    pad_token_id = model_config.tokenizer.eos_token_id)
+                    pad_token_id = model_config.tokenizer.eos_token_id,
+                    debug = debug_states,
+                    debug_tokenizer = model_config.tokenizer if debug_states else None
+                    )
 
         constrained_processor = ConstrainedLogitsProcessor(
             index=index_config.index,
