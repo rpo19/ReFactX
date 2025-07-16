@@ -12,7 +12,7 @@ psycopg[binary]
 redis
 cachetools
 wandb
-git+https://github.com/rpo19/transformers@develop # patched transformers for stateful constrained generation
+transformers==4.53.2
 tabulate
 nltk
 rouge-score
