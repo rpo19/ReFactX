@@ -5,6 +5,12 @@ This code describes the most important functions behind ReFactX.
 Some auxiliary functions are only described with comments and not with pseudocode.
 
 Beam search or batched generation are ignored for simplicity.
+
+While in the paper the functions next tokens/NTKB and numleaves are described as
+two seperate functions, to simplify the understanding.
+Here (and in the implementation) the allowed next tokens and the respective numbers
+of reachable leaves are obtained by the same function, since these two pieces of
+information are stored together.
 """
 
 import numpy as np
