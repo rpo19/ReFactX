@@ -8,6 +8,7 @@ import click
 from ctrie import PostgresTrieIndex, ConstrainedState, DictIndex, TripleNotFoundException, EmptyIndexException
 import importlib
 from base_postgres_index_config import IndexConfigException
+from tqdm import tqdm
 
 class TimeMeasure:
     def __init__(self, tag='default', verbose=False, outfile=sys.stdout):
@@ -54,6 +55,18 @@ def choose(children, initial_tokens):
         choice = random.choice(children)
     return choice
 
+def process_initial_tokens(initial_tokens, tokenizer, add_special_tokens, verbose=False):
+    if isinstance(initial_tokens, str):
+        if verbose:
+            print(f'|{initial_tokens}|')
+        initial_tokens = tokenizer(initial_tokens, add_special_tokens=add_special_tokens)['input_ids']
+        if verbose:
+            print(initial_tokens)
+    elif verbose:
+        print(f'|{tokenizer.decode(initial_tokens)}|')
+        print(initial_tokens)
+    return initial_tokens
+
 class IndexArgumentException(Exception):
     def __init__(self, index_module, postgres_url, table_name, rootkey, switch_parameter, end_of_triple, model_name):
         message = f'''ERROR: you must either set --index-module or manually set all the following:
@@ -86,6 +99,7 @@ Actual values:
 #
 @click.option("--random-seed", type=int, required=False, help="Random seed")
 @click.option("--initial-tokens", default='', help="Initial tokens")
+@click.option("--initial-tokens-file", default='', help="File containing all the initial tokens. One per line")
 @click.option("--json-tokens", required=False, help="JSON tokens")
 @click.option("--dump-subtree-cache", required=False, default=False, is_flag=True, help="Dump subtree cache")
 @click.option("--verbose", required=False, default=False, is_flag=True, help="Verbose mode")
@@ -145,18 +159,23 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
     with TimeMeasure(tag='Loading tokenizer', verbose=verbose) as tm:
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    print('Initial tokens:', end=' ')
-    if initial_tokens:
-        if isinstance(initial_tokens, str):
-            print(f'|{initial_tokens}|')
-            initial_tokens = tokenizer(initial_tokens, add_special_tokens=add_special_tokens)['input_ids']
-            print(initial_tokens)
-        else:
-            print(f'|{tokenizer.decode(initial_tokens)}|')
-            print(initial_tokens)
+    if initial_tokens_file:
+        # assert not initial_tokens # initial tokens is the prefix
+        assert not json_tokens
+        with open(initial_tokens_file) as init_fd:
+            all_initial_tokens = init_fd.readlines()
+
+        all_initial_tokens = [item.replace('\n','') for item in all_initial_tokens]
+        all_initial_tokens = [initial_tokens + item for item in all_initial_tokens]
+        all_initial_tokens = [process_initial_tokens(item, tokenizer, add_special_tokens, False) for item in all_initial_tokens]
     else:
-        initial_tokens = []
+        if initial_tokens:
+            initial_tokens = process_initial_tokens(initial_tokens, tokenizer, add_special_tokens, True)
+        else:
+            initial_tokens = []
         print('||\n[]')
+        all_initial_tokens = [initial_tokens]
+
 
     state = ConstrainedState(
                 begin_pattern = [],
@@ -205,16 +224,62 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
                         next_token = choose(possible_tokens, initial_tokens_run)
                         numleaves = possible_tokens_dict[next_token]
                         if verbose:
-                            print(f'choosing {next_token}: numleaves: {numleaves}')
+                            print(sequence)
+                            print(tokenizer.decode(sequence))
+                        possible_tokens_dict, extra = index.next_tokens(sequence, state=state)
+                        possible_tokens_dict_debug = possible_tokens_dict.copy()
+                        if verbose and extra and extra.get('found_subtree'):
+                            print('found_subtree')
+                        try:
+                            visited_tokens, _ = state.cache_index.next_tokens(sequence)
+                            # print(visited_tokens, end=' = ')
+                            state.cache_index.subtract_tokens(possible_tokens_dict, visited_tokens)
+                            # print(possible_tokens)
+                        except EmptyIndexException:
+                            # ignore when the cache index is empty
+                            pass
+                        except TripleNotFoundException:
+                            # ignore if triple not in cache index
+                            pass
 
-                        sequence.append(next_token)
+                    if dump_subtree_cache and len(state.subtree_cache) > 0:
+                        print('DUMP - subtree cache:')
+                        print(state.subtree_cache)
 
-                        if print_initial_tokens_numleaves and len(initial_tokens)>0 and sequence == initial_tokens:
-                            print('Numleaves for initial_tokens:', numleaves)
-                            print_initial_tokens_numleaves = False
+                    if dump_oneleaf_cache and len(state.oneleaf_cache) > 0:
+                        print('DUMP - oneleaf cache:')
+                        print(state.oneleaf_cache)
 
-                    except InputTokenException as e:
-                        print(e)
+                    possible_tokens = list(possible_tokens_dict.keys()) if possible_tokens_dict else []
+
+                    if len(possible_tokens) > 0:
+                        try:
+                            next_token = choose(possible_tokens, initial_tokens_run)
+                            numleaves = possible_tokens_dict[next_token]
+                            if verbose:
+                                print(f'choosing {next_token}: numleaves: {numleaves}')
+
+                            sequence.append(next_token)
+
+                            if print_initial_tokens_numleaves and len(initial_tokens)>0 and sequence == initial_tokens:
+                                print('Numleaves for initial_tokens:', numleaves)
+                                print_initial_tokens_numleaves = False
+
+                        except InputTokenException as e:
+                            print(e)
+                            break
+
+                        if verbose and extra and extra.get('tokens_from_oneleaf', False) and next_token in extra.get('tokens_from_oneleaf', {}):
+                            print('chose token from oneleaf')
+                    else:
+                        if verbose:
+                            print('.')
+                        if not sequence[-1] == end_of_triple:
+                            print('ERROR: invalid triple!', sequence)
+                        else:
+                            print(sequence)
+                        state.cache_add(sequence)
+                        state.end_of_triple_reset()
                         break
                 else:
                     if verbose:
