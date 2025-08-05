@@ -6,8 +6,12 @@ We present ReFactX, a scalable method that enables LLMs to access external knowl
 
 This repository contains the source code for using ReFactX and reproducing our work accepted at ISWC 2025.
 
+## Setup
+- install the requirements `pip install -r requirements.txt`
+- prepare the `.env` file: `cp env-sample.txt .env`, then edit `.env` (can be skipped if using the simple index in the try_refactx notebook)
+
 ## Try ReFactX
-For trying ReFactX use the notebook `try_refactx.ipynb`.
+For quickly trying ReFactX with an in-memory prefix tree (derived from a 31k-facts knowledge base) use the notebook [try_refactx.ipynb](try_refactx.ipynb).
 
 ## Wikidata Prefix Tree
 Refer to [PrefixTree.md](PrefixTree.md) for creating the Wikidata prefix tree we used in our work.
