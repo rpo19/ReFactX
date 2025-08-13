@@ -12,7 +12,7 @@ psycopg[binary]
 redis
 cachetools
 wandb
-transformers==4.53.2
+transformers==4.55.0
 tabulate
 nltk
 rouge-score
