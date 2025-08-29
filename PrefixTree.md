@@ -1,18 +1,29 @@
-# Wikidata Prefix Tree
+## Wikidata Prefix Tree
 This file contains instruction on how to prepare the prefix tree from Wikidata dumps.
 
 For using the 800 million facts from the paper:
 - download the verbalized facts from [here](https://drive.google.com/file/d/1jbDHR3VYVEPjUZ4wdIOzl39rhZweVru9/view?usp=sharing)
 - continue from [Tokenize and Populate](#tokenize-and-populate)
 
-## Download dumps
+### Download dumps
 - Go to https://dumps.wikimedia.org/wikidatawiki/entities/ and download `latest-truthy.nt.bz2`.
 - Go to https://dumps.wikimedia.org/enwiki/20241220/ and download `enwiki-20241220-page.sql.gz` and `enwiki-20241220-page_props.sql.gz`
 
-## Filter Labels from the wikidata dump
+### Filter Labels from the wikidata dump
 The output file only has triples with label, altLabel, and description as predicate.
 ```
 bzgrep -P '(http://www\\.w3\\.org/2000/01/rdf-schema#label|http://www\\.w3\\.org/2004/02/skos/core#altLabel|http://schema\\.org/description).*\\@en\s+.' latest-truthy.nt.bz2 | gzip -c > latest-truthy-labels-descriptions.nt.gz
+```
+
+## Freebase
+Download dump with (source doi.org/10.1145/3437963.3441753 see github):
+```
+wget https://download.microsoft.com/download/A/E/4/AE428B7A-9EF9-446C-85CF-D8ED0C9B1F26/FastRDFStore-data.zip --no-check-certificate
+```
+
+### Filter labels
+```
+grep type.object.name fb_en.txt > fb_labels.txt
 ```
 
 ## Create a virtualenv
