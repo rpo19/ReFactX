@@ -2,7 +2,7 @@
 This file contains instruction on how to prepare the prefix tree from Wikidata dumps.
 
 For using the 800 million facts from the paper:
-- download the verbalized facts from [here](https://drive.google.com/file/d/1jbDHR3VYVEPjUZ4wdIOzl39rhZweVru9/view?usp=sharing)
+- download the facts from [HuggingFace](https://huggingface.co/datasets/rpozzi/ReFactX_data)
 - continue from [Tokenize and Populate](#tokenize-and-populate)
 
 ## Download dumps
