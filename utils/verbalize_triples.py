@@ -17,9 +17,12 @@ from tqdm import tqdm
 import bz2
 import re
 import click
+import nltk
 
 wikidata_template = '<{v_sub}> <{v_prop}> <{v_obj}> .\n'
 freebase_template = '{v_sub} {v_prop} {v_obj} .\n'
+
+freebase_desc_max_len = 100 # max length of description in Freebase to be included in verbalization
 
 wikidata_triple_regex = re.compile(r'<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>\s+'
     r'<http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)>\s+'
@@ -55,6 +58,10 @@ def wikidata_verbalize_entity(entity_id: int, ent_labels_wikidata, ent_labels_wi
 def freebase_verbalize_entity(entity_id: str, ent_labels_freebase):
     label = ent_labels_freebase.get(entity_id, [None])[0]
     description = ent_labels_freebase.get(entity_id, [None, None, ''])[2]
+    if description and len(description) > freebase_desc_max_len:
+        description = nltk.sent_tokenize(description)[0] # take first sentence if too long
+        if len(description) > freebase_desc_max_len:
+            description = description[:freebase_desc_max_len]
     if label and description:
         return f'{label} ({description})'
     else:
@@ -75,6 +82,13 @@ def main(wikidata_props_mapping, wikidata_labels, freebase_labels, wikipedia_ent
             raise ValueError('When using Freebase labels, do not provide Wikidata or Wikipedia files')
         mode = 'freebase'
         template = freebase_template
+
+        # nltk sent_tokenizer test
+        try:
+            nltk.sent_tokenize("This is a sentence. This is another one.")
+        except LookupError:
+            print("Downloading punkt_tab for nltk")
+            nltk.download('punkt_tab')
 
         with open(freebase_labels, 'rb') as fd:
             ent_labels_freebase = pickle.load(fd)
@@ -156,16 +170,16 @@ def main(wikidata_props_mapping, wikidata_labels, freebase_labels, wikipedia_ent
                 elif mode == 'freebase':
                     line = bline
                     sub, v_prop, obj = line.split('\t')
-                    if sub.startswith('.m.'):
+                    if obj[-1] == '\n':
+                        obj = obj[:-1]
+                    if sub.startswith('m.'):
                         v_sub = freebase_verbalize_entity(sub, ent_labels_freebase)
 
                         if v_sub:
-                            if obj.startswith('.m.'):
+                            if obj.startswith('m.'):
                                 v_obj = freebase_verbalize_entity(obj, ent_labels_freebase)
                             else:
                                 v_obj = obj
-
-                    match = True
 
                 if v_obj:
                     outfd.write(template.format(v_sub=v_sub, v_prop=v_prop, v_obj=v_obj).encode('utf-8'))
