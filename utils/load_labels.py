@@ -18,33 +18,51 @@ import re
 from tqdm import tqdm
 import pickle
 import click
+import pdb
 
 wikidata_regex = re.compile(r'<http:\/\/www\.wikidata\.org\/.*\/([QP][0-9]+)>\s+'
-r'<(\S+)>\s+'
-r'"([^"]+)"@en\s+\.')
-freebase_regex = re.compile(r'<http:\/\/rdf\.freebase\.com\/ns\/([mp][0-9]+)>\s+'
 r'<(\S+)>\s+'
 r'"([^"]+)"@en\s+\.')
 @click.command()
 @click.argument('labels_path', type=click.Path(exists=True))
 @click.argument('outfile_ents', type=click.Path())
-@click.argument('outfile_props', type=click.Path())
+@click.argument('outfile_props', type=click.Path(), required=False)
 @click.option('--freebase', is_flag=True, help='Parse using Freebase regex')
 def main(labels_path, outfile_ents, outfile_props, freebase):
+    if not freebase and outfile_props is None:
+        raise ValueError('Please provide outfile_props for Wikidata')
     ents = {}
     props = {}
     start = time.time()
-    regex = freebase_regex if freebase else wikidata_regex
     try:
-        with gzip.open(labels_path, 'r') as fd:
-            with tqdm() as pbar:
-                if freebase:
+        if freebase:
+            with open(labels_path, 'r', encoding='utf-8') as fd:
+                with tqdm() as pbar:
+                    for count, line in enumerate(fd):
+                        sub, pred, obj = line.strip().split('\t')
+                        res_id = sub
+                        if res_id not in ents:
+                            ents[res_id] = ['',set(),''] # label, altLabels, description
+                        if pred == 'type.object.name':
+                            # first is main label
+                            # next are alternative labels
+                            if ents[res_id][0] == '':
+                                ents[res_id][0] = obj
+                            else:
+                                ents[res_id][1].add(obj)
+                        elif pred == 'common.topic.description':
+                            # for descriptions take the shortest
+                            if ents[res_id][2] == '':
+                                ents[res_id][2] = obj
+                            else:
+                                if len(obj) < len(ents[res_id][2]):
+                                    ents[res_id][2] = obj
+        else:
+            with gzip.open(labels_path, 'r') as fd:
+                with tqdm() as pbar:
                     for count, bline in enumerate(fd):
                         line = bline.decode('unicode_escape') # correctly load unicode characters
-                else:
-                    for count, bline in enumerate(fd):
-                        line = bline.decode('unicode_escape') # correctly load unicode characters
-                        match = regex.match(line)
+                        match = wikidata_regex.match(line)
                         if match:
                             sub, pred, obj = match.groups()
                             res_id = int(sub[1:])
@@ -60,6 +78,7 @@ def main(labels_path, outfile_ents, outfile_props, freebase):
                             elif pred == 'http://www.w3.org/2004/02/skos/core#altLabel':
                                 mydict[res_id][1].add(obj)
                             elif pred == 'http://schema.org/description':
+                                assert mydict[res_id][2] == ''
                                 mydict[res_id][2] = obj
 
                     if count % 10000 == 0:
@@ -74,8 +93,10 @@ def main(labels_path, outfile_ents, outfile_props, freebase):
     with open(outfile_ents, 'wb') as fd:
         pickle.dump(ents, fd)
 
-    with open(outfile_props, 'wb') as fd:
-        pickle.dump(props, fd)
+    if not freebase:
+        # freebase props are already verbalized
+        with open(outfile_props, 'wb') as fd:
+            pickle.dump(props, fd)
 
 if __name__ == '__main__':
     main()

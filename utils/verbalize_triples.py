@@ -18,10 +18,17 @@ import bz2
 import re
 import click
 
+wikidata_template = '<{v_sub}> <{v_prop}> <{v_obj}> .\n'
+freebase_template = '{v_sub} {v_prop} {v_obj} .\n'
+
+wikidata_triple_regex = re.compile(r'<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>\s+'
+    r'<http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)>\s+'
+    r'(?:<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>|"([^"]+)"@en|"([^"]+)"\^\^<.+>)\s+\.')
+
 def verbalize_property(prop_id: int, prop_labels):
     return prop_labels.get('P'+prop_id, {}).get('label')
 
-def verbalize_entity(entity_id: int, ent_labels_wikidata, ent_labels_wikipedia, output=None, added_shortdesc=None, added_desc=None):
+def wikidata_verbalize_entity(entity_id: int, ent_labels_wikidata, ent_labels_wikipedia, output=None, added_shortdesc=None, added_desc=None):
     # -> unique_title, short descr, description
     unique_title = None # None when not in wikipedia and no description in wikidata
 
@@ -45,27 +52,52 @@ def verbalize_entity(entity_id: int, ent_labels_wikidata, ent_labels_wikipedia, 
 
     return unique_title
 
+def freebase_verbalize_entity(entity_id: str, ent_labels_freebase):
+    label = ent_labels_freebase.get(entity_id, [None])[0]
+    description = ent_labels_freebase.get(entity_id, [None, None, ''])[2]
+    if label and description:
+        return f'{label} ({description})'
+    else:
+        return label
+
 @click.command()
-@click.option("--props-mapping", required=True, help="Path to the filtered properties pickle file.")
-@click.option("--wikidata-labels", required=True, help="Path to the Wikidata labels pickle file.")
-@click.option("--wikipedia-entity-mapping", required=True, help="Path to the Wikidata titles mapping pickle file.")
-@click.argument("wiki_dump")
+@click.option("--wikidata-props-mapping", required=False, help="Path to the filtered properties pickle file.")
+@click.option("--wikidata-labels", required=False, help="Path to the Wikidata labels pickle file.")
+@click.option("--freebase-labels", required=False, help="Path to the Freebase labels pickle file.")
+@click.option("--wikipedia-entity-mapping", required=False, help="Path to the Wikidata titles mapping pickle file.")
+@click.argument("dump")
 @click.argument("outfile")
 @click.option("--total-number-of-triples", type=int, default=None, help="Total number of triples (optional).")
-def main(props_mapping, wikidata_labels, wikipedia_entity_mapping, wiki_dump, outfile, total_number_of_triples):
+def main(wikidata_props_mapping, wikidata_labels, freebase_labels, wikipedia_entity_mapping, dump, outfile, total_number_of_triples):
 
-    with open(props_mapping, 'rb') as fd:
-        prop_labels = pickle.load(fd)
+    if freebase_labels:
+        if wikidata_labels or wikidata_props_mapping or wikipedia_entity_mapping:
+            raise ValueError('When using Freebase labels, do not provide Wikidata or Wikipedia files')
+        mode = 'freebase'
+        template = freebase_template
 
-    with open(wikidata_labels, 'rb') as fd:
-        ent_labels_wikidata = pickle.load(fd)
+        with open(freebase_labels, 'rb') as fd:
+            ent_labels_freebase = pickle.load(fd)
+    else:
+        # wikidata
+        if not (wikidata_labels and wikidata_props_mapping and wikipedia_entity_mapping):
+            raise ValueError('Please provide all three files for Wikidata: wikidata-props-mapping, wikidata-labels, wikipedia-entity-mapping')
+        if freebase_labels:
+            raise ValueError('When using Wikidata labels, do not provide Freebase labels file')
+        
+        mode = 'wikidata'
+        template = wikidata_template
 
-    with open(wikipedia_entity_mapping, 'rb') as fd:
-        ent_labels_wikipedia = pickle.load(fd)
+        with open(wikidata_props_mapping, 'rb') as fd:
+            wikidata_prop_labels = pickle.load(fd)
 
-    triple_regex = re.compile(r'<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>\s+'
-    r'<http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)>\s+'
-    r'(?:<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>|"([^"]+)"@en|"([^"]+)"\^\^<.+>)\s+\.')
+        with open(wikidata_labels, 'rb') as fd:
+            ent_labels_wikidata = pickle.load(fd)
+
+        with open(wikipedia_entity_mapping, 'rb') as fd:
+            ent_labels_wikipedia = pickle.load(fd)
+
+
 
     tqdm_params = {'total': total_number_of_triples}
 
@@ -74,13 +106,18 @@ def main(props_mapping, wikidata_labels, wikipedia_entity_mapping, wiki_dump, ou
 
     with tqdm(**tqdm_params) as pbar:
         with bz2.BZ2File(outfile, 'w') as outfd:
-            with bz2.BZ2File(wiki_dump, 'r') as fd:
-                for count, bline in enumerate(fd):
+            if mode == 'wikidata':
+                fd = bz2.BZ2File(dump, 'r')
+            elif mode == 'freebase':
+                fd = open(dump, 'r', encoding='utf-8')
+
+            for count, bline in enumerate(fd):
+                v_obj = None
+                if mode == 'wikidata':
                     line = bline.decode('unicode_escape') # correctly load unicode characters
-                    match = triple_regex.match(line)
+                    match = wikidata_triple_regex.match(line)
                     if match:
                         sub, prop, obj_ent, obj_lit_en, obj_lit_datatype = match.groups()
-
                         obj_lit = None
                         if obj_lit_en:
                             obj_lit = obj_lit_en
@@ -89,7 +126,7 @@ def main(props_mapping, wikidata_labels, wikipedia_entity_mapping, wiki_dump, ou
 
                         if sub.isnumeric():
                             sub_id = int(sub)
-                            v_sub = verbalize_entity(
+                            v_sub = wikidata_verbalize_entity(
                                         entity_id = sub_id,
                                         ent_labels_wikidata = ent_labels_wikidata,
                                         ent_labels_wikipedia = ent_labels_wikipedia,
@@ -98,14 +135,14 @@ def main(props_mapping, wikidata_labels, wikipedia_entity_mapping, wiki_dump, ou
                                         added_desc = added_desc)
 
                             if v_sub:
-                                v_prop = verbalize_property(prop, prop_labels)
+                                v_prop = verbalize_property(prop, wikidata_prop_labels)
 
                                 if v_sub and v_prop:
                                     if obj_ent and obj_ent.isnumeric():
                                         # obj is entity
                                         obj_id = int(obj_ent)
                                         v_obj = ent_labels_wikipedia.get(obj_id, {}).get('title')
-                                        v_obj = verbalize_entity(
+                                        v_obj = wikidata_verbalize_entity(
                                                     entity_id = obj_id,
                                                     ent_labels_wikidata = ent_labels_wikidata,
                                                     ent_labels_wikipedia = ent_labels_wikipedia,
@@ -116,16 +153,28 @@ def main(props_mapping, wikidata_labels, wikipedia_entity_mapping, wiki_dump, ou
                                     if obj_lit:
                                         # obj is literal
                                         v_obj = obj_lit
+                elif mode == 'freebase':
+                    line = bline
+                    sub, v_prop, obj = line.split('\t')
+                    if sub.startswith('.m.'):
+                        v_sub = freebase_verbalize_entity(sub, ent_labels_freebase)
 
-                                    if v_obj:
-                                        outfd.write(f'<{v_sub}> <{v_prop}> <{v_obj}> .\n'.encode('utf-8'))
+                        if v_sub:
+                            if obj.startswith('.m.'):
+                                v_obj = freebase_verbalize_entity(obj, ent_labels_freebase)
+                            else:
+                                v_obj = obj
 
-                        # else:
-                        #     # cannot find v_sub or v_prop --> skip
-                        #     pass
-                    if count % 1000000 == 0:
-                        pbar.n = count
-                        pbar.refresh()
+                    match = True
+
+                if v_obj:
+                    outfd.write(template.format(v_sub=v_sub, v_prop=v_prop, v_obj=v_obj).encode('utf-8'))
+                    # else:
+                    #     # cannot find v_sub or v_prop --> skip
+                    #     pass
+                if count % 1000000 == 0:
+                    pbar.n = count
+                    pbar.refresh()
 
 if __name__ == "__main__":
     main()
