@@ -1,4 +1,15 @@
-## Wikidata Prefix Tree
+# Prefix Tree
+### Create a virtualenv
+```
+python -m venv venv
+pip install -r requirements.txt
+```
+## Install flash attention
+If you have compatible GPUs.
+```
+pip install flash-attn --no-build-isolation
+```
+## Wikidata Preprocessing
 This file contains instruction on how to prepare the prefix tree from Wikidata dumps.
 
 For using the 800 million facts from the paper:
@@ -15,42 +26,19 @@ The output file only has triples with label, altLabel, and description as predic
 bzgrep -P '(http://www\\.w3\\.org/2000/01/rdf-schema#label|http://www\\.w3\\.org/2004/02/skos/core#altLabel|http://schema\\.org/description).*\\@en\s+.' latest-truthy.nt.bz2 | gzip -c > latest-truthy-labels-descriptions.nt.gz
 ```
 
-## Freebase
-Download dump with (source doi.org/10.1145/3437963.3441753 see github):
-```
-wget https://download.microsoft.com/download/A/E/4/AE428B7A-9EF9-446C-85CF-D8ED0C9B1F26/FastRDFStore-data.zip --no-check-certificate
-```
-
-### Filter labels
-```
-grep type.object.name fb_en.txt > fb_labels.txt
-```
-
-## Create a virtualenv
-```
-python -m venv venv
-pip install -r requirements.txt
-```
-
-## Install flash attention
-If you have compatible GPUs.
-```
-pip install flash-attn --no-build-isolation
-```
-
-## Load labels and description into a pickle file
+### Load labels and description into a pickle file
 ```
 python load_labels.py latest-truthy-labels-descriptions.nt.gz wikidata-labels.pickle
 ```
 
-## Create Label mappings for Wikipedia Entities
+### Create Label mappings for Wikipedia Entities
 
 Refer to the readme in services/mariadb: [Readme.md](services/mariadb/Readme.md)
 
-## Download property labels
+### Download property labels
 Go to https://hay.toolforge.org/propbrowse/ and Download all properties as JSON.
 
-## Filter the properties
+### Filter the properties
 Replace `input_props.json` with the file you just downloaded and run:
 ```
 python filter_props.py input_props.json filtered_props.pickle
@@ -59,6 +47,27 @@ python filter_props.py input_props.json filtered_props.pickle
 ## Verbalize the triples using the labels
 ```
 python verbalize_triples.py --props-mapping props_mapping --wikidata-labels wikidata_labels --wikipedia-entity-mapping wikipedia_entity_mapping wikidump.bz2 verbalized_triples.bz2 [--total-number-of-triples number]
+```
+
+## Freebase preprocessing
+Download dump with (source doi.org/10.1145/3437963.3441753 see github):
+```
+wget https://download.microsoft.com/download/A/E/4/AE428B7A-9EF9-446C-85CF-D8ED0C9B1F26/FastRDFStore-data.zip --no-check-certificate
+```
+
+### Filter labels
+```
+grep -P 'type\.object\.name|common\.topic\.description' fb_en.txt > fb_labels.txt
+```
+
+### Load labels into python dict
+```
+python load_labels.py fb_labels.txt ents_freebase.pickle --freebase
+```
+
+## Verbalize the triples using the labels
+```
+python verbalize_triples.py --freebase-labels freebase_labels fb_en.txt verbalized_triples.bz2 [--total-number-of-triples number]
 ```
 
 ## Tokenize and Populate
