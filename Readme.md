@@ -1,5 +1,15 @@
 # ReFactX: Scalable Reasoning with Reliable Facts via Constrained Generation
 ### Riccardo Pozzi, Matteo Palmonari, Andrea Coletta, Luigi Bellomarini, Jens Lehmann, Sahar Vahdati
+
+<!--- BADGES: START --->
+[![Arxiv](https://img.shields.io/badge/arXiv-2508.16983-B31B1B.svg)][#arxiv-paper-package]
+[![GitHub license](https://img.shields.io/badge/License-MIT-blue.svg)][#license-gh-package]
+
+[#arxiv-paper-package]: https://arxiv.org/abs/2508.16983
+[#license-gh-package]: LICENSE
+
+<!--- BADGES: END --->
+
 The paper has been accepted at ISWC 2025. A preprint that has not
 undergone peer review is available at
 [https://arxiv.org/abs/2508.16983](https://arxiv.org/abs/2508.16983).
