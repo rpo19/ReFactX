@@ -3,9 +3,11 @@
 
 <!--- BADGES: START --->
 [![Arxiv](https://img.shields.io/badge/arXiv-2508.16983-B31B1B.svg)][#arxiv-paper-package]
+[![HF](https://img.shields.io/badge/Hugging%20Face-Dataset-orange?logo=huggingface)][#hf-dataset]
 [![GitHub license](https://img.shields.io/badge/License-MIT-blue.svg)][#license-gh-package]
 
 [#arxiv-paper-package]: https://arxiv.org/abs/2508.16983
+[#hf-dataset]: https://huggingface.co/datasets/rpozzi/ReFactX_data
 [#license-gh-package]: LICENSE
 
 <!--- BADGES: END --->
