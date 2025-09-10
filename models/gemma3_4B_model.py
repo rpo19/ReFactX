@@ -1,4 +1,4 @@
-from base_model_config import ModelConfig
+from .base_model_config import ModelConfig
 from transformers import AutoModelForImageTextToText
 
 model_config = ModelConfig(

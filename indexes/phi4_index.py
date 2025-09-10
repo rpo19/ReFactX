@@ -1,4 +1,4 @@
-from base_postgres_index_config import IndexConfig
+from .base_postgres_index_config import IndexConfig
 
 index_config = IndexConfig(
     model_name = 'microsoft/phi-4',

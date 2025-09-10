@@ -1,7 +1,7 @@
 from torch.utils.data import Dataset
 from dotenv import load_dotenv
 import os
-from prompt_base import PROMPT_TEMPLATE
+from refactx.prompt_base import PROMPT_TEMPLATE
 
 load_dotenv()
 

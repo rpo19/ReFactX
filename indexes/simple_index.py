@@ -1,6 +1,6 @@
 from refactx import DictIndex
 import gzip
-from base_dataset_config import QADataset
+from datamodules.base_dataset_config import QADataset
 from transformers import AutoTokenizer
 from tqdm import trange
 
@@ -22,7 +22,7 @@ class IndexConfig():
         self.batch_size = batch_size
         self.add_special_tokens = add_special_tokens
 
-    def load_from_path(self, dataset_path='simple_index.txt.gz', enrich=True):
+    def load_from_path(self, dataset_path='../indexes/simple_index.txt.gz', enrich=True):
         try:
             actual_path = QADataset.get_dataset_path(dataset_path)
         except:

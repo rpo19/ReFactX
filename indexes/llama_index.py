@@ -1,4 +1,4 @@
-from base_postgres_index_config import IndexConfig
+from .base_postgres_index_config import IndexConfig
 
 index_config = IndexConfig(
     model_name = 'meta-llama/Llama-3.2-1B-Instruct',

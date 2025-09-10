@@ -1,4 +1,4 @@
-from base_postgres_index_config import IndexConfig
+from .base_postgres_index_config import IndexConfig
 
 index_config = IndexConfig(
     model_name = 'google/gemma-3-4b-it',

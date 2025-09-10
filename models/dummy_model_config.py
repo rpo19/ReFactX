@@ -1,6 +1,6 @@
 # dummy model for testing without gpu
 
-from base_model_config import ModelConfig
+from .base_model_config import ModelConfig
 import time
 import numpy as np  # Import numpy for array handling
 import torch

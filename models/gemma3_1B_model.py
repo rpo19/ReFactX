@@ -1,4 +1,4 @@
-from base_model_config import ModelConfig
+from .base_model_config import ModelConfig
 
 model_config = ModelConfig(
     model_name = 'google/gemma-3-1b-it',

@@ -3,7 +3,7 @@ from zipfile import ZipFile
 import os
 import pandas as pd
 import json
-from prompt_base import get_prompt_template, get_few_shot
+from refactx.prompt_base import get_prompt_template, get_few_shot
 
 RELATION_DESCRIPTION = """
 The facts use these relations:

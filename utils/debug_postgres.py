@@ -7,7 +7,7 @@ import json
 import click
 from refactx import PostgresTrieIndex, ConstrainedState, DictIndex, TripleNotFoundException, EmptyIndexException
 import importlib
-from base_postgres_index_config import IndexConfigException
+from indexes.base_postgres_index_config import IndexConfigException
 from tqdm import tqdm
 
 class TimeMeasure:

@@ -1,4 +1,4 @@
-from base_model_config import ModelConfig
+from .base_model_config import ModelConfig
 
 SWITCH_PATTERN = {17873: {25: {}}, 34210: {25: {}}, 37812: {25: {}}, 2144: {25: {}}}
 NEWLINE_TOKEN = 198
