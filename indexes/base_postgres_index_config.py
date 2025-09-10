@@ -1,4 +1,4 @@
-from ctrie import PostgresTrieIndex
+from refactx import PostgresTrieIndex
 import psycopg
 from dotenv import load_dotenv
 import os

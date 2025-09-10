@@ -4,7 +4,7 @@ import importlib
 import time
 from transformers import TextStreamer
 from transformers.generation.logits_process import LogitsProcessorList
-from ctrie import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex
+from refactx import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex
 import sys
 import os
 import json

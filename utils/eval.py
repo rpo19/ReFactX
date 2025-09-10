@@ -1,8 +1,8 @@
 import torch
 from tqdm import tqdm
 from transformers import DynamicCache, LogitsProcessorList
-from ctrie import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex, patch_model
-import ctrie
+from refactx import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex, patch_model
+import refactx
 import json
 import importlib
 import os
@@ -167,7 +167,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
             ) for _ in range(num_beams)] 
                 for _ in range(num_batches)]
 
-        ctrie.CONSTRAINED_STATES = ConstrainedStateList(states_lol,
+        refactx.CONSTRAINED_STATES = ConstrainedStateList(states_lol,
                     num_beams=num_beams,
                     num_batches = num_batches,
                     pad_token_id = model_config.tokenizer.eos_token_id,
@@ -178,7 +178,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         constrained_processor = ConstrainedLogitsProcessor(
             index=index_config.index,
             end_token=model_config.newline_token,
-            states=ctrie.CONSTRAINED_STATES,
+            states=refactx.CONSTRAINED_STATES,
             tokenizer=model_config.tokenizer
             )
         logits_processor_list = LogitsProcessorList([
@@ -222,7 +222,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                         print(question)
                 prompted_batch = [model_config.apply_prompt_template(PROMPT_TEMPLATE, question) for question in batch]
 
-                ctrie.CONSTRAINED_STATES.reset() # reset caches
+                refactx.CONSTRAINED_STATES.reset() # reset caches
 
                 batch_inputs = model_config.tokenize_fun(prompted_batch)
 
@@ -237,10 +237,10 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                 else:
                     past_key_values = None
 
-                if len(ctrie.CONSTRAINED_STATES) != batch_inputs.input_ids.shape[0] * model_config.generate_args.get('num_beams', 1):
+                if len(refactx.CONSTRAINED_STATES) != batch_inputs.input_ids.shape[0] * model_config.generate_args.get('num_beams', 1):
                     assert batch_number == len(dataloader) - 1
-                    ctrie.CONSTRAINED_STATES = ctrie.CONSTRAINED_STATES[:batch_inputs.input_ids.shape[0], :model_config.generate_args.get('num_beams', 1)]
-                    constrained_processor.states = ctrie.CONSTRAINED_STATES
+                    refactx.CONSTRAINED_STATES = refactx.CONSTRAINED_STATES[:batch_inputs.input_ids.shape[0], :model_config.generate_args.get('num_beams', 1)]
+                    constrained_processor.states = refactx.CONSTRAINED_STATES
 
                 output = model_config.model.generate(
                     **batch_inputs,
@@ -249,7 +249,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                     past_key_values=past_key_values,
                 )
 
-                ctrie.CONSTRAINED_STATES.beam_permutation() # final permutation to match final beams
+                refactx.CONSTRAINED_STATES.beam_permutation() # final permutation to match final beams
 
                 # iter all questions in the batch
                 for i, (question, prompted_question, output_i) in enumerate(zip(batch, prompted_batch, output)):
@@ -258,7 +258,7 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
                     prediction_complete = bool(prediction)
                     # TODO also save worse beams
 
-                    state = ctrie.CONSTRAINED_STATES[i, 0] # first state of the batch is the best beam
+                    state = refactx.CONSTRAINED_STATES[i, 0] # first state of the batch is the best beam
 
                     new_tokens_generated = 0
                     pad_token_id = model_config.generate_args.get('pad_token_id')

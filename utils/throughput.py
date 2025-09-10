@@ -1,5 +1,5 @@
 import torch
-from ctrie import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex
+from refactx import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex
 import json
 import importlib
 import click

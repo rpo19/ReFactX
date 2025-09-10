@@ -5,7 +5,7 @@ import random
 import time
 import json
 import click
-from ctrie import PostgresTrieIndex, ConstrainedState, DictIndex, TripleNotFoundException, EmptyIndexException
+from refactx import PostgresTrieIndex, ConstrainedState, DictIndex, TripleNotFoundException, EmptyIndexException
 import importlib
 from base_postgres_index_config import IndexConfigException
 from tqdm import tqdm

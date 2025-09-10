@@ -1,9 +1,9 @@
 import unittest
-import ctrie
+import refactx
 
 class TestCtrie(unittest.TestCase):
     def setUp(self):
-        self.index = ctrie.DictIndex(end_of_triple=0)
+        self.index = refactx.DictIndex(end_of_triple=0)
         self.tree1 = [1, [1,2,3,4]]
         self.tree2 = [2, [1,2,3,{4:[1,[1,2]],5:[1,[2,3]]}]]
         self.tree3 = [18, [150000, 366, 36, 3168, 301, 22703, 29, 366, {
@@ -38,12 +38,12 @@ class TestCtrie(unittest.TestCase):
         print('\ntest merge')
         self.index.reset()
         numleaves1 = self.index.merge(self.tree1)
-        other1 = ctrie.DictIndex(end_of_triple=0, tree=self.tree1)
+        other1 = refactx.DictIndex(end_of_triple=0, tree=self.tree1)
         self.assertEqual(self.index, other1)
         self.assertEqual(numleaves1, 1)
 
         numleaves2 = self.index.merge(self.tree2)
-        other2 = ctrie.DictIndex(end_of_triple=0, tree=self.tree2)
+        other2 = refactx.DictIndex(end_of_triple=0, tree=self.tree2)
         self.assertEqual(self.index, other2)
         self.assertEqual(numleaves2, 2)
 

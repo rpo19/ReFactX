@@ -1,7 +1,7 @@
 import bz2
 import psycopg
 from tqdm import tqdm
-from ctrie import PostgresIngestIndex
+from refactx import PostgresIngestIndex
 from transformers import AutoTokenizer
 import click
 

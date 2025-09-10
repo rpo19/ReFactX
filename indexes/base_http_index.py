@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 import os
-from ctrie import HTTPPostgresTrieIndex
+from refactx import HTTPPostgresTrieIndex
 import importlib
 
 class IndexConfigException(Exception):

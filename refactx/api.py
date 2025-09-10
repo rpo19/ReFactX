@@ -2,7 +2,7 @@ from flask import Flask, request
 import os
 import importlib
 import pickle
-from ctrie import serialize, deserialize
+from .ctrie import serialize, deserialize
 from psycopg import sql
 
 index_config_path = os.environ.get('INDEX_CONFIG_PATH')

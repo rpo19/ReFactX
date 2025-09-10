@@ -1,4 +1,4 @@
-from ctrie import DictIndex
+from refactx import DictIndex
 from zipfile import ZipFile
 import os
 import pandas as pd

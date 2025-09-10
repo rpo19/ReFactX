@@ -1,4 +1,4 @@
-from ctrie import DictIndex
+from refactx import DictIndex
 import gzip
 from base_dataset_config import QADataset
 from transformers import AutoTokenizer
