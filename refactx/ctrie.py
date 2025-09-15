@@ -7,6 +7,9 @@ import requests
 from requests.adapters import HTTPAdapter, Retry
 import math
 import types
+import os
+import gzip
+from tqdm import trange
 
 # must import and initialize
 CONSTRAINED_STATES = None
@@ -22,6 +25,31 @@ def patch_model(model):
     
     model._get_running_beams_for_next_iteration = types.MethodType(_get_running_beams_for_next_iteration_patch, model)
 
+def load_index(url, tokenizer, add_special_tokens=False, clean=True, batch_size=100):
+    if os.path.isfile(url):
+        return _load_index_from_txt(url, tokenizer, add_special_tokens, clean, batch_size)
+    else:
+        pass
+
+def _load_index_from_txt(path, tokenizer, add_special_tokens=False, clean=True, batch_size=100):
+    index = DictIndex(tokenizer)
+    index.load_from_path(path)
+    index.tokenize_triples(add_special_tokens, batch_size)
+    if clean:
+        index.clean()
+
+    return index
+
+def apply_prompt_template(prompt_template, tokenizer, question=None):
+    if question is None:
+        # only prompt for caching
+        return tokenizer.apply_chat_template(prompt_template, tokenize=False, add_generation_prompt=False)
+    else:
+        question_w_role = {'role':'user', 'content': question}
+        return tokenizer.apply_chat_template(prompt_template + [question_w_role], tokenize=False, add_generation_prompt=True)
+
+
+
 class EmptyIndexException(Exception):
     pass
 
@@ -32,14 +60,13 @@ class WrongNumleavesException(Exception):
     pass
 
 class Index():
-    def __init__(self, end_of_triple: int) -> None:
+    def __init__(self, tokenizer, end_of_triple: int = -10) -> None:
         self.end_of_triple = end_of_triple # e.g. "." to ensure the triple is ended and valid
+        self.tokenizer = tokenizer
 
-    def config(self) -> dict:
-        return dict(end_of_triple=self.end_of_triple)
-
-    def triple_is_valid(self, sequence: list) -> bool:
-        return sequence[-1] == self.end_of_triple
+    def add(self, sequence):
+        sequence += [self.end_of_triple]
+        pass
 
     def next_tokens(self, sequence: list, **kwargs) -> dict:
         token = 0
@@ -58,9 +85,34 @@ class Index():
                 else:
                     tokens_a[token] = diff
 
+    def load_from_path(self, path):
+        fopen = open, 'r'
+        if path.endswith('.gz'):
+            fopen = gzip.open, 'rt'
+        with fopen[0](path, fopen[1]) as fd:
+            self.verbalized_triples = fd.readlines()
+        self.verbalized_triples = list(map(lambda x: x.replace('\n',''), self.verbalized_triples))
+
+    def batch_append(self, nested_token_ids):
+        for sequence in nested_token_ids:
+            self.add(sequence)
+
+    def tokenize_triples(self, add_special_tokens=False, batch_size=100):
+        for batch_start in trange(0, len(self.verbalized_triples), batch_size):
+            batch_end = batch_start + batch_size
+            if batch_end >= len(self.verbalized_triples):
+                batch_end = len(self.verbalized_triples)
+
+            batch = self.verbalized_triples[batch_start:batch_end]
+            ids = self.tokenizer(batch, add_special_tokens=add_special_tokens)['input_ids']
+            self.batch_append(ids)
+
+    def clean(self):
+        del self.verbalized_triples
+
 class DictIndex(Index):
-    def __init__(self, end_of_triple, tree = None):
-        super().__init__(end_of_triple)
+    def __init__(self, tokenizer, end_of_triple = -10, tree = None):
+        super().__init__(tokenizer, end_of_triple)
         self.tree = None
         self.reset(tree)
 
@@ -134,6 +186,9 @@ class DictIndex(Index):
         # could be replaced with to_dict and merge
         # but could be useful to avoid recursion
         # supports duplicates
+
+        sequence += [self.end_of_triple]
+
         level = self.tree
         cursor = 0
         level_cursor = 0 # necessary to avoid recursion
@@ -210,7 +265,7 @@ class DictIndex(Index):
                     raise TripleNotFoundException(sequence)
             else: # is int
                 if sequence[cursor] != level[1][level_cursor]:
-                    raise TripleNotFoundException(sequence)
+                    raise TripleNotFoundException(str(sequence)+self.tokenizer.decode(sequence))
                 else:
                     level_cursor += 1
             cursor += 1
@@ -225,10 +280,14 @@ class DictIndex(Index):
         else: # is int
             _next_tokens = {level[1][level_cursor]: level[0]}
 
-        if len(_next_tokens) == 0 and not self.triple_is_valid(sequence):
+        if len(_next_tokens) == 0:
             # end of triple must match end_of_triple
             # otherwise the triple is not valid
-            raise TripleNotFoundException(sequence)
+            raise TripleNotFoundException(str(sequence) + self.tokenizer.decode(sequence))
+
+        if len(_next_tokens) == 1 and _next_tokens.get(self.end_of_triple, False):
+            # end_of_triple is special token not to generate
+            _next_tokens = {}
 
         return _next_tokens, {}
 
@@ -349,8 +408,8 @@ class Cache():
         return next_tokens, subtree_cache
 
 class PostgresTrieIndex(Index):
-    def __init__(self, rootkey : int, end_of_triple: int, postgresql_connection, switch_parameter : int, table_name, cache: Cache = None, return_state = False, do_count_leaves=False):
-        super().__init__(end_of_triple)
+    def __init__(self, postgresql_connection, table_name, tokenizer, switch_parameter : int = 7, rootkey : int = -100, end_of_triple: int = -10, cache: Cache = None, return_state = False, do_count_leaves=False):
+        super().__init__(tokenizer, end_of_triple)
         self.rootkey = rootkey
         self.postgresql_connection = postgresql_connection
         self.switch_parameter = switch_parameter
@@ -393,12 +452,7 @@ class PostgresTrieIndex(Index):
                 pass
 
         if len(_next_tokens) == 0:
-            if self.triple_is_valid(sequence):
-                state.end_of_triple_reset()
-            else:
-                # end of triple must match end_of_triple
-                # otherwise the triple is not valid
-                raise TripleNotFoundException(sequence)
+            state.end_of_triple_reset()
 
         extra = {
             'found_subtree': len(sequence) > self.switch_parameter,
@@ -472,7 +526,7 @@ def serialize(obj):
     return pickle.dumps(obj)
 
 class HTTPPostgresTrieIndex(PostgresTrieIndex):
-    def __init__(self, rootkey : int, end_of_triple: int, switch_parameter : int, table_name, base_url: str, cache: Cache = None, postgresql_connection = None, redis_connection = None, return_state = False, do_count_leaves=False, rootcert=None, timeout=15, retry=5):
+    def __init__(self, table_name, base_url: str, rootkey : int = -100, end_of_triple: int = -10, switch_parameter : int = 7, cache: Cache = None, return_state = False, do_count_leaves=False, rootcert=None, timeout=15, retry=5):
         super().__init__(rootkey, end_of_triple, None, switch_parameter, table_name, cache, return_state, do_count_leaves)
         # self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
         self.base_url = base_url[:-1] if base_url.endswith('/') else base_url
@@ -552,7 +606,7 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
     '''
     Use only for ingest time
     '''
-    def __init__(self, rootkey : int, switch_parameter : int, table_name):
+    def __init__(self, tokenizer, rootkey : int, switch_parameter : int, table_name):
         end_of_triple = -1 # only needed during inference
         postgresql_connection = '' # inference
         PostgresTrieIndex.__init__(self, rootkey, end_of_triple, postgresql_connection, switch_parameter, table_name)
@@ -613,14 +667,13 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
 
 class ConstrainedStateList():
     # states is list of list [num_batches, num_beams]
-    def __init__(self, states, pad_token_id, num_beams = 1, num_batches = 1, debug=False, debug_tokenizer=None):
+    def __init__(self, states, num_beams = 1, num_batches = 1, debug=False, debug_tokenizer=None):
         self.states = states
         assert isinstance(states, list) and isinstance(states[0], list), 'ERROR: states is not a list of lists'
         assert len(states) == num_batches and len(states[0]) == num_beams, 'ERROR: states size does not match num_batches or num_beams'
         self.num_beams = num_beams
         self.num_batches = num_batches # used for computing beam id
         self.beam_idx = [] # torch.tensor([-1]*num_batches*num_beams).view(num_batches,num_beams,1) # running beam idx
-        self.pad_token_id = pad_token_id
 
         self.debug = debug
         self.debug_tokenizer = debug_tokenizer
@@ -650,7 +703,6 @@ class ConstrainedStateList():
 
                 return ConstrainedStateList(
                     sliced_states,
-                    pad_token_id=self.pad_token_id,
                     num_beams=new_num_beams,
                     num_batches=new_num_batches
                 )
@@ -658,7 +710,6 @@ class ConstrainedStateList():
         elif isinstance(key, slice):
             return ConstrainedStateList(
                 self.states[key],
-                pad_token_id=self.pad_token_id,
                 num_beams=self.num_beams,
                 num_batches=len(self.states[key])
             )
@@ -725,23 +776,24 @@ class ConstrainedStateList():
                             if self.debug:
                                 print(f'permutation {self.num_permutations}: ({batch_idx},{local_beam_idx}) into {batch_idx}{num_beam}')
 
-class ConstrainedState():
-    def __init__(self, begin_pattern, end_pattern, cache_index, subtree_cache, state=0, debug=False) -> None:
+"""
+Pattern should be recognized as soon as it is generated. Usually you want to end it with $
+"""
+class PatternConstrainedState():
+    def __init__(self, pattern, tokenizer, cache_index, subtree_cache, state=0, debug=False, regex_window=10) -> None:
 
         self.NORMAL_GENERATION = 0 # even numbers for normal
         self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
 
-        # switching to constrain generation
-        self.BEGIN_SWITCH = 2
+        self.token_ids = [] # keep all the token ids
+
+        self.tokenizer = tokenizer
+        self.regex_window = regex_window # regex will be performed on the last N tokens
+
         # if the switch pattern is finally found --> CONSTRAINED_GENERATION
-        self.begin_pattern = begin_pattern # {'<': {'fact':{'>':{}}, '_<': {'fact':{'>':{}}}
-        self.begin_pattern_current = self.begin_pattern
-        # if end_pattern is found --> NORMAL_GENERATION
-        self.end_pattern = end_pattern
+        self.pattern = pattern
 
         self.state = state
-
-        self.history = () # (prev_state, prev_cursor)
 
         self.cursor = 0 # how many tokens since last change in state
 
@@ -758,8 +810,8 @@ class ConstrainedState():
     def print_debug(self, tokenizer, print_class=False, end_with_newline=True):
         if print_class:
             print('{} '.format(self), end='')
-        for item in self.debug_history:
-            print('{} ({}) --> {}, '.format(tokenizer.decode(item['token']), item['token'], item['state']), end='')
+        # for item in self.debug_history:
+        #     print('{} ({}) --> {}, '.format(tokenizer.decode(item['token']), item['token'], item['state']), end='')
         if end_with_newline:
             print()
 
@@ -772,90 +824,32 @@ class ConstrainedState():
 
     def cache_add(self, sequence):
         self.cache_index.add(sequence, new_leaf=True)
-        self.generated_triples.append(sequence)
+        # removing end of triple
+        self.generated_triples.append(sequence[:-1])
 
     def is_constrained(self):
         return self.state % 2 == self.CONSTRAINED_GENERATION
 
     def end_of_triple_reset(self):
         self.subtree_cache.reset()
+        # reset to normal generation
+        self.state = 0
 
     def reset(self):
         self.state = 0
+        self.token_ids = []
         self.history = ()
         self.cursor = 0
         self.generated_triples = []
         self.cache_index.reset()
         self.end_of_triple_reset()
 
-    def __json__(self, copy=True):
-        return {
-            'begin_pattern': self.begin_pattern,
-            'begin_pattern_current': self.begin_pattern_current,
-            'end_pattern': self.end_pattern,
-            'state': self.state,
-            'history': self.history,
-            'cursor': self.cursor,
-            'generated_triples': self.generated_triples.copy() if copy else self.generated_triples,
-            'cache_index': self.cache_index.__json__(copy),
-            'subtree_cache': self.subtree_cache.__json__(copy),
-        }
-
-    def from_json(self, data, copy=True):
-        self.begin_pattern = data['begin_pattern']
-        self.begin_pattern_current = data['begin_pattern_current']
-        self.end_pattern = data['end_pattern']
-        self.state = data['state']
-
-        self.history = data['history']
-        self.cursor = data['cursor']
-
-        self.generated_triples = data['generated_triples'].copy() if copy else data['generated_triples']
-        if copy:
-            self.cache_index = DictIndex(end_of_triple=data['cache_index']['end_of_triple'], tree=deepcopy(data['cache_index']['tree']))
-            self.subtree_cache = DictIndex(end_of_triple=data['subtree_cache']['end_of_triple'], tree=deepcopy(data['subtree_cache']['tree']))
-        else:
-            self.cache_index = DictIndex(**data['cache_index'])
-            self.subtree_cache = DictIndex(**data['subtree_cache'])
-
-        return self
-
-    def dump(self, copy=True):
-        return {
-            'begin_pattern': self.begin_pattern,
-            'begin_pattern_current': self.begin_pattern_current,
-            'end_pattern': self.end_pattern,
-            'state': self.state,
-            'history': self.history,
-            'cursor': self.cursor,
-            'generated_triples': deepcopy(self.generated_triples) if copy else self.generated_triples,
-            'cache_index': deepcopy(self.cache_index) if copy else self.cache_index,
-            'subtree_cache': deepcopy(self.subtree_cache) if copy else self.subtree_cache,
-            'debug': self.debug,
-            'debug_history': deepcopy(self.debug_history) if copy else self.debug_history,
-        }
-
-    def load(self, data, copy=True):
-        self.begin_pattern = data['begin_pattern']
-        self.begin_pattern_current = data['begin_pattern_current']
-        self.end_pattern = data['end_pattern']
-        self.state = data['state']
-
-        self.history = data['history']
-        self.cursor = data['cursor']
-
-        self.generated_triples = deepcopy(data['generated_triples']) if copy else data['generated_triples']
-        self.cache_index = deepcopy(data['cache_index']) if copy else data['cache_index']
-        self.subtree_cache = deepcopy(data['subtree_cache']) if copy else data['subtree_cache']
-
-        self.debug = data['debug']
-        self.debug_history = deepcopy(data['debug_history']) if copy else data['debug_history']
-
     def copy(self, other, copy=True):
-        self.begin_pattern = other.begin_pattern
-        self.begin_pattern_current = other.begin_pattern_current
-        self.end_pattern = other.end_pattern
+        self.pattern = other.pattern
         self.state = other.state
+        self.tokenizer = other.tokenizer
+        self.regex_window = other.regex_window
+        self.token_ids = deepcopy(other.token_ids)
 
         self.history = other.history  # Assuming it's immutable or should be shallow copied
         self.cursor = other.cursor
@@ -869,41 +863,23 @@ class ConstrainedState():
 
 
     def update(self, new_token):
-        rollback = False
         state = self.state
+        self.token_ids.append(new_token)
         self.cursor += 1
-        if self.state == self.NORMAL_GENERATION:
-            if new_token in self.begin_pattern_current:
-                self.begin_pattern_current = self.begin_pattern_current[new_token]
-                if len(self.begin_pattern_current) == 0: # reached pattern leaf
-                    state = self.CONSTRAINED_GENERATION
-                    self.begin_pattern_current = self.begin_pattern # reset pattern
-                else:
-                    state = self.BEGIN_SWITCH
 
-        elif self.state == self.BEGIN_SWITCH:
-            if new_token in self.begin_pattern_current:
-                self.begin_pattern_current = self.begin_pattern_current[new_token]
-                if len(self.begin_pattern_current) == 0: # reached pattern leaf
-                    state = self.CONSTRAINED_GENERATION
-                    self.begin_pattern_current = self.begin_pattern # reset pattern
-            else:
-                self.begin_pattern_current = self.begin_pattern # reset pattern
-                rollback = True
+        text = self.tokenizer.decode(self.token_ids[-self.regex_window:])
 
-        elif self.state == self.CONSTRAINED_GENERATION:
-            if new_token == self.end_pattern:
-                state = self.NORMAL_GENERATION
+        _match = text.endswith(self.pattern)
+        if _match:
+            state = self.CONSTRAINED_GENERATION
 
-        if rollback:
-            self._rollback()
-        else:
-            self._update_state(state)
+        self._update_state(state)
 
         if self.debug:
             self.debug_history.append({
                 'state': self.state,
-                'token': new_token
+                'token': new_token,
+                'token_ids': deepcopy(self.token_ids)
             })
 
     def _update_state(self, state, initial_cursor = 0):
@@ -912,22 +888,17 @@ class ConstrainedState():
 
             self.state = state
             self.cursor = initial_cursor
+            self.token_ids = []
 
     def get_cursor(self):
         return self.cursor
 
-    def _rollback(self):
-        prev_state, prev_cursor = self.history
-        self.history = (self.state, self.cursor)
-        self.state = prev_state
-        self.cursor = prev_cursor + self.cursor
-
 class ConstrainedLogitsProcessor(LogitsProcessor):
-    def __init__(self, index, end_token, states, tokenizer=None, error_strategy=0):
+    def __init__(self, index, states, tokenizer=None, error_strategy=0, avoid_duplicates=True):
         self.index = index
-        self.end_token = end_token
         self.states = states
         self.error_strategy = error_strategy
+        self.avoid_duplicates = avoid_duplicates
 
         self.ERROR_STRATEGY_WARN = 0
         self.ERROR_STRATEGY_FAIL = 1
@@ -971,33 +942,30 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
     def constrained_generation(self, sequence, mask: torch.FloatTensor, mask_idx, state):
 
         possible_tokens, _ = self.index.next_tokens(sequence, state = state)
-        try:
-            visited_tokens, _ = state.cache_index.next_tokens(sequence)
-            # print(visited_tokens, end=' = ')
-            state.cache_index.subtract_tokens(possible_tokens, visited_tokens)
-            # print(possible_tokens)
-        except EmptyIndexException:
-            # ignore when the cache index is empty
-            pass
-        except TripleNotFoundException:
-            # ignore if triple not in cache index
-            pass
+        if self.avoid_duplicates:
+            try:
+                visited_tokens, _ = state.cache_index.next_tokens(sequence)
+                # print(visited_tokens, end=' = ')
+                state.cache_index.subtract_tokens(possible_tokens, visited_tokens)
+                # print(possible_tokens)
+            except EmptyIndexException:
+                # ignore when the cache index is empty
+                pass
+            except TripleNotFoundException:
+                # ignore if triple not in cache index
+                pass
 
         possible_tokens = list(possible_tokens.keys()) # TODO transform subtract tokens in a prob modifier
 
         if len(possible_tokens) == 0:
             # end of constrained generation
             # send end of string
-            if not self.index.triple_is_valid(sequence):
-                if self.error_strategy == self.ERROR_STRATEGY_FAIL:
-                    raise TripleNotFoundException(sequence)
-                elif self.error_strategy == self.ERROR_STRATEGY_WARN:
-                    print('WARNING:', TripleNotFoundException(sequence))
-            possible_tokens = [self.end_token]
-            generated_triple = sequence + [self.end_token]
+            generated_triple = sequence
             state.cache_add(generated_triple)
             # ensure to reset after eof triple
             state.end_of_triple_reset()
-
-        mask[mask_idx, possible_tokens] = 0
+            # end of constrained generation
+            mask[mask_idx, :] = 0
+        else:
+            mask[mask_idx, possible_tokens] = 0
 
