@@ -58,6 +58,7 @@ wget https://download.microsoft.com/download/A/E/4/AE428B7A-9EF9-446C-85CF-D8ED0
 ### Filter labels
 ```
 grep -P 'type\.object\.name|common\.topic\.description' fb_en.txt > fb_labels.txt
+zgrep -P '^<http://rdf.freebase.com/ns/m\..*>\s<http://rdf.freebase.com/ns/(type\.object\.name|common\.topic\.description)>.*\\@en\s+.' freebase-rdf-2015-08-09-00-01.gz > fb_labels_dump.txt
 ```
 
 ### Load labels into python dict
