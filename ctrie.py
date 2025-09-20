@@ -246,7 +246,8 @@ class DictIndex(Index):
                 for childtree in tree[1][cursor].values():
                     numleaves += self.count_leaves(childtree)
                 break
-        if numleaves == 0 and len(tree[1]) > 0:
+        if numleaves == 0:
+            # [1, []] is accepted empty leaf at the end
             # no dict found
             numleaves = 1
         if numleaves != tree[0]:

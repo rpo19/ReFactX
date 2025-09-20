@@ -4,6 +4,7 @@ from tqdm import tqdm
 from ctrie import PostgresIngestIndex
 from transformers import AutoTokenizer
 import click
+from ctrie import WrongNumleavesException
 
 @click.command()
 @click.argument('fname', type=click.Path(exists=True))
@@ -39,8 +40,10 @@ def main(fname, model_name, postgres_connection, table_name, prefix, end_of_trip
                 table_name=table_name)
 
     def batch_append(nested_token_ids, index):
-        for sequence in nested_token_ids:
+        for count, sequence in enumerate(nested_token_ids):
             index.add(sequence)
+            # seqdict = index.to_dict(sequence, 1)
+            # index.merge(seqdict)
 
     tbar_update = batch_size
     count = 0
