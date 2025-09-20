@@ -18,6 +18,7 @@ undergone peer review is available at
 
 We present ReFactX, a scalable method that enables LLMs to access external knowledge without depending on retrievers or auxiliary models. Our approach uses constrained generation with a pre-built prefix-tree index. Triples from Wikidata are verbalized in 800 million textual facts, tokenized, and indexed in a prefix tree for efficient access. During inference, to acquire external knowledge, the LLM generates facts with constrained generation which allows only sequences of tokens that form an existing fact.
 
+![ReFactX Example](misc/refactx_example.png)
 
 This repository contains the source code for using ReFactX and reproducing our work accepted at ISWC 2025.
 
