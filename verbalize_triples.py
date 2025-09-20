@@ -118,12 +118,20 @@ def main(wikidata_props_mapping, wikidata_labels, freebase_labels, wikipedia_ent
     added_shortdesc = set()
     added_desc = set()
 
+    # stats
+    noent = 0
+    nosublabel = 0
+    nooblabel = 0
+    #
+
     with tqdm(**tqdm_params) as pbar:
         with bz2.BZ2File(outfile, 'w') as outfd:
             if mode == 'wikidata':
                 fd = bz2.BZ2File(dump, 'r')
             elif mode == 'freebase':
                 fd = open(dump, 'r', encoding='utf-8')
+
+
 
             for count, bline in enumerate(fd):
                 v_obj = None
@@ -180,15 +188,22 @@ def main(wikidata_props_mapping, wikidata_labels, freebase_labels, wikipedia_ent
                                 v_obj = freebase_verbalize_entity(obj, ent_labels_freebase)
                             else:
                                 v_obj = obj
+                        else:
+                            nosublabel += 1
+                            # debug
+                            print(sub)
+                    else:
+                        noent += 1
 
                 if v_obj:
                     outfd.write(template.format(v_sub=v_sub, v_prop=v_prop, v_obj=v_obj).encode('utf-8'))
-                    # else:
-                    #     # cannot find v_sub or v_prop --> skip
-                    #     pass
+                else:
+                    nooblabel += 1
                 if count % 1000000 == 0:
                     pbar.n = count
                     pbar.refresh()
+
+                    print(f'\rProcessed {count} lines. No entity: {noent}, no sub label: {nosublabel}, no obj label: {nooblabel}', end='')
 
 if __name__ == "__main__":
     main()
