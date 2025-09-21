@@ -34,12 +34,18 @@ def main(labels_path, outfile_ents, outfile_props, freebase):
     ents = {}
     props = {}
     start = time.time()
+    errors = 0
     try:
         if freebase:
             with open(labels_path, 'r', encoding='utf-8') as fd:
                 with tqdm() as pbar:
                     for count, line in enumerate(fd):
-                        sub, pred, obj = line.strip().split('\t')
+                        splitted = line.strip().split('\t')
+                        if len(splitted) == 3:
+                            sub, pred, obj = splitted
+                        else:
+                            errors += 1
+                            print(f'Found invalid triple {line}')
                         res_id = sub
                         if res_id not in ents:
                             ents[res_id] = ['',set(),''] # label, altLabels, description
@@ -97,6 +103,8 @@ def main(labels_path, outfile_ents, outfile_props, freebase):
         # freebase props are already verbalized
         with open(outfile_props, 'wb') as fd:
             pickle.dump(props, fd)
+
+    print(f'Errors: {errors}')
 
 if __name__ == '__main__':
     main()

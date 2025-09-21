@@ -20,7 +20,7 @@ import click
 import nltk
 
 wikidata_template = '<{v_sub}> <{v_prop}> <{v_obj}> .\n'
-freebase_template = '{v_sub} {v_prop} {v_obj} .\n'
+freebase_template = '<{v_sub}> <{v_prop}> <{v_obj}> .\n'
 
 freebase_desc_max_len = 100 # max length of description in Freebase to be included in verbalization
 
@@ -191,7 +191,7 @@ def main(wikidata_props_mapping, wikidata_labels, freebase_labels, wikipedia_ent
                         else:
                             nosublabel += 1
                             # debug
-                            print(sub)
+                            #print(sub)
                     else:
                         noent += 1
 
