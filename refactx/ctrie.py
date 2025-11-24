@@ -10,6 +10,9 @@ import types
 import os
 import gzip
 from tqdm import trange
+from urllib.parse import urlparse, parse_qs
+from .SimpleCache import SimpleCache
+
 
 # must import and initialize
 CONSTRAINED_STATES = None
@@ -28,7 +31,9 @@ def patch_model(model):
 def load_index(url, tokenizer, add_special_tokens=False, clean=True, batch_size=100):
     if os.path.isfile(url):
         return _load_index_from_txt(url, tokenizer, add_special_tokens, clean, batch_size)
-    else:
+    elif url.startswith('postgresql://') or url.startswith('postgres://'):
+        return _load_index_from_postgresql(url, tokenizer)
+    elif url.startswith('http://') or url.startswith('https://'):
         pass
 
 def _load_index_from_txt(path, tokenizer, add_special_tokens=False, clean=True, batch_size=100):
@@ -38,6 +43,28 @@ def _load_index_from_txt(path, tokenizer, add_special_tokens=False, clean=True, 
     if clean:
         index.clean()
 
+    return index
+
+def _load_index_from_postgresql(url, tokenizer):
+    # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000&end_of_triple=659
+    # Parse the URL
+    parsed = urlparse(url)
+
+    # Remove the query part
+    url_without_query = url.split("?", 1)[0]
+
+    # Parse the query into a dict (values are lists by default)
+    parsed_query = parse_qs(parsed.query)
+
+    print("url_without_query:", url_without_query)
+    print("parsed_query:", parsed_query)
+
+    index = PostgresTrieIndex(
+        postgresql_connection = url_without_query,
+        table_name = parsed_query['table_name'],
+        cache = SimpleCache(0),
+        )
+    
     return index
 
 def apply_prompt_template(prompt_template, tokenizer, question=None):
