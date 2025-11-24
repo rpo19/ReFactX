@@ -10,8 +10,8 @@ import os
 import json
 
 @click.command()
-@click.option('--index', 'index_config_path', default='qwen25_index', help='Index module to import.')
-@click.option('--model', 'model_config_path', default='qwen25_1B_model', help='Model module to import.')
+@click.option('--index', 'index_url', help='Index url.')
+@click.option('--model', 'model_name', help='Model name.')
 @click.option('--generation-config', 'generation_config_str', default="num_beams=1,max_new_tokens=512,do_sample=False,temperature=None,top_k=None,top_p=None,min_p=None", help='Generation config (e.g. "max_new_tokens=512,top_k=5").')
 @click.option('--prompt-module', 'prompt_module_name', required=False, default="prompt_base", help='Module from which to import PROMPT_TEMPLATE.')
 @click.option('--prompt', default=None, help='Prompt (str or json) to use.')

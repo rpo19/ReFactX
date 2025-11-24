@@ -5,7 +5,7 @@ import os
 class SimpleCache:
     def __init__(self, cache_db, maxsize=None):
         if maxsize is None:
-            maxsize = int(os.environ.get('POSTGRES_CACHE_MAXSIZE', 128))
+            maxsize = int(os.environ.get('POSTGRES_CACHE_MAXSIZE', 1024))
         self.cache = LRUCache(maxsize=maxsize)
 
     def encode_sequence(self, sequence):
