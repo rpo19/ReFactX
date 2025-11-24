@@ -1,6 +1,8 @@
 # ReFactX: Scalable Reasoning with Reliable Facts via Constrained Generation
 ### Riccardo Pozzi, Matteo Palmonari, Andrea Coletta, Luigi Bellomarini, Jens Lehmann, Sahar Vahdati
-The paper has been accepted at ISWC 2025. A preprint that has not
+The paper has been pubished in *The Semantic Web - ISWC 2025* and it is available at [https://doi.org/10.1007/978-3-032-09527-5_16](https://doi.org/10.1007/978-3-032-09527-5_16).
+
+A preprint that has not
 undergone peer review is available at
 [https://arxiv.org/abs/2508.16983](https://arxiv.org/abs/2508.16983).
 
@@ -33,14 +35,32 @@ python throughput.py --model MODEL --index INDEX --max-tokens 4001 --output out.
 
 ### Cite
 ```
-@misc{pozzi2025refactxscalablereasoningreliable,
-      title={ReFactX: Scalable Reasoning with Reliable Facts via Constrained Generation}, 
-      author={Riccardo Pozzi and Matteo Palmonari and Andrea Coletta and Luigi Bellomarini and Jens Lehmann and Sahar Vahdati},
-      year={2025},
-      eprint={2508.16983},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL},
-      url={https://arxiv.org/abs/2508.16983},
-      doi = "10.48550/arXiv.2508.16983",
+@InProceedings{10.1007/978-3-032-09527-5_16,
+      author="Pozzi, Riccardo
+      and Palmonari, Matteo
+      and Coletta, Andrea
+      and Bellomarini, Luigi
+      and Lehmann, Jens
+      and Vahdati, Sahar",
+      editor="Garijo, Daniel
+      and Kirrane, Sabrina
+      and Salatino, Angelo
+      and Shimizu, Cogan
+      and Acosta, Maribel
+      and Nuzzolese, Andrea Giovanni
+      and Ferrada, Sebasti{\'a}n
+      and Soulard, Thibaut
+      and Kozaki, Kouji
+      and Takeda, Hideaki
+      and Gentile, Anna Lisa",
+      title="ReFactX: Scalable Reasoning with Reliable Facts via Constrained Generation",
+      booktitle="The Semantic Web -- ISWC 2025",
+      year="2026",
+      publisher="Springer Nature Switzerland",
+      address="Cham",
+      pages="290--308",
+      isbn="978-3-032-09527-5",
+      doi="10.1007/978-3-032-09527-5_16",
+      url="https://doi.org/10.1007/978-3-032-09527-5_16"
 }
 ```
