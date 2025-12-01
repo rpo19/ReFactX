@@ -34,7 +34,7 @@ def load_index(url, tokenizer, add_special_tokens=False, clean=True, batch_size=
     elif url.startswith('postgresql://') or url.startswith('postgres://'):
         return _load_index_from_postgresql(url, tokenizer)
     elif url.startswith('http://') or url.startswith('https://'):
-        pass
+        raise NotImplementedError('automatic load of http indexes not implemented yet.')
 
 def _load_index_from_txt(path, tokenizer, add_special_tokens=False, clean=True, batch_size=100):
     index = DictIndex(tokenizer)
@@ -46,7 +46,7 @@ def _load_index_from_txt(path, tokenizer, add_special_tokens=False, clean=True, 
     return index
 
 def _load_index_from_postgresql(url, tokenizer):
-    # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000&end_of_triple=659
+    # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000
     # Parse the URL
     parsed = urlparse(url)
 
@@ -67,6 +67,98 @@ def _load_index_from_postgresql(url, tokenizer):
     
     return index
 
+def populate_postgres_index(input_fname, postgres_url, tokenizer, table_name, batch_size=5000, rootkey = -100, switch_parameter = 7, total_number_of_triples=None, prefix='', tokenizer_batch_size=5000, add_special_tokens=False, count_leaves=True, debug=False):
+    if not tokenizer.is_fast:
+        print('WARNING: tokenizer is not fast.')
+
+    index = PostgresIngestIndex(
+                rootkey=rootkey,
+                switch_parameter=switch_parameter,
+                table_name=table_name)
+
+    def batch_append(nested_token_ids, index):
+        for sequence in nested_token_ids:
+            index.add(sequence)
+
+    tbar_update = batch_size
+    count = 0
+
+    import psycopg
+    import bz2
+    # TODO extend to other file formats
+    from tqdm import tqdm
+    with psycopg.connect(postgres_url, autocommit=False) as conn:
+        with conn.cursor() as cur:
+            # Create table and ensure index
+            # and pkey are not present for fast ingestion
+            cur.execute(index.create_table_query)
+            cur.execute(index.drop_pkey_query)
+            cur.execute(index.drop_index_query)
+            conn.commit()
+
+            cur.execute(index.check_indexes_query)
+            count_indexes = cur.fetchone()[0]
+            assert count_indexes == 0, f"Expected 0 indexes, but found {count_indexes}"
+
+            cur.execute(index.truncate_query)
+            with cur.copy(index.copy_query) as copy:
+                with bz2.BZ2File(input_fname) as bz2file:
+                    with tqdm(total=total_number_of_triples) as pbar:
+                        tokenizer_batch = []
+                        for count, bline in enumerate(bz2file):
+                            try:
+                                line = bline.decode()
+                                if line[-1] == '\n':
+                                    line = line[:-1]
+
+                                line = prefix + line
+
+                                tokenizer_batch.append(line)
+
+                                if len(tokenizer_batch) == tokenizer_batch_size:
+                                    ids = tokenizer(tokenizer_batch, add_special_tokens=add_special_tokens)['input_ids']
+                                    tokenizer_batch = []
+
+                                    batch_append(ids, index)
+
+                                if count % batch_size == 0 and count > 0:
+                                    # batch on number or rows processed
+                                    for row in index.get_rows():
+                                        copy.write_row(row)
+
+                                    if count_leaves:
+                                        try:
+                                            lfc = index.count_leaves(fail_on_wrong_num=True)
+                                        except WrongNumleavesException as e:
+                                            print(e, 'at', count)
+
+                                    # reset batch
+                                    index.reset()
+
+                                    if debug:
+                                        print('DEBUG! Breaking after first batch.')
+                                        break
+
+                                if count % tbar_update == 0:
+                                    pbar.n = count
+                                    pbar.refresh()
+
+                            except EOFError:
+                                print('Reached end of file.')
+                                break  # End of file reached
+                            except Exception as e:
+                                print(f'Encountered exception at {count}')
+                                raise e
+
+            conn.commit()
+
+            print('Ingestion finished.')
+            print('Creating index.')
+            cur.execute(index.create_index_query)
+            print('Creating primary key.')
+            cur.execute(index.create_pkey_query)
+            conn.commit()
+
 def apply_prompt_template(prompt_template, tokenizer, question=None):
     if question is None:
         # only prompt for caching
@@ -74,8 +166,6 @@ def apply_prompt_template(prompt_template, tokenizer, question=None):
     else:
         question_w_role = {'role':'user', 'content': question}
         return tokenizer.apply_chat_template(prompt_template + [question_w_role], tokenize=False, add_generation_prompt=True)
-
-
 
 class EmptyIndexException(Exception):
     pass
@@ -87,12 +177,10 @@ class WrongNumleavesException(Exception):
     pass
 
 class Index():
-    def __init__(self, tokenizer, end_of_triple: int = -10) -> None:
-        self.end_of_triple = end_of_triple # e.g. "." to ensure the triple is ended and valid
+    def __init__(self, tokenizer) -> None:
         self.tokenizer = tokenizer
 
     def add(self, sequence):
-        sequence += [self.end_of_triple]
         pass
 
     def next_tokens(self, sequence: list, **kwargs) -> dict:
@@ -138,8 +226,8 @@ class Index():
         del self.verbalized_triples
 
 class DictIndex(Index):
-    def __init__(self, tokenizer, end_of_triple = -10, tree = None):
-        super().__init__(tokenizer, end_of_triple)
+    def __init__(self, tokenizer, tree = None):
+        super().__init__(tokenizer)
         self.tree = None
         self.reset(tree)
 
@@ -202,19 +290,16 @@ class DictIndex(Index):
     def __json__(self, copy=True):
         return {
             'tree': deepcopy(self.tree) if copy else self.tree,
-            'end_of_triple': self.end_of_triple,
         }
 
     def copy(self):
-        copy_of_index = DictIndex(self.end_of_triple, tree=deepcopy(self.tree))
+        copy_of_index = DictIndex(tree=deepcopy(self.tree))
         return copy_of_index
 
     def add(self, sequence, new_leaf=False):
         # could be replaced with to_dict and merge
         # but could be useful to avoid recursion
         # supports duplicates
-
-        sequence += [self.end_of_triple]
 
         level = self.tree
         cursor = 0
@@ -308,13 +393,7 @@ class DictIndex(Index):
             _next_tokens = {level[1][level_cursor]: level[0]}
 
         if len(_next_tokens) == 0:
-            # end of triple must match end_of_triple
-            # otherwise the triple is not valid
             raise TripleNotFoundException(str(sequence) + self.tokenizer.decode(sequence))
-
-        if len(_next_tokens) == 1 and _next_tokens.get(self.end_of_triple, False):
-            # end_of_triple is special token not to generate
-            _next_tokens = {}
 
         return _next_tokens, {}
 
@@ -435,8 +514,8 @@ class Cache():
         return next_tokens, subtree_cache
 
 class PostgresTrieIndex(Index):
-    def __init__(self, postgresql_connection, table_name, tokenizer, switch_parameter : int = 7, rootkey : int = -100, end_of_triple: int = -10, cache: Cache = None, return_state = False, do_count_leaves=False):
-        super().__init__(tokenizer, end_of_triple)
+    def __init__(self, postgresql_connection, table_name, tokenizer, switch_parameter : int = 7, rootkey : int = -100, cache: Cache = None, return_state = False, do_count_leaves=False):
+        super().__init__(tokenizer)
         self.rootkey = rootkey
         self.postgresql_connection = postgresql_connection
         self.switch_parameter = switch_parameter
@@ -553,8 +632,8 @@ def serialize(obj):
     return pickle.dumps(obj)
 
 class HTTPPostgresTrieIndex(PostgresTrieIndex):
-    def __init__(self, table_name, base_url: str, rootkey : int = -100, end_of_triple: int = -10, switch_parameter : int = 7, cache: Cache = None, return_state = False, do_count_leaves=False, rootcert=None, timeout=15, retry=5):
-        super().__init__(rootkey, end_of_triple, None, switch_parameter, table_name, cache, return_state, do_count_leaves)
+    def __init__(self, table_name, base_url: str, rootkey : int = -100, switch_parameter : int = 7, cache: Cache = None, return_state = False, do_count_leaves=False, rootcert=None, timeout=15, retry=5):
+        super().__init__(rootkey, None, switch_parameter, table_name, cache, return_state, do_count_leaves)
         # self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
         self.base_url = base_url[:-1] if base_url.endswith('/') else base_url
         self.select_url = f'/select'
@@ -634,10 +713,9 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
     Use only for ingest time
     '''
     def __init__(self, tokenizer, rootkey : int, switch_parameter : int, table_name):
-        end_of_triple = -1 # only needed during inference
         postgresql_connection = '' # inference
-        PostgresTrieIndex.__init__(self, rootkey, end_of_triple, postgresql_connection, switch_parameter, table_name)
-        DictIndex.__init__(self, end_of_triple)
+        PostgresTrieIndex.__init__(self, rootkey, postgresql_connection, switch_parameter, table_name)
+        DictIndex.__init__(self)
 
         self.create_table_query = sql.SQL('''CREATE TABLE IF NOT EXISTS {} (
             id BIGINT GENERATED ALWAYS AS IDENTITY,
