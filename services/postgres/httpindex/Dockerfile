@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY --from=repo . /app
 
-RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements/httpindex.txt -r requirements/base.txt -r requirements/postgres.txt -r requirements/transformers.txt
+RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 8000
 
