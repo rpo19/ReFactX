@@ -1,7 +1,6 @@
 from flask import Flask, request
 import os
 import importlib
-import pickle
 from .ctrie import serialize, deserialize
 from psycopg import sql
 

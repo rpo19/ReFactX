@@ -18,15 +18,15 @@ services:
   #     - ./server.key:/etc/nginx/server.key:ro
   #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
   #     - ./.htpasswd:/etc/nginx/.htpasswd:ro
-  # api:
+  # httpindex:
   #   restart: $RESTART_POLICY
   #   build:
-  #     context: ./api
+  #     context: ./httpindex
   #     additional_contexts:
   #       repo: ../..
   #   environment:
-  #     INDEX_CONFIG_PATH: api_index.py
+  #     INDEX_CONFIG_PATH: httpindex.py
   #     WORKERS_NUM: $API_WORKERS_NUM
   #     POSTGRES_BASE_URL: $POSTGRES_BASE_URL
   #   volumes:
-  #     - ./api_index.py:/app/api_index.py:ro
+  #     - ./httpindex.py:/app/httpindex.py:ro
