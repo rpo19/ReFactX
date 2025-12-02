@@ -59,22 +59,27 @@ def _load_index_from_postgresql(url, tokenizer):
     print("url_without_query:", url_without_query)
     print("parsed_query:", parsed_query)
 
+    table_name = parsed_query['table_name'][0] if isinstance(parsed_query['table_name'], list) else parsed_query['table_name']
+
     index = PostgresTrieIndex(
         postgresql_connection = url_without_query,
-        table_name = parsed_query['table_name'],
+        table_name = table_name,
         cache = SimpleCache(0),
+        tokenizer=tokenizer
         )
     
     return index
 
-def populate_postgres_index(input_fname, postgres_url, tokenizer, table_name, batch_size=5000, rootkey = -100, switch_parameter = 7, total_number_of_triples=None, prefix='', tokenizer_batch_size=5000, add_special_tokens=False, count_leaves=True, debug=False):
+def populate_postgres_index(file_reader, postgres_url, tokenizer, table_name, batch_size=5000, rootkey = -100, configkey=-50, switch_parameter = 7, total_number_of_triples=None, prefix='', tokenizer_batch_size=5000, add_special_tokens=False, count_leaves=True, debug=False):
     if not tokenizer.is_fast:
         print('WARNING: tokenizer is not fast.')
 
     index = PostgresIngestIndex(
                 rootkey=rootkey,
+                configkey=configkey,
                 switch_parameter=switch_parameter,
-                table_name=table_name)
+                table_name=table_name,
+                tokenizer=tokenizer)
 
     def batch_append(nested_token_ids, index):
         for sequence in nested_token_ids:
@@ -84,8 +89,6 @@ def populate_postgres_index(input_fname, postgres_url, tokenizer, table_name, ba
     count = 0
 
     import psycopg
-    import bz2
-    # TODO extend to other file formats
     from tqdm import tqdm
     with psycopg.connect(postgres_url, autocommit=False) as conn:
         with conn.cursor() as cur:
@@ -102,53 +105,55 @@ def populate_postgres_index(input_fname, postgres_url, tokenizer, table_name, ba
 
             cur.execute(index.truncate_query)
             with cur.copy(index.copy_query) as copy:
-                with bz2.BZ2File(input_fname) as bz2file:
-                    with tqdm(total=total_number_of_triples) as pbar:
-                        tokenizer_batch = []
-                        for count, bline in enumerate(bz2file):
-                            try:
-                                line = bline.decode()
-                                if line[-1] == '\n':
-                                    line = line[:-1]
+                with tqdm(total=total_number_of_triples) as pbar:
+                    tokenizer_batch = []
+                    for count, bline in enumerate(file_reader):
+                        try:
+                            line = bline.decode()
+                            if line[-1] == '\n':
+                                line = line[:-1]
 
-                                line = prefix + line
+                            line = prefix + line
 
-                                tokenizer_batch.append(line)
+                            tokenizer_batch.append(line)
 
-                                if len(tokenizer_batch) == tokenizer_batch_size:
-                                    ids = tokenizer(tokenizer_batch, add_special_tokens=add_special_tokens)['input_ids']
-                                    tokenizer_batch = []
+                            if len(tokenizer_batch) == tokenizer_batch_size:
+                                ids = tokenizer(tokenizer_batch, add_special_tokens=add_special_tokens)['input_ids']
+                                tokenizer_batch = []
 
-                                    batch_append(ids, index)
+                                batch_append(ids, index)
 
-                                if count % batch_size == 0 and count > 0:
-                                    # batch on number or rows processed
-                                    for row in index.get_rows():
-                                        copy.write_row(row)
+                            if count % batch_size == 0 and count > 0:
+                                # batch on number or rows processed
+                                for row in index.get_rows():
+                                    copy.write_row(row)
 
-                                    if count_leaves:
-                                        try:
-                                            lfc = index.count_leaves(fail_on_wrong_num=True)
-                                        except WrongNumleavesException as e:
-                                            print(e, 'at', count)
+                                if count_leaves:
+                                    try:
+                                        lfc = index.count_leaves(fail_on_wrong_num=True)
+                                    except WrongNumleavesException as e:
+                                        print(e, 'at', count)
 
-                                    # reset batch
-                                    index.reset()
+                                # reset batch
+                                index.reset()
 
-                                    if debug:
-                                        print('DEBUG! Breaking after first batch.')
-                                        break
+                                if debug:
+                                    print('DEBUG! Breaking after first batch.')
+                                    break
 
-                                if count % tbar_update == 0:
-                                    pbar.n = count
-                                    pbar.refresh()
+                            if count % tbar_update == 0:
+                                pbar.n = count
+                                pbar.refresh()
 
-                            except EOFError:
-                                print('Reached end of file.')
-                                break  # End of file reached
-                            except Exception as e:
-                                print(f'Encountered exception at {count}')
-                                raise e
+                        except EOFError:
+                            print('Reached end of file.')
+                            break  # End of file reached
+                        except Exception as e:
+                            print(f'Encountered exception at {count}')
+                            raise e
+
+                config_row = index.get_config_row()
+                copy.write_row(config_row)
 
             conn.commit()
 
@@ -514,9 +519,10 @@ class Cache():
         return next_tokens, subtree_cache
 
 class PostgresTrieIndex(Index):
-    def __init__(self, postgresql_connection, table_name, tokenizer, switch_parameter : int = 7, rootkey : int = -100, cache: Cache = None, return_state = False, do_count_leaves=False):
+    def __init__(self, postgresql_connection, table_name, tokenizer, switch_parameter : int = 7, rootkey : int = -100, configkey = -200, cache: Cache = None, return_state = False, do_count_leaves=False):
         super().__init__(tokenizer)
         self.rootkey = rootkey
+        self.configkey = configkey
         self.postgresql_connection = postgresql_connection
         self.switch_parameter = switch_parameter
         self.table_name = table_name
@@ -525,6 +531,21 @@ class PostgresTrieIndex(Index):
         self.select_query = self.base_select_query.format(sql.Identifier(self.table_name))
         self.return_state = return_state
         self.do_count_leaves = do_count_leaves # slower if true
+
+    def get_config(self):
+        with self.postgresql_connection.cursor() as cursor:
+            cursor.execute(self.select_query, ([self.configkey],))
+            query_result = cursor.fetchall()
+
+            config = None
+            for row, (query_id, children, subtree, numleaves, childrenleaves) in enumerate(query_result):
+                if subtree:
+                    config = pickle.loads(subtree)
+
+            if config:
+                print('Applying index config...')
+                if 'switch_parameter' in config:
+                    self.switch_parameter = config['switch_parameter']
 
     def flush_cache(self):
         if self.cache:
@@ -712,10 +733,10 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
     '''
     Use only for ingest time
     '''
-    def __init__(self, tokenizer, rootkey : int, switch_parameter : int, table_name):
+    def __init__(self, tokenizer, rootkey : int, switch_parameter : int, table_name, configkey : int):
         postgresql_connection = '' # inference
-        PostgresTrieIndex.__init__(self, rootkey, postgresql_connection, switch_parameter, table_name)
-        DictIndex.__init__(self)
+        PostgresTrieIndex.__init__(self, postgresql_connection, table_name, tokenizer,  switch_parameter, rootkey, configkey)
+        DictIndex.__init__(self, tokenizer=tokenizer)
 
         self.create_table_query = sql.SQL('''CREATE TABLE IF NOT EXISTS {} (
             id BIGINT GENERATED ALWAYS AS IDENTITY,
@@ -740,6 +761,12 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
 
         self.copy_query = sql.SQL('''COPY {} (key, children, numleaves, childrenleaves, subtree)
             FROM STDIN WITH (FREEZE)''').format(sql.Identifier(self.table_name))
+        
+    def get_config_row(self):
+        config = {
+            'switch_parameter': self.switch_parameter
+        }
+        return self.configkey, None, None, None, pickle.dumps(config)
 
     def get_rows(self):
         # iterative depth first traversal with a stack
