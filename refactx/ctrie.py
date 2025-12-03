@@ -29,7 +29,7 @@ def patch_model(model):
     
     model._get_running_beams_for_next_iteration = types.MethodType(_get_running_beams_for_next_iteration_patch, model)
 
-def load_index(url, tokenizer=None, add_special_tokens=False, clean=True, batch_size=100, configkey=DEFAULT_CONFIGKEY, cache='default'):
+def load_index(url, tokenizer=None, add_special_tokens=False, clean=True, batch_size=100, configkey=DEFAULT_CONFIGKEY, cache='simple'):
     if os.path.isfile(url):
         assert tokenizer is not None, 'tokenizer must be provided when loading from text file.'
         return _load_index_from_txt(url, tokenizer, add_special_tokens, clean, batch_size)
@@ -64,7 +64,7 @@ def _parse_postgresql_url(url):
 
     return url_without_query, parsed_query_flattened
 
-def _load_index_from_postgresql(url, tokenizer=None, configkey=DEFAULT_CONFIGKEY, cache='default'):
+def _load_index_from_postgresql(url, tokenizer=None, configkey=DEFAULT_CONFIGKEY, cache='simple'):
     # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000
     # Parse the URL
     url_without_query, parsed_query = _parse_postgresql_url(url)
@@ -74,14 +74,13 @@ def _load_index_from_postgresql(url, tokenizer=None, configkey=DEFAULT_CONFIGKEY
     import psycopg
     postgresql_connection = psycopg.connect(url_without_query)
 
-    if cache == 'default':
-        cache = SimpleCache(0)
+    if cache == 'simple':
+        cache = SimpleCache()
 
     index = PostgresTrieIndex(
         postgresql_connection = postgresql_connection,
         table_name = table_name,
         cache = cache,
-        tokenizer=tokenizer,
         configkey=configkey
         )
     
@@ -96,7 +95,8 @@ def populate_postgres_index(file_reader, postgres_url, tokenizer, table_name, ba
                 configkey=configkey,
                 switch_parameter=switch_parameter,
                 table_name=table_name,
-                tokenizer=tokenizer)
+                tokenizer_name=tokenizer.name_or_path,
+                )
 
     def batch_append(nested_token_ids, index):
         for sequence in nested_token_ids:
@@ -199,7 +199,10 @@ class WrongNumleavesException(Exception):
     pass
 
 class Index():
-    def __init__(self, tokenizer) -> None:
+    def __init__(self) -> None:
+        self.tokenizer = None
+
+    def set_tokenizer(self, tokenizer):
         self.tokenizer = tokenizer
 
     def add(self, sequence):
@@ -248,8 +251,8 @@ class Index():
         del self.verbalized_triples
 
 class DictIndex(Index):
-    def __init__(self, tokenizer, tree = None):
-        super().__init__(tokenizer)
+    def __init__(self, tree = None):
+        super().__init__()
         self.tree = None
         self.reset(tree)
 
@@ -399,8 +402,11 @@ class DictIndex(Index):
                     raise TripleNotFoundException(sequence)
             else: # is int
                 if sequence[cursor] != level[1][level_cursor]:
-                    sequence_positive = [id for id in sequence if id >= 0]
-                    raise TripleNotFoundException(str(sequence)+self.tokenizer.decode(sequence_positive))
+                    msg = str(sequence)
+                    if self.tokenizer:
+                        sequence_positive = [id for id in sequence if id >= 0]
+                        msg += self.tokenizer.decode(sequence_positive)
+                    raise TripleNotFoundException(msg)
                 else:
                     level_cursor += 1
             cursor += 1
@@ -416,8 +422,11 @@ class DictIndex(Index):
             _next_tokens = {level[1][level_cursor]: level[0]}
 
         if len(_next_tokens) == 0:
-            sequence_positive = [id for id in sequence if id >= 0]
-            raise TripleNotFoundException(str(sequence) + self.tokenizer.decode(sequence_positive))
+            msg = str(sequence)
+            if self.tokenizer:
+                sequence_positive = [id for id in sequence if id >= 0]
+                msg += self.tokenizer.decode(sequence_positive)
+            raise TripleNotFoundException(msg)
 
         return _next_tokens, {}
 
@@ -538,8 +547,8 @@ class Cache():
         return next_tokens, subtree_cache
 
 class PostgresTrieIndex(Index):
-    def __init__(self, postgresql_connection, table_name, tokenizer=None, switch_parameter : int = 7, rootkey : int = -100, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False, tokenizer_name=None):
-        super().__init__(tokenizer)
+    def __init__(self, postgresql_connection, table_name, switch_parameter : int = 7, rootkey : int = -100, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False, tokenizer_name=None):
+        super().__init__()
         self.rootkey = rootkey
         self.configkey = configkey
         self.postgresql_connection = postgresql_connection
@@ -550,17 +559,9 @@ class PostgresTrieIndex(Index):
         self.select_query = self.base_select_query.format(sql.Identifier(self.table_name))
         self.return_state = return_state
         self.do_count_leaves = do_count_leaves # slower if true
-        self.tokenizer_name = tokenizer_name
 
         if self.postgresql_connection:
             self.get_config()
-
-        if self.tokenizer is None:
-            from transformers import AutoTokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
-
-        if self.tokenizer_name is None:
-            self.tokenizer_name = self.tokenizer.name_or_path
 
     def get_config(self):
         with self.postgresql_connection.cursor() as cursor:
@@ -770,18 +771,17 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
     '''
     Use only for ingest time
     '''
-    def __init__(self, tokenizer, rootkey : int, switch_parameter : int, table_name, configkey : int, tokenizer_name=None):
+    def __init__(self, tokenizer_name, rootkey : int, switch_parameter : int, table_name, configkey : int):
         postgresql_connection = '' # inference
         PostgresTrieIndex.__init__(
             self,
             postgresql_connection=postgresql_connection,
             table_name=table_name,
-            tokenizer=tokenizer,
             switch_parameter=switch_parameter,
             rootkey=rootkey,
             configkey=configkey,
         )
-        DictIndex.__init__(self, tokenizer=tokenizer)
+        DictIndex.__init__(self)
 
         self.create_table_query = sql.SQL('''CREATE TABLE IF NOT EXISTS {} (
             id BIGINT GENERATED ALWAYS AS IDENTITY,
@@ -807,7 +807,7 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
         self.copy_query = sql.SQL('''COPY {} (key, children, numleaves, childrenleaves, subtree)
             FROM STDIN WITH (FREEZE)''').format(sql.Identifier(self.table_name))
 
-        self.tokenizer_name = tokenizer_name if tokenizer_name is not None else tokenizer.name_or_path
+        self.tokenizer_name = tokenizer_name
         
     def get_config_row(self):
         config = {

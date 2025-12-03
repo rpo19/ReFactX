@@ -83,7 +83,7 @@ Actual values:
 @click.command()
 # db
 @click.argument("postgres_url")
-@click.option("--cache", required=False, default=None, help="Cache: None or default)")
+@click.option("--cache", required=False, default='simple', help="Cache: None or default)")
 @click.option("--configkey", type=int, default=-200, required=False, help="Config key")
 @click.option("--flush-cache", is_flag=True, required=False, help="Flush cache db at program start")
 #
@@ -112,7 +112,8 @@ def main(postgres_url, cache, configkey, flush_cache, random_seed, initial_token
             cache=cache
         )
 
-    tokenizer = index.tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(index.tokenizer_name)
+    index.set_tokenizer(tokenizer) # for debugging
 
     print('cache', index.cache)
 
@@ -154,8 +155,8 @@ def main(postgres_url, cache, configkey, flush_cache, random_seed, initial_token
     state = PatternConstrainedState(
                 pattern = 'Fact:',
                 tokenizer = tokenizer,
-                cache_index = DictIndex(tokenizer=tokenizer),
-                subtree_cache = DictIndex(tokenizer=tokenizer),
+                cache_index = DictIndex(),
+                subtree_cache = DictIndex(),
             )
 
     print_initial_tokens_numleaves = True
@@ -193,57 +194,22 @@ def main(postgres_url, cache, configkey, flush_cache, random_seed, initial_token
 
                 possible_tokens = list(possible_tokens_dict.keys()) if possible_tokens_dict else []
 
+
                 if len(possible_tokens) > 0:
-                    next_token = choose(possible_tokens, initial_tokens_run)
-                    numleaves = possible_tokens_dict[next_token]
-                    if verbose:
-                        print(sequence)
-                        print(tokenizer.decode(sequence))
-                    possible_tokens_dict, extra = index.next_tokens(sequence, state=state)
-                    possible_tokens_dict_debug = possible_tokens_dict.copy()
-                    if verbose and extra and extra.get('found_subtree'):
-                        print('found_subtree')
                     try:
-                        visited_tokens, _ = state.cache_index.next_tokens(sequence)
-                        # print(visited_tokens, end=' = ')
-                        state.cache_index.subtract_tokens(possible_tokens_dict, visited_tokens)
-                        # print(possible_tokens)
-                    except EmptyIndexException:
-                        # ignore when the cache index is empty
-                        pass
-                    except TripleNotFoundException:
-                        # ignore if triple not in cache index
-                        pass
-
-                    if dump_subtree_cache and len(state.subtree_cache) > 0:
-                        print('DUMP - subtree cache:')
-                        print(state.subtree_cache)
-
-                    possible_tokens = list(possible_tokens_dict.keys()) if possible_tokens_dict else []
-
-                    if len(possible_tokens) > 0:
-                        try:
-                            next_token = choose(possible_tokens, initial_tokens_run)
-                            numleaves = possible_tokens_dict[next_token]
-                            if verbose:
-                                print(f'choosing {next_token}: numleaves: {numleaves}')
-
-                            sequence.append(next_token)
-
-                            if print_initial_tokens_numleaves and len(initial_tokens)>0 and sequence == initial_tokens:
-                                print('Numleaves for initial_tokens:', numleaves)
-                                print_initial_tokens_numleaves = False
-
-                        except InputTokenException as e:
-                            print(e)
-                            break
-                    else:
+                        next_token = choose(possible_tokens, initial_tokens_run)
+                        numleaves = possible_tokens_dict[next_token]
                         if verbose:
-                            print('.')
-                        else:
-                            print(sequence)
-                        state.cache_add(sequence)
-                        state.end_of_triple_reset()
+                            print(f'choosing {next_token}: numleaves: {numleaves}')
+
+                        sequence.append(next_token)
+
+                        if print_initial_tokens_numleaves and len(initial_tokens)>0 and sequence == initial_tokens:
+                            print('Numleaves for initial_tokens:', numleaves)
+                            print_initial_tokens_numleaves = False
+
+                    except InputTokenException as e:
+                        print(e)
                         break
                 else:
                     if verbose:
