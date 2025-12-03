@@ -12,6 +12,7 @@ import gzip
 from tqdm import trange
 from urllib.parse import urlparse, parse_qs
 from .SimpleCache import SimpleCache
+from .RedisCache import RedisCache
 
 
 # must import and initialize
@@ -76,6 +77,8 @@ def _load_index_from_postgresql(url, tokenizer=None, configkey=DEFAULT_CONFIGKEY
 
     if cache == 'simple':
         cache = SimpleCache()
+    elif cache == 'redis':
+        cache = RedisCache()
 
     index = PostgresTrieIndex(
         postgresql_connection = postgresql_connection,

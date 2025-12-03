@@ -30,3 +30,11 @@ services:
   #     POSTGRES_BASE_URL: $POSTGRES_BASE_URL
   #   volumes:
   #     - ./httpindex.py:/app/httpindex.py:ro
+  # redis:
+  #   image: redis:7
+  #   command: redis-server /usr/local/etc/redis/redis.conf
+  #   ports:
+  #     - $REDIS_LISTEN:6379
+  #   volumes:
+  #     - $REDIS_DATA:/data
+  #     - ./redis.conf:/usr/local/etc/redis/redis.conf

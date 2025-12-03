@@ -7,4 +7,5 @@ POSTGRES_SSL_ROOTCERT=
 # REDIS_BASE_URL=redis://user:pwd@host:port/
 # REDIS_SSL=false
 # REDIS_SSL_CA_CERTS=
+# REDIS_CACHE_DB=
 DATA_PATH=./data
