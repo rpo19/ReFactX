@@ -1,7 +1,6 @@
 import bz2
-import psycopg
 from tqdm import tqdm
-from refactx import PostgresIngestIndex
+from refactx import populate_postgres_index
 from transformers import AutoTokenizer
 import click
 
@@ -22,104 +21,36 @@ import click
 @click.option("--debug", is_flag=True, default=False, help="Break after first batch for debugging.")
 def main(fname, model_name, postgres_connection, table_name, prefix, end_of_triple, rootkey,
     tokenizer_batch_size, batch_size, switch_parameter, total_number_of_triples, count_leaves, add_special_tokens, debug):
-    """Command-line tool for processing data and storing it in a PostgreSQL database."""
+    """Command-line wrapper that delegates to refactx.populate_postgres_index."""
 
     assert batch_size % tokenizer_batch_size == 0, f'ERROR: --batch-size ({batch_size}) must be multiple of --tokenizer-batch-size ({tokenizer_batch_size})'
 
     if not end_of_triple.startswith(' '):
         print(f'WARNING: --end-of-triple ("{end_of_triple}") does not start with " "')
 
+    # create tokenizer to pass into populate_postgres_index
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if not tokenizer.is_fast:
         print('WARNING: tokenizer is not fast.')
 
-    index = PostgresIngestIndex(
-                rootkey=rootkey,
-                switch_parameter=switch_parameter,
-                table_name=table_name)
+    # open the compressed file and pass the file reader to the helper
+    with bz2.BZ2File(fname) as file_reader:
+        populate_postgres_index(
+            file_reader=file_reader,
+            postgres_url=postgres_connection,
+            tokenizer=tokenizer,
+            table_name=table_name,
+            batch_size=batch_size,
+            rootkey=rootkey,
+            switch_parameter=switch_parameter,
+            total_number_of_triples=total_number_of_triples,
+            prefix=prefix,
+            tokenizer_batch_size=tokenizer_batch_size,
+            add_special_tokens=add_special_tokens,
+            count_leaves=count_leaves,
+            debug=debug,
+        )
 
-    def batch_append(nested_token_ids, index):
-        for sequence in nested_token_ids:
-            index.add(sequence)
-
-    tbar_update = batch_size
-    count = 0
-
-    with psycopg.connect(postgres_connection, autocommit=False) as conn:
-        with conn.cursor() as cur:
-            # Create table and ensure index
-            # and pkey are not present for fast ingestion
-            cur.execute(index.create_table_query)
-            cur.execute(index.drop_pkey_query)
-            cur.execute(index.drop_index_query)
-            conn.commit()
-
-            cur.execute(index.check_indexes_query)
-            count_indexes = cur.fetchone()[0]
-            assert count_indexes == 0, f"Expected 0 indexes, but found {count_indexes}"
-
-            cur.execute(index.truncate_query)
-            with cur.copy(index.copy_query) as copy:
-                with bz2.BZ2File(fname) as bz2file:
-                    with tqdm(total=total_number_of_triples) as pbar:
-                        tokenizer_batch = []
-                        for count, bline in enumerate(bz2file):
-                            try:
-                                line = bline.decode()
-                                if line[-1] == '\n':
-                                    line = line[:-1]
-
-                                if not line.endswith(end_of_triple):
-                                    print(f'WARNING: line ({line}) w/o --end-of-triple ({end_of_triple})')
-                                    line = line + end_of_triple
-
-                                line = prefix + line
-
-                                tokenizer_batch.append(line)
-
-                                if len(tokenizer_batch) == tokenizer_batch_size:
-                                    ids = tokenizer(tokenizer_batch, add_special_tokens=add_special_tokens)['input_ids']
-                                    tokenizer_batch = []
-
-                                    batch_append(ids, index)
-
-                                if count % batch_size == 0 and count > 0:
-                                    # batch on number or rows processed
-                                    for row in index.get_rows():
-                                        copy.write_row(row)
-
-                                    if count_leaves:
-                                        try:
-                                            lfc = index.count_leaves(fail_on_wrong_num=True)
-                                        except WrongNumleavesException as e:
-                                            print(e, 'at', count)
-
-                                    # reset batch
-                                    index.reset()
-
-                                    if debug:
-                                        print('DEBUG! Breaking after first batch.')
-                                        break
-
-                                if count % tbar_update == 0:
-                                    pbar.n = count
-                                    pbar.refresh()
-
-                            except EOFError:
-                                print('Reached end of file.')
-                                break  # End of file reached
-                            except Exception as e:
-                                print(f'Encountered exception at {count}')
-                                raise e
-
-            conn.commit()
-
-            print('Ingestion finished.')
-            print('Creating index.')
-            cur.execute(index.create_index_query)
-            print('Creating primary key.')
-            cur.execute(index.create_pkey_query)
-            conn.commit()
 
 if __name__ == "__main__":
     main()
