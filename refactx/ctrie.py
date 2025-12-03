@@ -29,8 +29,9 @@ def patch_model(model):
     
     model._get_running_beams_for_next_iteration = types.MethodType(_get_running_beams_for_next_iteration_patch, model)
 
-def load_index(url, tokenizer, add_special_tokens=False, clean=True, batch_size=100, configkey=DEFAULT_CONFIGKEY, cache='default'):
+def load_index(url, tokenizer=None, add_special_tokens=False, clean=True, batch_size=100, configkey=DEFAULT_CONFIGKEY, cache='default'):
     if os.path.isfile(url):
+        assert tokenizer is not None, 'tokenizer must be provided when loading from text file.'
         return _load_index_from_txt(url, tokenizer, add_special_tokens, clean, batch_size)
     elif url.startswith('postgresql://') or url.startswith('postgres://'):
         return _load_index_from_postgresql(url, tokenizer, configkey=configkey, cache=cache)
@@ -46,7 +47,7 @@ def _load_index_from_txt(path, tokenizer, add_special_tokens=False, clean=True, 
 
     return index
 
-def _load_index_from_postgresql(url, tokenizer, configkey=DEFAULT_CONFIGKEY, cache='default'):
+def _parse_postgresql_url(url):
     # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000
     # Parse the URL
     parsed = urlparse(url)
@@ -56,11 +57,19 @@ def _load_index_from_postgresql(url, tokenizer, configkey=DEFAULT_CONFIGKEY, cac
 
     # Parse the query into a dict (values are lists by default)
     parsed_query = parse_qs(parsed.query)
+    parsed_query_flattened = {}
 
-    print("url_without_query:", url_without_query)
-    print("parsed_query:", parsed_query)
+    for key, value in parsed_query.items():
+        parsed_query_flattened[key] = value[0] if isinstance(value, list) and len(value) == 1 else value
 
-    table_name = parsed_query['table_name'][0] if isinstance(parsed_query['table_name'], list) else parsed_query['table_name']
+    return url_without_query, parsed_query_flattened
+
+def _load_index_from_postgresql(url, tokenizer=None, configkey=DEFAULT_CONFIGKEY, cache='default'):
+    # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000
+    # Parse the URL
+    url_without_query, parsed_query = _parse_postgresql_url(url)
+
+    table_name = parsed_query['tablename']
 
     import psycopg
     postgresql_connection = psycopg.connect(url_without_query)
@@ -529,7 +538,7 @@ class Cache():
         return next_tokens, subtree_cache
 
 class PostgresTrieIndex(Index):
-    def __init__(self, postgresql_connection, table_name, tokenizer, switch_parameter : int = 7, rootkey : int = -100, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False):
+    def __init__(self, postgresql_connection, table_name, tokenizer=None, switch_parameter : int = 7, rootkey : int = -100, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False, tokenizer_name=None):
         super().__init__(tokenizer)
         self.rootkey = rootkey
         self.configkey = configkey
@@ -541,13 +550,20 @@ class PostgresTrieIndex(Index):
         self.select_query = self.base_select_query.format(sql.Identifier(self.table_name))
         self.return_state = return_state
         self.do_count_leaves = do_count_leaves # slower if true
+        self.tokenizer_name = tokenizer_name
 
         if self.postgresql_connection:
             self.get_config()
 
+        if self.tokenizer is None:
+            from transformers import AutoTokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
+
+        if self.tokenizer_name is None:
+            self.tokenizer_name = self.tokenizer.name_or_path
+
     def get_config(self):
         with self.postgresql_connection.cursor() as cursor:
-            # doesnt work because of a type problem???
             cursor.execute(self.select_query, ([self.configkey,],))
             query_result = cursor.fetchall()
 
@@ -560,6 +576,12 @@ class PostgresTrieIndex(Index):
                 print('Applying index config...')
                 if 'switch_parameter' in config:
                     self.switch_parameter = config['switch_parameter']
+                if 'rootkey' in config:
+                    self.rootkey = config['rootkey']
+                if 'tokenizer_name' in config:
+                    self.tokenizer_name = config['tokenizer_name']
+            
+        return config
 
     def flush_cache(self):
         if self.cache:
@@ -748,7 +770,7 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
     '''
     Use only for ingest time
     '''
-    def __init__(self, tokenizer, rootkey : int, switch_parameter : int, table_name, configkey : int):
+    def __init__(self, tokenizer, rootkey : int, switch_parameter : int, table_name, configkey : int, tokenizer_name=None):
         postgresql_connection = '' # inference
         PostgresTrieIndex.__init__(
             self,
@@ -784,10 +806,14 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
 
         self.copy_query = sql.SQL('''COPY {} (key, children, numleaves, childrenleaves, subtree)
             FROM STDIN WITH (FREEZE)''').format(sql.Identifier(self.table_name))
+
+        self.tokenizer_name = tokenizer_name if tokenizer_name is not None else tokenizer.name_or_path
         
     def get_config_row(self):
         config = {
-            'switch_parameter': self.switch_parameter
+            'switch_parameter': self.switch_parameter,
+            'rootkey': self.rootkey,
+            'tokenizer_name': self.tokenizer_name,
         }
         return [self.configkey], None, None, None, pickle.dumps(config)
 

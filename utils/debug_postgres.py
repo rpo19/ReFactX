@@ -1,14 +1,10 @@
-import psycopg
 from transformers import AutoTokenizer
 import sys
 import random
 import time
 import json
 import click
-from refactx import PostgresTrieIndex, ConstrainedState, DictIndex, TripleNotFoundException, EmptyIndexException
-import importlib
-from indexes.base_postgres_index_config import IndexConfigException
-from tqdm import tqdm
+from refactx import PatternConstrainedState, DictIndex, TripleNotFoundException, EmptyIndexException, load_index
 
 class TimeMeasure:
     def __init__(self, tag='default', verbose=False, outfile=sys.stdout):
@@ -86,15 +82,9 @@ Actual values:
 
 @click.command()
 # db
-@click.option("--index-module", required=False, help="Index Module with index config")
-@click.option("--postgres-url", required=False, help="Postgres connection URL")
-@click.option("--cache-class", required=False, default=None, help="Cache class")
-@click.option("--cache-db", required=False, default=0, help="Cache db")
-@click.option("--table-name", required=False, help="Table name")
-@click.option("--rootkey", type=int, required=False, help="Root key")
-@click.option("--switch-parameter", type=int, required=False, help="Switch parameter")
-@click.option("--end-of-triple", type=int, required=False, help="End of triple")
-@click.option("--model-name", required=False, help="Model name")
+@click.argument("postgres_url")
+@click.option("--cache", required=False, default=None, help="Cache: None or default)")
+@click.option("--configkey", type=int, default=-200, required=False, help="Config key")
 @click.option("--flush-cache", is_flag=True, required=False, help="Flush cache db at program start")
 #
 @click.option("--random-seed", type=int, required=False, help="Random seed")
@@ -105,39 +95,26 @@ Actual values:
 @click.option("--verbose", required=False, default=False, is_flag=True, help="Verbose mode")
 @click.option("--generations", required=False, default=1, help="Number of triples to generate")
 @click.option("--add-special-tokens", required=False, is_flag=True, help="Add special tokens when tokenizing initial tokens")
-def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey, end_of_triple, model_name, flush_cache, switch_parameter,
-        random_seed, initial_tokens, json_tokens, dump_subtree_cache, verbose, generations, add_special_tokens):
-    if index_module:
+def main(postgres_url, cache, configkey, flush_cache, random_seed, initial_tokens, initial_tokens_file, json_tokens, dump_subtree_cache, verbose, generations, add_special_tokens):
+    """
+    Command-line tool to debug a PostgreSQL-backed index by generating triples based on the index.
+    Arguments:
+        postgres_url: postgres://user:pwd@host:port/dbname?tablename=tablename
+    """
 
-        if index_module.endswith('.py'):
-            index_module = index_module[:-3]
-        index_module = importlib.import_module(index_module)
-        index_config = getattr(index_module, 'index_config')
+    if cache.lower() == 'none':
+        cache = None
 
-        end_of_triple = index_config.end_of_triple
-        index = index_config.index
+    with TimeMeasure(tag='Loading index', verbose=verbose) as tm:
+        index = load_index(
+            postgres_url,
+            configkey=configkey,
+            cache=cache
+        )
 
-        model_name = index_config.model_name
-    elif any(map(lambda x: x is None, [postgres_url, table_name, rootkey, switch_parameter, end_of_triple, model_name])):
-        raise IndexArgumentException(index_module, postgres_url, table_name, rootkey, switch_parameter, end_of_triple, model_name)
-    else:
-        postgres_connection = psycopg.connect(postgres_url, autocommit=False)
-        # TODO add in-memory cache
+    tokenizer = index.tokenizer
 
-        if cache_class is not None:
-            if cache_db is None:
-                raise IndexConfigException('When using caching you must configure which db to use (e.g. 0)')
-            cache_module = importlib.import_module(cache_class)
-            cache = cache_module.__init__(cache_db)
-        else:
-            cache = None
-
-        index = PostgresTrieIndex(rootkey=rootkey,
-                                    postgresql_connection=postgres_connection,
-                                    cache=cache,
-                                    switch_parameter=switch_parameter,
-                                    table_name=table_name,
-                                    end_of_triple=end_of_triple)
+    print('cache', index.cache)
 
     if flush_cache:
         print('Redis flush db and close.')
@@ -155,9 +132,6 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
     print('Seed:', random_seed)
 
     print('Start.')
-
-    with TimeMeasure(tag='Loading tokenizer', verbose=verbose) as tm:
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     if initial_tokens_file:
         # assert not initial_tokens # initial tokens is the prefix
@@ -177,11 +151,11 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
         all_initial_tokens = [initial_tokens]
 
 
-    state = ConstrainedState(
-                begin_pattern = [],
-                end_pattern = [],
-                cache_index = DictIndex(end_of_triple=index.end_of_triple),
-                subtree_cache = DictIndex(end_of_triple=index.end_of_triple),
+    state = PatternConstrainedState(
+                pattern = 'Fact:',
+                tokenizer = tokenizer,
+                cache_index = DictIndex(tokenizer=tokenizer),
+                subtree_cache = DictIndex(tokenizer=tokenizer),
             )
 
     print_initial_tokens_numleaves = True
@@ -220,35 +194,30 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
                 possible_tokens = list(possible_tokens_dict.keys()) if possible_tokens_dict else []
 
                 if len(possible_tokens) > 0:
+                    next_token = choose(possible_tokens, initial_tokens_run)
+                    numleaves = possible_tokens_dict[next_token]
+                    if verbose:
+                        print(sequence)
+                        print(tokenizer.decode(sequence))
+                    possible_tokens_dict, extra = index.next_tokens(sequence, state=state)
+                    possible_tokens_dict_debug = possible_tokens_dict.copy()
+                    if verbose and extra and extra.get('found_subtree'):
+                        print('found_subtree')
                     try:
-                        next_token = choose(possible_tokens, initial_tokens_run)
-                        numleaves = possible_tokens_dict[next_token]
-                        if verbose:
-                            print(sequence)
-                            print(tokenizer.decode(sequence))
-                        possible_tokens_dict, extra = index.next_tokens(sequence, state=state)
-                        possible_tokens_dict_debug = possible_tokens_dict.copy()
-                        if verbose and extra and extra.get('found_subtree'):
-                            print('found_subtree')
-                        try:
-                            visited_tokens, _ = state.cache_index.next_tokens(sequence)
-                            # print(visited_tokens, end=' = ')
-                            state.cache_index.subtract_tokens(possible_tokens_dict, visited_tokens)
-                            # print(possible_tokens)
-                        except EmptyIndexException:
-                            # ignore when the cache index is empty
-                            pass
-                        except TripleNotFoundException:
-                            # ignore if triple not in cache index
-                            pass
+                        visited_tokens, _ = state.cache_index.next_tokens(sequence)
+                        # print(visited_tokens, end=' = ')
+                        state.cache_index.subtract_tokens(possible_tokens_dict, visited_tokens)
+                        # print(possible_tokens)
+                    except EmptyIndexException:
+                        # ignore when the cache index is empty
+                        pass
+                    except TripleNotFoundException:
+                        # ignore if triple not in cache index
+                        pass
 
                     if dump_subtree_cache and len(state.subtree_cache) > 0:
                         print('DUMP - subtree cache:')
                         print(state.subtree_cache)
-
-                    if dump_oneleaf_cache and len(state.oneleaf_cache) > 0:
-                        print('DUMP - oneleaf cache:')
-                        print(state.oneleaf_cache)
 
                     possible_tokens = list(possible_tokens_dict.keys()) if possible_tokens_dict else []
 
@@ -268,14 +237,9 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
                         except InputTokenException as e:
                             print(e)
                             break
-
-                        if verbose and extra and extra.get('tokens_from_oneleaf', False) and next_token in extra.get('tokens_from_oneleaf', {}):
-                            print('chose token from oneleaf')
                     else:
                         if verbose:
                             print('.')
-                        if not sequence[-1] == end_of_triple:
-                            print('ERROR: invalid triple!', sequence)
                         else:
                             print(sequence)
                         state.cache_add(sequence)
@@ -284,8 +248,6 @@ def main(index_module, postgres_url, cache_class, cache_db, table_name, rootkey,
                 else:
                     if verbose:
                         print('.')
-                    if not sequence[-1] == end_of_triple:
-                        print('ERROR: invalid triple!', sequence)
                     else:
                         print(sequence)
                     state.cache_add(sequence)
