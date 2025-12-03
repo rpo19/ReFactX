@@ -15,6 +15,7 @@ from .SimpleCache import SimpleCache
 
 
 # must import and initialize
+DEFAULT_CONFIGKEY=-200
 CONSTRAINED_STATES = None
 
 def patch_model(model):
@@ -28,11 +29,11 @@ def patch_model(model):
     
     model._get_running_beams_for_next_iteration = types.MethodType(_get_running_beams_for_next_iteration_patch, model)
 
-def load_index(url, tokenizer, add_special_tokens=False, clean=True, batch_size=100):
+def load_index(url, tokenizer, add_special_tokens=False, clean=True, batch_size=100, configkey=DEFAULT_CONFIGKEY, cache='default'):
     if os.path.isfile(url):
         return _load_index_from_txt(url, tokenizer, add_special_tokens, clean, batch_size)
     elif url.startswith('postgresql://') or url.startswith('postgres://'):
-        return _load_index_from_postgresql(url, tokenizer)
+        return _load_index_from_postgresql(url, tokenizer, configkey=configkey, cache=cache)
     elif url.startswith('http://') or url.startswith('https://'):
         raise NotImplementedError('automatic load of http indexes not implemented yet.')
 
@@ -45,7 +46,7 @@ def _load_index_from_txt(path, tokenizer, add_special_tokens=False, clean=True, 
 
     return index
 
-def _load_index_from_postgresql(url, tokenizer):
+def _load_index_from_postgresql(url, tokenizer, configkey=DEFAULT_CONFIGKEY, cache='default'):
     # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000
     # Parse the URL
     parsed = urlparse(url)
@@ -61,16 +62,23 @@ def _load_index_from_postgresql(url, tokenizer):
 
     table_name = parsed_query['table_name'][0] if isinstance(parsed_query['table_name'], list) else parsed_query['table_name']
 
+    import psycopg
+    postgresql_connection = psycopg.connect(url_without_query)
+
+    if cache == 'default':
+        cache = SimpleCache(0)
+
     index = PostgresTrieIndex(
-        postgresql_connection = url_without_query,
+        postgresql_connection = postgresql_connection,
         table_name = table_name,
-        cache = SimpleCache(0),
-        tokenizer=tokenizer
+        cache = cache,
+        tokenizer=tokenizer,
+        configkey=configkey
         )
     
     return index
 
-def populate_postgres_index(file_reader, postgres_url, tokenizer, table_name, batch_size=5000, rootkey = -100, configkey=-50, switch_parameter = 7, total_number_of_triples=None, prefix='', tokenizer_batch_size=5000, add_special_tokens=False, count_leaves=True, debug=False):
+def populate_postgres_index(file_reader, postgres_url, tokenizer, table_name, batch_size=5000, rootkey = -100, configkey=DEFAULT_CONFIGKEY, switch_parameter = 7, total_number_of_triples=None, prefix='', tokenizer_batch_size=5000, add_special_tokens=False, count_leaves=True, debug=False):
     if not tokenizer.is_fast:
         print('WARNING: tokenizer is not fast.')
 
@@ -382,7 +390,8 @@ class DictIndex(Index):
                     raise TripleNotFoundException(sequence)
             else: # is int
                 if sequence[cursor] != level[1][level_cursor]:
-                    raise TripleNotFoundException(str(sequence)+self.tokenizer.decode(sequence))
+                    sequence_positive = [id for id in sequence if id >= 0]
+                    raise TripleNotFoundException(str(sequence)+self.tokenizer.decode(sequence_positive))
                 else:
                     level_cursor += 1
             cursor += 1
@@ -398,7 +407,8 @@ class DictIndex(Index):
             _next_tokens = {level[1][level_cursor]: level[0]}
 
         if len(_next_tokens) == 0:
-            raise TripleNotFoundException(str(sequence) + self.tokenizer.decode(sequence))
+            sequence_positive = [id for id in sequence if id >= 0]
+            raise TripleNotFoundException(str(sequence) + self.tokenizer.decode(sequence_positive))
 
         return _next_tokens, {}
 
@@ -519,7 +529,7 @@ class Cache():
         return next_tokens, subtree_cache
 
 class PostgresTrieIndex(Index):
-    def __init__(self, postgresql_connection, table_name, tokenizer, switch_parameter : int = 7, rootkey : int = -100, configkey = -200, cache: Cache = None, return_state = False, do_count_leaves=False):
+    def __init__(self, postgresql_connection, table_name, tokenizer, switch_parameter : int = 7, rootkey : int = -100, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False):
         super().__init__(tokenizer)
         self.rootkey = rootkey
         self.configkey = configkey
@@ -527,14 +537,18 @@ class PostgresTrieIndex(Index):
         self.switch_parameter = switch_parameter
         self.table_name = table_name
         self.cache = cache
-        self.base_select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;')
+        self.base_select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s::integer[];')
         self.select_query = self.base_select_query.format(sql.Identifier(self.table_name))
         self.return_state = return_state
         self.do_count_leaves = do_count_leaves # slower if true
 
+        if self.postgresql_connection:
+            self.get_config()
+
     def get_config(self):
         with self.postgresql_connection.cursor() as cursor:
-            cursor.execute(self.select_query, ([self.configkey],))
+            # doesnt work because of a type problem???
+            cursor.execute(self.select_query, ([self.configkey,],))
             query_result = cursor.fetchall()
 
             config = None
@@ -641,6 +655,7 @@ class PostgresTrieIndex(Index):
                 except Exception as e:
                     print('WARNING: failed to populate cache', e)
 
+        # print(_next_tokens)
         return _next_tokens
 
 class HTTPPostgresError(Exception):
@@ -735,7 +750,15 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
     '''
     def __init__(self, tokenizer, rootkey : int, switch_parameter : int, table_name, configkey : int):
         postgresql_connection = '' # inference
-        PostgresTrieIndex.__init__(self, postgresql_connection, table_name, tokenizer,  switch_parameter, rootkey, configkey)
+        PostgresTrieIndex.__init__(
+            self,
+            postgresql_connection=postgresql_connection,
+            table_name=table_name,
+            tokenizer=tokenizer,
+            switch_parameter=switch_parameter,
+            rootkey=rootkey,
+            configkey=configkey,
+        )
         DictIndex.__init__(self, tokenizer=tokenizer)
 
         self.create_table_query = sql.SQL('''CREATE TABLE IF NOT EXISTS {} (
@@ -766,7 +789,7 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
         config = {
             'switch_parameter': self.switch_parameter
         }
-        return self.configkey, None, None, None, pickle.dumps(config)
+        return [self.configkey], None, None, None, pickle.dumps(config)
 
     def get_rows(self):
         # iterative depth first traversal with a stack
