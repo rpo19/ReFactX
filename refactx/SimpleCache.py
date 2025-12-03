@@ -12,21 +12,20 @@ class SimpleCache:
         # TODO use base64 or similar for improve space efficiency
         return '.'.join(map(str, sequence))
 
-    def add(self, sequence, next_tokens, oneleaf_cache, subtree_cache):
+    def add(self, sequence, next_tokens, subtree_cache):
         key = self.encode_sequence(sequence)
-        value = pickle.dumps([next_tokens, oneleaf_cache, subtree_cache], protocol=5)
+        value = pickle.dumps([next_tokens, subtree_cache], protocol=5)
         self.cache[key] = value
 
     def next_tokens(self, sequence, **kwargs):
         key = self.encode_sequence(sequence)
         value = self.cache.get(key)
         if value:
-            _next_tokens, oneleaf_cache, subtree_cache = pickle.loads(value)
+            _next_tokens, subtree_cache = pickle.loads(value)
         else:
             _next_tokens = None
-            oneleaf_cache = None
             subtree_cache = None
-        return _next_tokens, oneleaf_cache, subtree_cache
+        return _next_tokens, subtree_cache
 
 def __init__(cache_db):
     return SimpleCache(cache_db)
