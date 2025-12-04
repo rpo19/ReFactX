@@ -1,9 +1,0 @@
-from .base_model_config import ModelConfig
-from transformers import AutoModelForImageTextToText
-
-model_config = ModelConfig(
-    model_name = 'google/gemma-3-4b-it',
-    switch_pattern = [27711, 236787], # "Fact:" after newline
-    newline_token = 107,
-    model_class = AutoModelForImageTextToText
-)
