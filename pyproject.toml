@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "build"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "refactx"
+version = "0.1.0"
+description = "Refactx package"
+readme = "Readme.md"
+license = "Apache-2.0"
+authors = [ { name = "Riccardo Pozzi" } ]
+requires-python = ">=3.8"
+
+dependencies = [
+	"transformers>=4.0",
+	"psycopg[binary]>=3.0",
+	"cachetools",
+	"requests",
+	"tqdm",
+	"python-dotenv",
+	"click",
+]
+
+[project.scripts]
+refactx-populate-postgres = "refactx.cli.populate_postgres:main"
+refactx-debug-postgres = "refactx.cli.debug_postgres:main"
+
+[tool.setuptools.packages.find]
+include = ["refactx*"]

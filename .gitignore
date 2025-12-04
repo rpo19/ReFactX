@@ -22,3 +22,4 @@ hpc
 wandb
 **/logs
 transformers
+dist
