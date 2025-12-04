@@ -16,6 +16,9 @@ from .SimpleCache import SimpleCache
 
 # must import and initialize
 DEFAULT_CONFIGKEY=-200
+DEFAULT_ROOTKEY=-100
+DEFAULT_SWITCH_PARAMETER=7
+
 CONSTRAINED_STATES = None
 
 def patch_model(model):
@@ -86,7 +89,7 @@ def _load_index_from_postgresql(url, tokenizer=None, configkey=DEFAULT_CONFIGKEY
     
     return index
 
-def populate_postgres_index(file_reader, postgres_url, tokenizer, table_name, batch_size=5000, rootkey = -100, configkey=DEFAULT_CONFIGKEY, switch_parameter = 7, total_number_of_triples=None, prefix='', tokenizer_batch_size=5000, add_special_tokens=False, count_leaves=True, debug=False):
+def populate_postgres_index(file_reader, postgres_url, tokenizer, table_name, batch_size=5000, rootkey = DEFAULT_ROOTKEY, configkey=DEFAULT_CONFIGKEY, switch_parameter = DEFAULT_SWITCH_PARAMETER, total_number_of_triples=None, prefix='', tokenizer_batch_size=5000, add_special_tokens=False, count_leaves=True, debug=False):
     if not tokenizer.is_fast:
         print('WARNING: tokenizer is not fast.')
 
@@ -547,7 +550,7 @@ class Cache():
         return next_tokens, subtree_cache
 
 class PostgresTrieIndex(Index):
-    def __init__(self, postgresql_connection, table_name, switch_parameter : int = 7, rootkey : int = -100, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False, tokenizer_name=None):
+    def __init__(self, postgresql_connection, table_name, switch_parameter : int = DEFAULT_SWITCH_PARAMETER, rootkey : int = DEFAULT_ROOTKEY, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False, tokenizer_name=None):
         super().__init__()
         self.rootkey = rootkey
         self.configkey = configkey
@@ -691,7 +694,7 @@ def serialize(obj):
     return pickle.dumps(obj)
 
 class HTTPPostgresTrieIndex(PostgresTrieIndex):
-    def __init__(self, table_name, base_url: str, rootkey : int = -100, switch_parameter : int = 7, cache: Cache = None, return_state = False, do_count_leaves=False, rootcert=None, timeout=15, retry=5):
+    def __init__(self, table_name, base_url: str, rootkey : int = DEFAULT_ROOTKEY, switch_parameter : int = DEFAULT_SWITCH_PARAMETER, cache: Cache = None, return_state = False, do_count_leaves=False, rootcert=None, timeout=15, retry=5):
         super().__init__(rootkey, None, switch_parameter, table_name, cache, return_state, do_count_leaves)
         # self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
         self.base_url = base_url[:-1] if base_url.endswith('/') else base_url
