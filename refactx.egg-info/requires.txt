@@ -1,7 +1,0 @@
-transformers>=4.0
-psycopg[binary]>=3.0
-cachetools
-requests
-tqdm
-python-dotenv
-click

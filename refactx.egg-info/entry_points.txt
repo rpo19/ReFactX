@@ -1,3 +1,0 @@
-[console_scripts]
-refactx-debug-postgres = refactx.cli.debug_postgres:main
-refactx-populate-postgres = refactx.cli.populate_postgres:main
