@@ -40,9 +40,12 @@ def load_index(url, tokenizer=None, add_special_tokens=False, clean=True, batch_
         return _load_index_from_postgresql(url, tokenizer, configkey=configkey, cache=cache)
     elif url.startswith('http://') or url.startswith('https://'):
         raise NotImplementedError('automatic load of http indexes not implemented yet.')
+    else:
+        raise ValueError(f'Cannot load index from {url}')
 
 def _load_index_from_txt(path, tokenizer, add_special_tokens=False, clean=True, batch_size=100):
-    index = DictIndex(tokenizer)
+    index = DictIndex()
+    index.set_tokenizer(tokenizer)
     index.load_from_path(path)
     index.tokenize_triples(add_special_tokens, batch_size)
     if clean:
@@ -247,6 +250,8 @@ class Index():
                 batch_end = len(self.verbalized_triples)
 
             batch = self.verbalized_triples[batch_start:batch_end]
+            if self.tokenizer is None:
+                raise ValueError('tokenizer must be set before tokenizing triples.')
             ids = self.tokenizer(batch, add_special_tokens=add_special_tokens)['input_ids']
             self.batch_append(ids)
 
