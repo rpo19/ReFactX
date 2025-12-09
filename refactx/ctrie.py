@@ -429,13 +429,6 @@ class DictIndex(Index):
         else: # is int
             _next_tokens = {level[1][level_cursor]: level[0]}
 
-        if len(_next_tokens) == 0:
-            msg = str(sequence)
-            if self.tokenizer:
-                sequence_positive = [id for id in sequence if id >= 0]
-                msg += self.tokenizer.decode(sequence_positive)
-            raise TripleNotFoundException(msg)
-
         return _next_tokens, {}
 
     def to_dict(self, sequence, numleaves, subtree=[]):
