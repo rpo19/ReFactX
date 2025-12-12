@@ -13,8 +13,8 @@
 [#license-gh-package]: LICENSE
 
 <!--- BADGES: END --->
-
-The implementation corresponding to the ISWC 2025 paper is available at the [ISWC2025 branch](https://github.com/rpo19/ReFactX/tree/ISWC2025).
+The paper has been pubished in *The Semantic Web - ISWC 2025* and it is available at [https://doi.org/10.1007/978-3-032-09527-5_16](https://doi.org/10.1007/978-3-032-09527-5_16).
+The corresponding implementation is available at the [ISWC2025 branch](https://github.com/rpo19/ReFactX/tree/ISWC2025).
 
 
 A preprint that has not
