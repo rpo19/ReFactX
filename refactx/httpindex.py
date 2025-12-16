@@ -15,10 +15,9 @@ postgresql_connection = index_config.postgresql_connection
 
 app = Flask(__name__)
 
-@app.route("/select", methods=["POST"])
-def get_next_tokens():
+@app.route("/<table_name>", methods=["POST"])
+def get_next_tokens(table_name):
     args = deserialize(request.data)
-    table_name = args['table_name']
     sequence = args['sequence']
     select_query = index_config.index.base_select_query.format(sql.Identifier(table_name))
 

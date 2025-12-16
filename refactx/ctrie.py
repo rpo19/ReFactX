@@ -39,9 +39,21 @@ def load_index(url, tokenizer=None, add_special_tokens=False, clean=True, batch_
     elif url.startswith('postgresql://') or url.startswith('postgres://'):
         return _load_index_from_postgresql(url, tokenizer, configkey=configkey, cache=cache)
     elif url.startswith('http://') or url.startswith('https://'):
-        raise NotImplementedError('automatic load of http indexes not implemented yet.')
+        return _load_http_index(url, tokenizer, configkey=configkey, cache=cache)
     else:
         raise ValueError(f'Cannot load index from {url}')
+
+def _load_http_index(url, tokenizer=None, configkey=DEFAULT_CONFIGKEY, cache='simple'):
+    # tablename in url
+    index = HTTPPostgresTrieIndex(
+        url = url,
+        cache = cache,
+        configkey=configkey,
+        rootcert = rootcert
+    )
+
+    return index
+
 
 def _load_index_from_txt(path, tokenizer, add_special_tokens=False, clean=True, batch_size=100):
     index = DictIndex()
@@ -692,11 +704,9 @@ def serialize(obj):
     return pickle.dumps(obj)
 
 class HTTPPostgresTrieIndex(PostgresTrieIndex):
-    def __init__(self, table_name, base_url: str, rootkey : int = DEFAULT_ROOTKEY, switch_parameter : int = DEFAULT_SWITCH_PARAMETER, cache: Cache = None, return_state = False, do_count_leaves=False, rootcert=None, timeout=15, retry=5):
-        super().__init__(rootkey, None, switch_parameter, table_name, cache, return_state, do_count_leaves)
-        # self.select_query = sql.SQL('SELECT id, children, subtree, numleaves, childrenleaves FROM {} WHERE key = %s;').format(sql.Identifier(self.table_name))
-        self.base_url = base_url[:-1] if base_url.endswith('/') else base_url
-        self.select_url = f'/select'
+    def __init__(self, base_url: str, rootkey : int = DEFAULT_ROOTKEY,configkey = DEFAULT_CONFIGKEY, switch_parameter : int = DEFAULT_SWITCH_PARAMETER, cache: Cache = None, return_state = False, do_count_leaves=False, rootcert=None, timeout=15, retry=5):
+        super().__init__(postgresql_connection = None, table_name = None, cache = cache, configkey=configkey)
+        self.base_url = base_url
         self.rootcert = rootcert
         self.timeout = timeout
         self.retry = retry
@@ -706,6 +716,36 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
         retries = Retry(total=self.retry)
 
         self.session.mount(self.base_url, HTTPAdapter(max_retries=retries))
+
+        self.get_config()
+
+    def get_config(self):
+        data = serialize(dict(sequence=[self.configkey,]))
+        response = self.session.post(self.base_url,
+            data=data,
+            headers={'Content-Type': 'application/octet-stream'},
+            verify=self.rootcert,
+            timeout=self.timeout,
+        )
+        if not response.ok:
+            raise HTTPPostgresError(response.text)
+        query_result = deserialize(response.content)
+
+        config = None
+        for row, (query_id, children, subtree, numleaves, childrenleaves) in enumerate(query_result):
+            if subtree:
+                config = pickle.loads(subtree)
+
+        if config:
+            print('Applying index config...')
+            if 'switch_parameter' in config:
+                self.switch_parameter = config['switch_parameter']
+            if 'rootkey' in config:
+                self.rootkey = config['rootkey']
+            if 'tokenizer_name' in config:
+                self.tokenizer_name = config['tokenizer_name']
+        
+        return config
 
     def _next_tokens_from_postgresql(self, sequence, state):
         found_in_cache = False
@@ -721,8 +761,8 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
                     state.subtree_cache = new_subtree_cache
 
         if not found_in_cache:
-            data = serialize(dict(sequence=sequence,table_name=self.table_name))
-            response = self.session.post(self.base_url + self.select_url,
+            data = serialize(dict(sequence=sequence))
+            response = self.session.post(self.base_url,
                 data=data,
                 headers={'Content-Type': 'application/octet-stream'},
                 verify=self.rootcert,
