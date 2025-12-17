@@ -2,9 +2,7 @@ FROM python:3.12
 
 WORKDIR /app
 
-COPY --from=repo . /app
-
-RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir refactx[httpindex]
 
 EXPOSE 8000
 

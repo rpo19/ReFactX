@@ -1,3 +1,5 @@
+from transformers import LogitsProcessorList
+from refactx.index import DictIndex
 from transformers.generation.logits_process import LogitsProcessor
 import torch
 from copy import deepcopy
@@ -6,9 +8,8 @@ import types
 
 from refactx.index import EmptyIndexException, TripleNotFoundException
 
-CONSTRAINED_STATES = None
 
-def patch_model(model):
+def patch_model(model, verbose=True):
     _get_running_beams_for_next_iteration_original = model.__class__._get_running_beams_for_next_iteration
     
     def _get_running_beams_for_next_iteration_patch(self,*args, **kwargs):
@@ -19,20 +20,42 @@ def patch_model(model):
     
     model._get_running_beams_for_next_iteration = types.MethodType(_get_running_beams_for_next_iteration_patch, model)
 
-def apply_prompt_template(prompt_template, tokenizer, question=None):
-    if question is None:
-        # only prompt for caching
-        return tokenizer.apply_chat_template(prompt_template, tokenize=False, add_generation_prompt=False)
+    if verbose:
+        print('WARNING: this patching method relies on shared mutable global state to support constrained generation with beam search. It is not thread-safe and may produce incorrect results in concurrent or multi-process setups (e.g. multiple workers).')
+
+# def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True):
+def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, return_list):
+    states = [[PatternConstrainedState(
+                    pattern = 'Fact:',
+                    tokenizer = tokenizer,
+                    cache_index = DictIndex(),
+                    subtree_cache = DictIndex(),
+                )]]
+
+    CONSTRAINED_STATES.__init__(states,
+                num_beams=num_beams,
+                num_batches =num_batches,
+        )
+
+    constrained_processor = ConstrainedLogitsProcessor(
+        index=index,
+        states=CONSTRAINED_STATES, tokenizer=tokenizer)
+
+    if return_list:
+        logits_processor_list = LogitsProcessorList([
+            constrained_processor
+        ])
+        return logits_processor_list
     else:
-        question_w_role = {'role':'user', 'content': question}
-        return tokenizer.apply_chat_template(prompt_template + [question_w_role], tokenize=False, add_generation_prompt=True)
+        return constrained_processor
 
 class ConstrainedStateList():
     # states is list of list [num_batches, num_beams]
     def __init__(self, states, num_beams = 1, num_batches = 1, debug=False, debug_tokenizer=None):
         self.states = states
-        assert isinstance(states, list) and isinstance(states[0], list), 'ERROR: states is not a list of lists'
-        assert len(states) == num_batches and len(states[0]) == num_beams, 'ERROR: states size does not match num_batches or num_beams'
+        if states != []:
+            assert isinstance(states, list) and isinstance(states[0], list), 'ERROR: states is not a list of lists'
+            assert len(states) == num_batches and len(states[0]) == num_beams, 'ERROR: states size does not match num_batches or num_beams'
         self.num_beams = num_beams
         self.num_batches = num_batches # used for computing beam id
         self.beam_idx = [] # torch.tensor([-1]*num_batches*num_beams).view(num_batches,num_beams,1) # running beam idx
@@ -331,3 +354,4 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         else:
             mask[mask_idx, possible_tokens] = 0
 
+CONSTRAINED_STATES = ConstrainedStateList([])
