@@ -9,3 +9,5 @@ data_*
 redis.conf
 api_index.py
 .htpasswd
+nginx.conf
+docker-compose.yml
