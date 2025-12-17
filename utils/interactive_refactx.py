@@ -4,13 +4,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TextStreamer
 from transformers.generation.logits_process import LogitsProcessorList
 import refactx
 from refactx.prompt_base import PROMPT_TEMPLATE
-from refactx import (
+from refactx.generate import (
     ConstrainedLogitsProcessor,
     ConstrainedStateList,
     PatternConstrainedState,
     DictIndex,
-    patch_model,
 )
+from refactx import patch_model
 
 @click.command()
 @click.option("--model", "model_path", default="Qwen/Qwen2.5-3B-Instruct", help="Model name or path")

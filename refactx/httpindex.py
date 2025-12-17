@@ -1,6 +1,7 @@
 from flask import Flask, request
 import os
-from .ctrie import serialize, deserialize, load_index
+from refactx import load_index
+from refactx.index import serialize, deserialize
 from psycopg import sql
 
 index_url = os.environ.get('INDEX')

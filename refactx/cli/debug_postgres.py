@@ -4,7 +4,8 @@ import random
 import time
 import json
 import click
-from refactx import PatternConstrainedState, DictIndex, TripleNotFoundException, EmptyIndexException, load_index
+from refactx import load_index
+from refactx.generate import PatternConstrainedState, DictIndex, TripleNotFoundException, EmptyIndexException
 
 class TimeMeasure:
     def __init__(self, tag='default', verbose=False, outfile=sys.stdout):
