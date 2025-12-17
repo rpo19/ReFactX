@@ -14,7 +14,7 @@ from refactx import patch_model
 
 @click.command()
 @click.option("--model", "model_path", default="Qwen/Qwen2.5-3B-Instruct", help="Model name or path")
-@click.option("--index", "index_path", default="../indexes/simple_index.txt.gz", help="Path to the index file")
+@click.option("--index", "index_path", default="./indexes/simple_index.txt.gz", help="Path to the index file")
 @click.option("--device", default="auto", help="Device to use (e.g. 'auto', 'cuda', 'cpu')")
 def main(model_path, index_path, device):
     """
@@ -30,7 +30,7 @@ def main(model_path, index_path, device):
     model.eval()
 
     print("Loading index...")
-    index = refactx.load_index(index_path, tokenizer)
+    index = refactx.load_index(index_path, tokenizer=tokenizer)
 
     streamer = TextStreamer(tokenizer, skip_prompt=True)
 
@@ -105,7 +105,7 @@ def main(model_path, index_path, device):
                 break
 
             prompted_text = refactx.apply_prompt_template(
-                current_prompt_template, tokenizer, question
+                tokenizer, prompt_template=current_prompt_template, question=question
             )
             inputs = tokenizer([prompted_text], return_tensors="pt").to(model.device)
 
