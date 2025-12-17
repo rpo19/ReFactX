@@ -1,4 +1,5 @@
 from .ctrie import *
+from .index import *
 __all__ = [name for name in globals().keys() if not name.startswith('_')]
 
 def _read_version_from_pyproject():
