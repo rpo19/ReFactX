@@ -12,15 +12,19 @@ authors = [ { name = "Riccardo Pozzi" } ]
 requires-python = ">=3.8"
 
 dependencies = [
-	"transformers>=4.0",
-	"torch",
-	"accelerate",
-	"psycopg[binary]>=3.0",
-	"cachetools",
-	"requests",
 	"tqdm",
 	"python-dotenv",
 	"click",
+	"psycopg[binary]>=3.0",
+	"cachetools",
+	"requests",
+]
+
+[project.optional-dependencies]
+torch = [
+	"torch",
+	"transformers>=4.0",
+	"accelerate",
 ]
 
 [project.scripts]

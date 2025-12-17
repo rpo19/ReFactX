@@ -12,7 +12,7 @@ ReFactX is a scalable method that enables LLMs to access external knowledge with
 ## Install and Try
 
 ```bash
-pip install refactx
+pip install refactx[torch]
 ```
 
 Quick example (print package version)

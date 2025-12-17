@@ -31,7 +31,7 @@ This repository contains the source code for using ReFactX and reproducing our w
 ## Install ReFactX
 Create a virtualenv or conda environment, then
 ```
-pip install refactx
+pip install refactx[torch]
 ```
 
 ## Try ReFactX
