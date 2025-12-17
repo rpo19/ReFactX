@@ -32,21 +32,27 @@ def patch_model(model):
     
     model._get_running_beams_for_next_iteration = types.MethodType(_get_running_beams_for_next_iteration_patch, model)
 
-def load_index(url, tokenizer=None, add_special_tokens=False, clean=True, batch_size=100, configkey=DEFAULT_CONFIGKEY, cache='simple'):
+def load_index(url, **kwargs):
     if os.path.isfile(url):
-        assert tokenizer is not None, 'tokenizer must be provided when loading from text file.'
-        return _load_index_from_txt(url, tokenizer, add_special_tokens, clean, batch_size)
+        return _load_index_from_txt(url, **kwargs)
     elif url.startswith('postgresql://') or url.startswith('postgres://'):
-        return _load_index_from_postgresql(url, tokenizer, configkey=configkey, cache=cache)
+        return _load_index_from_postgresql(url, **kwargs)
     elif url.startswith('http://') or url.startswith('https://'):
-        return _load_http_index(url, tokenizer, configkey=configkey, cache=cache)
+        return _load_http_index(url, **kwargs)
     else:
         raise ValueError(f'Cannot load index from {url}')
 
-def _load_http_index(url, tokenizer=None, configkey=DEFAULT_CONFIGKEY, cache='simple'):
+def _load_http_index(url, configkey=DEFAULT_CONFIGKEY, cache='simple', rootcert=None):
     # tablename in url
+    if rootcert is None:
+        rootcert = os.environ.get('HTTP_ROOTCERT')
+    if rootcert and rootcert.lower() == 'false':
+        rootcert = False
+    if rootcert == False:
+        import urllib3
+        urllib3.disable_warnings()
     index = HTTPPostgresTrieIndex(
-        url = url,
+        base_url = url,
         cache = cache,
         configkey=configkey,
         rootcert = rootcert
@@ -55,7 +61,8 @@ def _load_http_index(url, tokenizer=None, configkey=DEFAULT_CONFIGKEY, cache='si
     return index
 
 
-def _load_index_from_txt(path, tokenizer, add_special_tokens=False, clean=True, batch_size=100):
+def _load_index_from_txt(path, tokenizer=None, add_special_tokens=False, clean=True, batch_size=100):
+    assert tokenizer is not None, 'tokenizer must be provided when loading from text file.'
     index = DictIndex()
     index.set_tokenizer(tokenizer)
     index.load_from_path(path)
@@ -82,7 +89,7 @@ def _parse_postgresql_url(url):
 
     return url_without_query, parsed_query_flattened
 
-def _load_index_from_postgresql(url, tokenizer=None, configkey=DEFAULT_CONFIGKEY, cache='simple'):
+def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple'):
     # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000
     # Parse the URL
     url_without_query, parsed_query = _parse_postgresql_url(url)
@@ -705,7 +712,7 @@ def serialize(obj):
 
 class HTTPPostgresTrieIndex(PostgresTrieIndex):
     def __init__(self, base_url: str, rootkey : int = DEFAULT_ROOTKEY,configkey = DEFAULT_CONFIGKEY, switch_parameter : int = DEFAULT_SWITCH_PARAMETER, cache: Cache = None, return_state = False, do_count_leaves=False, rootcert=None, timeout=15, retry=5):
-        super().__init__(postgresql_connection = None, table_name = None, cache = cache, configkey=configkey)
+        super().__init__(postgresql_connection = None, table_name = 'dummy', cache = cache, configkey=configkey)
         self.base_url = base_url
         self.rootcert = rootcert
         self.timeout = timeout

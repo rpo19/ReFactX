@@ -95,7 +95,8 @@ Actual values:
 @click.option("--verbose", required=False, default=False, is_flag=True, help="Verbose mode")
 @click.option("--generations", required=False, default=1, help="Number of triples to generate")
 @click.option("--add-special-tokens", required=False, is_flag=True, help="Add special tokens when tokenizing initial tokens")
-def main(postgres_url, cache, configkey, flush_cache, random_seed, initial_tokens, initial_tokens_file, json_tokens, dump_subtree_cache, verbose, generations, add_special_tokens):
+@click.option("--http-rootcert", required=False, default=None, help="Speficy https certificates file (or false to disable verification)")
+def main(postgres_url, cache, configkey, flush_cache, random_seed, initial_tokens, initial_tokens_file, json_tokens, dump_subtree_cache, verbose, generations, add_special_tokens, http_rootcert):
     """
     Command-line tool to debug a PostgreSQL-backed index by generating triples based on the index.
     Arguments:
@@ -109,7 +110,8 @@ def main(postgres_url, cache, configkey, flush_cache, random_seed, initial_token
         index = load_index(
             postgres_url,
             configkey=configkey,
-            cache=cache
+            cache=cache,
+            rootcert=http_rootcert,
         )
 
     tokenizer = AutoTokenizer.from_pretrained(index.tokenizer_name)
