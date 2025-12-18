@@ -18,7 +18,9 @@ import json
 @click.option("--index", "index_path", default="./indexes/simple_index.txt.gz", help="Path to the index file")
 @click.option("--device", default="auto", help="Device to use (e.g. 'auto', 'cuda', 'cpu')")
 @click.option("--http-rootcert", required=False, default=None, help="Speficy https certificates file (or false to disable verification)")
-def main(model_path, index_path, device, http_rootcert):
+@click.option("--avoid-duplicates", required=False, default=True, help="Speficy whether to avoid generating duplicates or not.")
+@click.option("--ignore-case", is_flag=True, default=True, help="Whether to ignore case when matching patterns.")
+def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore_case):
     """
     An interactive script to ask questions to the ReFactX model.
     """
@@ -64,10 +66,16 @@ def main(model_path, index_path, device, http_rootcert):
                     if len(parts) == 1:
                         print(f"Prompt template: {json.dumps(current_prompt_template)}")
                         print(f"Generation config: {gen_config}")
+                        print(f"avoid_duplicates: {avoid_duplicates}")
+                        print(f"ignore_case: {ignore_case}")
                     elif len(parts) >= 2:
                         key = parts[1]
                         if key == "prompt_template":
                             print(f"{key}: {json.dumps(current_prompt_template)}")
+                        elif key == "avoid_duplicates":
+                            print(f"{key}: {avoid_duplicates}")
+                        elif key == "ignore_case":
+                            print(f"{key}: {ignore_case}")
                         elif key in gen_config:
                             print(f"{key}: {gen_config[key]}")
                         else:
@@ -82,7 +90,7 @@ def main(model_path, index_path, device, http_rootcert):
                     if key == "prompt_template":
                         current_prompt_template = json.loads(val)
                         print(f"Updated {key}")
-                    elif key in gen_config:
+                    elif key in gen_config or key in ["avoid_duplicates", "ignore_case"]:
                         if val.lower() == "none":
                             val = None
                         elif val.lower() == "true":
@@ -97,7 +105,12 @@ def main(model_path, index_path, device, http_rootcert):
                                     val = float(val)
                                 except ValueError:
                                     pass
-                        gen_config[key] = val
+                        if key == "avoid_duplicates":
+                            avoid_duplicates = bool(val)
+                        elif key == "ignore_case":
+                            ignore_case = bool(val)
+                        else:
+                            gen_config[key] = val
                         print(f"Updated {key} to {val}")
                     else:
                         print(f"Unknown key: {key}")
@@ -118,10 +131,10 @@ def main(model_path, index_path, device, http_rootcert):
             states = [
                 [
                     PatternConstrainedState(
-                        pattern="Fact:",
                         tokenizer=tokenizer,
                         cache_index=DictIndex(),
                         subtree_cache=DictIndex(),
+                        ignore_case=ignore_case,
                     )
                 ]
             ]
@@ -132,7 +145,7 @@ def main(model_path, index_path, device, http_rootcert):
             )
 
             constrained_processor = ConstrainedLogitsProcessor(
-                index=index, states=refactx.CONSTRAINED_STATES, tokenizer=tokenizer
+                index=index, states=refactx.CONSTRAINED_STATES, tokenizer=tokenizer, avoid_duplicates=avoid_duplicates
             )
             logits_processor_list = LogitsProcessorList([constrained_processor])
 

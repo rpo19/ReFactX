@@ -24,7 +24,7 @@ def patch_model(model, verbose=True):
         print('WARNING: this patching method relies on shared mutable global state to support constrained generation with beam search. It is not thread-safe and may produce incorrect results in concurrent or multi-process setups (e.g. multiple workers).')
 
 # def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True):
-def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, return_list):
+def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, return_list, avoid_duplicates):
     states = [[PatternConstrainedState(
                     pattern = 'Fact:',
                     tokenizer = tokenizer,
@@ -39,7 +39,7 @@ def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, r
 
     constrained_processor = ConstrainedLogitsProcessor(
         index=index,
-        states=CONSTRAINED_STATES, tokenizer=tokenizer)
+        states=CONSTRAINED_STATES, tokenizer=tokenizer, avoid_duplicates=avoid_duplicates)
 
     if return_list:
         logits_processor_list = LogitsProcessorList([
@@ -165,7 +165,7 @@ class ConstrainedStateList():
 Pattern should be recognized as soon as it is generated. Usually you want to end it with $
 """
 class PatternConstrainedState():
-    def __init__(self, pattern, tokenizer, cache_index, subtree_cache, state=0, debug=False, regex_window=10, case_sensitive=False) -> None:
+    def __init__(self, tokenizer, cache_index, subtree_cache, pattern=('fact:','facts:',), state=0, debug=False, regex_window=10, ignore_case=True) -> None:
 
         self.NORMAL_GENERATION = 0 # even numbers for normal
         self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
@@ -176,9 +176,12 @@ class PatternConstrainedState():
         self.regex_window = regex_window # regex will be performed on the last N tokens
 
         # if the switch pattern is finally found --> CONSTRAINED_GENERATION
-        self.case_sensitive = case_sensitive
-        if not self.case_sensitive:
-            pattern = pattern.lower()
+        self.ignore_case = ignore_case
+        if self.ignore_case:
+            if isinstance(pattern, tuple):
+                pattern = tuple([p.lower() for p in pattern])
+            elif isinstance(pattern, str):
+                pattern = pattern.lower()
         
         self.pattern = pattern
 
@@ -257,7 +260,7 @@ class PatternConstrainedState():
         self.cursor += 1
 
         text = self.tokenizer.decode(self.token_ids[-self.regex_window:])
-        if not self.case_sensitive:
+        if self.ignore_case:
             text = text.lower()
 
         _match = text.endswith(self.pattern)
