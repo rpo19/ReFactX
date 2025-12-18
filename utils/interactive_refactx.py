@@ -11,6 +11,7 @@ from refactx.generate import (
     DictIndex,
 )
 from refactx import patch_model
+import json
 
 @click.command()
 @click.option("--model", "model_path", default="Qwen/Qwen2.5-3B-Instruct", help="Model name or path")
@@ -61,12 +62,12 @@ def main(model_path, index_path, device, http_rootcert):
                     break
                 elif cmd == "!get":
                     if len(parts) == 1:
-                        print(f"Prompt template: {current_prompt_template[0]['content']}")
+                        print(f"Prompt template: {json.dumps(current_prompt_template)}")
                         print(f"Generation config: {gen_config}")
                     elif len(parts) >= 2:
                         key = parts[1]
                         if key == "prompt_template":
-                            print(f"{key}: {current_prompt_template[0]['content']}")
+                            print(f"{key}: {json.dumps(current_prompt_template)}")
                         elif key in gen_config:
                             print(f"{key}: {gen_config[key]}")
                         else:
@@ -79,7 +80,7 @@ def main(model_path, index_path, device, http_rootcert):
                     key = parts[1]
                     val = parts[2]
                     if key == "prompt_template":
-                        current_prompt_template[0]['content'] = val.replace("\\n", "\n")
+                        current_prompt_template = json.loads(val)
                         print(f"Updated {key}")
                     elif key in gen_config:
                         if val.lower() == "none":
@@ -111,6 +112,8 @@ def main(model_path, index_path, device, http_rootcert):
             prompted_text = refactx.apply_prompt_template(
                 tokenizer, prompt_template=current_prompt_template, question=question
             )
+            print('-'*30)
+            print(prompted_text)
             inputs = tokenizer([prompted_text], return_tensors="pt").to(model.device)
 
             num_beams = gen_config["num_beams"]
