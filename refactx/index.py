@@ -14,6 +14,13 @@ DEFAULT_CONFIGKEY=-200
 DEFAULT_ROOTKEY=-100
 DEFAULT_SWITCH_PARAMETER=7
 
+def _load_cache(cache):
+    if cache == 'simple':
+        cache = SimpleCache()
+    elif isinstance(cache, str):
+        raise ValueError(f'Unknown cache type: {cache}')
+    return cache
+
 def load_index(url, **kwargs):
     if os.path.isfile(url):
         return _load_index_from_txt(url, **kwargs)
@@ -25,6 +32,7 @@ def load_index(url, **kwargs):
         raise ValueError(f'Cannot load index from {url}')
 
 def _load_http_index(url, configkey=DEFAULT_CONFIGKEY, cache='simple', rootcert=None):
+    cache = _load_cache(cache)
     # tablename in url
     if rootcert is None:
         rootcert = os.environ.get('HTTP_ROOTCERT')
@@ -81,10 +89,7 @@ def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple'
     import psycopg
     postgresql_connection = psycopg.connect(url_without_query)
 
-    if cache == 'simple':
-        cache = SimpleCache()
-    elif isinstance(cache, str):
-        raise ValueError(f'Unknown cache type: {cache}')
+    cache = _load_cache(cache)
 
     index = PostgresTrieIndex(
         postgresql_connection = postgresql_connection,
