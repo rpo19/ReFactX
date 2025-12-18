@@ -165,7 +165,7 @@ class ConstrainedStateList():
 Pattern should be recognized as soon as it is generated. Usually you want to end it with $
 """
 class PatternConstrainedState():
-    def __init__(self, pattern, tokenizer, cache_index, subtree_cache, state=0, debug=False, regex_window=10) -> None:
+    def __init__(self, pattern, tokenizer, cache_index, subtree_cache, state=0, debug=False, regex_window=10, case_sensitive=False) -> None:
 
         self.NORMAL_GENERATION = 0 # even numbers for normal
         self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
@@ -176,6 +176,10 @@ class PatternConstrainedState():
         self.regex_window = regex_window # regex will be performed on the last N tokens
 
         # if the switch pattern is finally found --> CONSTRAINED_GENERATION
+        self.case_sensitive = case_sensitive
+        if self.case_sensitive:
+            pattern = pattern.lower()
+        
         self.pattern = pattern
 
         self.state = state
@@ -253,6 +257,8 @@ class PatternConstrainedState():
         self.cursor += 1
 
         text = self.tokenizer.decode(self.token_ids[-self.regex_window:])
+        if not self.case_sensitive:
+            text = text.lower()
 
         _match = text.endswith(self.pattern)
         if _match:

@@ -112,8 +112,6 @@ def main(model_path, index_path, device, http_rootcert):
             prompted_text = refactx.apply_prompt_template(
                 tokenizer, prompt_template=current_prompt_template, question=question
             )
-            print('-'*30)
-            print(prompted_text)
             inputs = tokenizer([prompted_text], return_tensors="pt").to(model.device)
 
             num_beams = gen_config["num_beams"]
