@@ -16,7 +16,8 @@ from refactx import patch_model
 @click.option("--model", "model_path", default="Qwen/Qwen2.5-3B-Instruct", help="Model name or path")
 @click.option("--index", "index_path", default="./indexes/simple_index.txt.gz", help="Path to the index file")
 @click.option("--device", default="auto", help="Device to use (e.g. 'auto', 'cuda', 'cpu')")
-def main(model_path, index_path, device):
+@click.option("--http-rootcert", required=False, default=None, help="Speficy https certificates file (or false to disable verification)")
+def main(model_path, index_path, device, http_rootcert):
     """
     An interactive script to ask questions to the ReFactX model.
     """
@@ -30,7 +31,10 @@ def main(model_path, index_path, device):
     model.eval()
 
     print("Loading index...")
-    index = refactx.load_index(index_path, tokenizer=tokenizer)
+    index = refactx.load_index(
+        index_path,
+        rootcert=http_rootcert)
+    index.set_tokenizer(tokenizer)
 
     streamer = TextStreamer(tokenizer, skip_prompt=True)
 
