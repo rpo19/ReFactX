@@ -177,7 +177,7 @@ class PatternConstrainedState():
 
         # if the switch pattern is finally found --> CONSTRAINED_GENERATION
         self.case_sensitive = case_sensitive
-        if self.case_sensitive:
+        if not self.case_sensitive:
             pattern = pattern.lower()
         
         self.pattern = pattern
