@@ -26,7 +26,6 @@ def patch_model(model, verbose=True):
 # def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True):
 def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, return_list, avoid_duplicates):
     states = [[PatternConstrainedState(
-                    pattern = 'Fact:',
                     tokenizer = tokenizer,
                     cache_index = DictIndex(),
                     subtree_cache = DictIndex(),
@@ -165,7 +164,7 @@ class ConstrainedStateList():
 Pattern should be recognized as soon as it is generated. Usually you want to end it with $
 """
 class PatternConstrainedState():
-    def __init__(self, tokenizer, cache_index, subtree_cache, pattern=('fact:','facts:',), state=0, debug=False, regex_window=10, ignore_case=True) -> None:
+    def __init__(self, tokenizer, cache_index, subtree_cache, pattern='Fact:', state=0, debug=False, regex_window=10, ignore_case=True) -> None:
 
         self.NORMAL_GENERATION = 0 # even numbers for normal
         self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
@@ -263,7 +262,7 @@ class PatternConstrainedState():
         if self.ignore_case:
             text = text.lower()
 
-        _match = text.endswith(self.pattern)
+        _match = text.rstrip().endswith(self.pattern)
         if _match:
             state = self.CONSTRAINED_GENERATION
 

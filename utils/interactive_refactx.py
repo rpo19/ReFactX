@@ -20,7 +20,8 @@ import json
 @click.option("--http-rootcert", required=False, default=None, help="Speficy https certificates file (or false to disable verification)")
 @click.option("--avoid-duplicates", required=False, default=True, help="Speficy whether to avoid generating duplicates or not.")
 @click.option("--ignore-case", is_flag=True, default=True, help="Whether to ignore case when matching patterns.")
-def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore_case):
+@click.option("--pattern", default='Fact:', help="Pattern that triggers constrained generation of KB facts.")
+def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore_case, pattern):
     """
     An interactive script to ask questions to the ReFactX model.
     """
@@ -57,6 +58,9 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore
     while True:
         try:
             question = input("> ")
+            if question.strip() == "":
+                print("Please enter a valid question.")
+                continue
             if question.startswith("!"):
                 parts = question.strip().split(" ", 2)
                 cmd = parts[0]
@@ -68,6 +72,7 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore
                         print(f"Generation config: {gen_config}")
                         print(f"avoid_duplicates: {avoid_duplicates}")
                         print(f"ignore_case: {ignore_case}")
+                        print(f"pattern: {pattern}")
                     elif len(parts) >= 2:
                         key = parts[1]
                         if key == "prompt_template":
@@ -76,6 +81,8 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore
                             print(f"{key}: {avoid_duplicates}")
                         elif key == "ignore_case":
                             print(f"{key}: {ignore_case}")
+                        elif key == "pattern":
+                            print(f"{key}: {pattern}")
                         elif key in gen_config:
                             print(f"{key}: {gen_config[key]}")
                         else:
@@ -109,6 +116,8 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore
                             avoid_duplicates = bool(val)
                         elif key == "ignore_case":
                             ignore_case = bool(val)
+                        elif key == "pattern":
+                            pattern = pattern
                         else:
                             gen_config[key] = val
                         print(f"Updated {key} to {val}")
@@ -131,6 +140,7 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore
             states = [
                 [
                     PatternConstrainedState(
+                        pattern=pattern,
                         tokenizer=tokenizer,
                         cache_index=DictIndex(),
                         subtree_cache=DictIndex(),
