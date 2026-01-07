@@ -25,11 +25,16 @@ def patch_model(model, verbose=True):
 
 # def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True):
 def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, return_list, avoid_duplicates):
-    states = [[PatternConstrainedState(
-                    tokenizer = tokenizer,
-                    cache_index = DictIndex(),
-                    subtree_cache = DictIndex(),
-                )]]
+    states = []
+    for _ in range(num_batches):
+        batch_states = []
+        for _ in range(num_beams):
+            batch_states.append(PatternConstrainedState(
+                tokenizer = tokenizer,
+                cache_index = DictIndex(),
+                subtree_cache = DictIndex(),
+            ))
+        states.append(batch_states)
 
     CONSTRAINED_STATES.__init__(states,
                 num_beams=num_beams,
