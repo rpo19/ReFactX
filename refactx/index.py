@@ -79,7 +79,7 @@ def _parse_postgresql_url(url):
 
     return url_without_query, parsed_query_flattened
 
-def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple'):
+def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple', **kwargs):
     # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000
     # Parse the URL
     url_without_query, parsed_query = _parse_postgresql_url(url)
