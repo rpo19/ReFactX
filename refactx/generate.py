@@ -414,7 +414,15 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
     def constrained_generation(self, sequence, mask: torch.FloatTensor, mask_idx, state):
 
-        possible_tokens, _ = self.index.next_tokens(sequence, state = state)
+        try:
+            possible_tokens, _ = self.index.next_tokens(sequence, state = state)
+        except TripleNotFoundException:
+            # If sequence is not found, try to fall back to top-level tokens (empty prefix).
+            try:
+                possible_tokens, _ = self.index.next_tokens([], state = state)
+            except Exception:
+                # give up and re-raise the original exception
+                raise
         if self.avoid_duplicates:
             try:
                 visited_tokens, _ = state.cache_index.next_tokens(sequence)
