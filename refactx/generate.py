@@ -291,6 +291,78 @@ class PatternConstrainedState():
     def get_cursor(self):
         return self.cursor
 
+
+class AlwaysConstrainedState():
+    """State that always performs constrained generation, producing a given
+    number of facts (facts_to_generate). It keeps internal counters and uses
+    cache_index for avoid_duplicates like PatternConstrainedState.
+    """
+    def __init__(self, tokenizer, cache_index, subtree_cache, facts_to_generate=-1, allow_eos=False, debug=False):
+        self.tokenizer = tokenizer
+        self.cache_index = cache_index
+        self.subtree_cache = subtree_cache
+
+        self.facts_to_generate = int(facts_to_generate)
+        self.allow_eos = allow_eos
+
+        self.generated_facts = 0
+        self.in_fact = False
+
+        self.debug = debug
+        self.debug_history = []
+
+        # minimal fields for compatibility
+        self.cursor = 0
+
+    def print_debug(self, tokenizer, print_class=False, end_with_newline=True):
+        if end_with_newline:
+            print()
+
+    def first_call(self):
+        # We'll treat first_call as False to allow immediate updates
+        return False
+
+    def cache_add(self, sequence):
+        self.cache_index.add(sequence, new_leaf=True)
+        self.generated_facts += 1
+
+    def is_constrained(self):
+        # always constrained until we've generated enough facts
+        if self.facts_to_generate >= 0 and self.generated_facts >= self.facts_to_generate:
+            return False
+        return True
+
+    def end_of_triple_reset(self):
+        # after finishing a triple, we just prepare for the next one
+        self.subtree_cache.reset()
+        self.cursor = 0
+
+    def reset(self):
+        self.generated_facts = 0
+        self.in_fact = False
+        self.cursor = 0
+        self.cache_index.reset()
+        self.end_of_triple_reset()
+
+    def copy(self, other, copy=True):
+        # shallow copy enough for beam permutations
+        self.tokenizer = other.tokenizer
+        self.cache_index = deepcopy(other.cache_index) if copy else other.cache_index
+        self.subtree_cache = deepcopy(other.subtree_cache) if copy else other.subtree_cache
+        self.facts_to_generate = other.facts_to_generate
+        self.allow_eos = other.allow_eos
+        self.generated_facts = other.generated_facts
+        self.in_fact = other.in_fact
+
+    def update(self, new_token):
+        # track cursor (how many tokens into current fact)
+        self.cursor += 1
+        if self.debug:
+            self.debug_history.append({'token': new_token, 'cursor': self.cursor})
+
+    def get_cursor(self):
+        return self.cursor
+
 class ConstrainedLogitsProcessor(LogitsProcessor):
     def __init__(self, index, states, tokenizer=None, error_strategy=0, avoid_duplicates=True):
         self.index = index
