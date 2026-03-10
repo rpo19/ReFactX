@@ -24,16 +24,19 @@ def patch_model(model, verbose=True):
         print('WARNING: this patching method relies on shared mutable global state to support constrained generation with beam search. It is not thread-safe and may produce incorrect results in concurrent or multi-process setups (e.g. multiple workers).')
 
 # def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True):
-def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, return_list, avoid_duplicates):
+def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, return_list, avoid_duplicates, state_kind="pattern", facts_to_generate=-1, allow_eos=False):
     states = []
     for _ in range(num_batches):
         batch_states = []
         for _ in range(num_beams):
-            batch_states.append(PatternConstrainedState(
-                tokenizer = tokenizer,
-                cache_index = DictIndex(),
-                subtree_cache = DictIndex(),
-            ))
+            if state_kind == 'always':
+                batch_states.append(AlwaysConstrainedState(tokenizer=tokenizer, cache_index=DictIndex(), subtree_cache=DictIndex(), facts_to_generate=facts_to_generate, allow_eos=allow_eos))
+            else:
+                batch_states.append(PatternConstrainedState(
+                    tokenizer = tokenizer,
+                    cache_index = DictIndex(),
+                    subtree_cache = DictIndex(),
+                ))
         states.append(batch_states)
 
     CONSTRAINED_STATES.__init__(states,
