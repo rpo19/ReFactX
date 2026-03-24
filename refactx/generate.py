@@ -195,6 +195,7 @@ class PatternConstrainedState():
 
         self.cache_index = cache_index
         self.generated_triples = []
+        self.generated_triples_idx = []
 
         self.subtree_cache = subtree_cache
 
@@ -218,10 +219,11 @@ class PatternConstrainedState():
         else:
             return False
 
-    def cache_add(self, sequence):
+    def cache_add(self, sequence, start_idx):
         self.cache_index.add(sequence, new_leaf=True)
         # removing end of triple
-        self.generated_triples.append(sequence[:-1])
+        self.generated_triples.append(sequence)
+        self.generated_triples_idx.append([list(range(start_idx, len(sequence)))])
 
     def is_constrained(self):
         return self.state % 2 == self.CONSTRAINED_GENERATION
@@ -324,9 +326,10 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             if self.states[batch_idx, beam_i].is_constrained(): # odd number means constrained generation
                 # constrained generation
                 mask[i] = -math.inf # set for all tokens by default
-                constrain_generation_sequence = sequence[len(sequence) - self.states[batch_idx, beam_i].get_cursor():]
+                constrain_generation_sequence_start_idx = len(sequence) - self.states[batch_idx, beam_i].get_cursor()
+                constrain_generation_sequence = sequence[constrain_generation_sequence_start_idx:]
                 self.constrained_generation(
-                    constrain_generation_sequence, mask, i, state=self.states[batch_idx, beam_i])
+                    constrain_generation_sequence, mask, i, self.states[batch_idx, beam_i], constrain_generation_sequence_start_idx)
 
                 # else:
                 #     # normal generation
@@ -337,7 +340,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
         return scores_processed
 
-    def constrained_generation(self, sequence, mask: torch.FloatTensor, mask_idx, state):
+    def constrained_generation(self, sequence, mask: torch.FloatTensor, mask_idx, state, start_idx):
 
         possible_tokens, _ = self.index.next_tokens(sequence, state = state)
         if self.avoid_duplicates:
@@ -359,7 +362,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             # end of constrained generation
             # send end of string
             generated_triple = sequence
-            state.cache_add(generated_triple)
+            state.cache_add(generated_triple, start_idx)
             # ensure to reset after eof triple
             state.end_of_triple_reset()
             # end of constrained generation
