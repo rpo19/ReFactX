@@ -313,6 +313,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
         # TODO create a mask of zeros same shape as scores and same device
         mask = torch.zeros_like(scores)
+        mask = mask.to(scores.dtype)
 
         for i in range(input_ids.shape[0]):
             batch_idx = self.states.get_batch_idx(i)
@@ -325,7 +326,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
             if self.states[batch_idx, beam_i].is_constrained(): # odd number means constrained generation
                 # constrained generation
-                mask[i] = -math.inf # set for all tokens by default
+                mask[i] = -1e9 # set for all tokens by default
                 constrain_generation_sequence_start_idx = len(sequence) - self.states[batch_idx, beam_i].get_cursor()
                 constrain_generation_sequence = sequence[constrain_generation_sequence_start_idx:]
                 self.constrained_generation(
@@ -368,6 +369,16 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             # end of constrained generation
             mask[mask_idx, :] = 0
         else:
+            vocab_size = mask.shape[-1]
+
+            invalid_tokens = [t for t in possible_tokens if t < 0 or t >= vocab_size]
+
+            if invalid_tokens:
+                raise ValueError(
+                    f"Invalid token ids in constrained generation: {invalid_tokens[:10]} "
+                    f"(showing up to 10) with vocab_size={vocab_size}"
+                )
+
             mask[mask_idx, possible_tokens] = 0
 
 CONSTRAINED_STATES = ConstrainedStateList([])

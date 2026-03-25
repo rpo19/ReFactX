@@ -11,6 +11,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import copy
 
+torch.autograd.set_detect_anomaly(True)
+
 import refactx
 
 MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -59,7 +61,8 @@ if eval_dataset is not None:
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
     dtype=torch.bfloat16,
-    device_map="cuda:0",
+    # device_map="cuda:0",
+    device_map="auto",
 )
 
 model.config.use_cache = False
@@ -98,7 +101,7 @@ def reward_fn(completions, prompts, references=None, **kwargs):
         if "answer:" in completion_lower:
             reward += 0.3
         if references is not None:
-            ref = references[i].strip().lower()
+            ref = references[i][0].strip().lower()
             if completion_lower in ref or ref in completion_lower:
                 reward += 0.5
         rewards.append(reward)
@@ -263,13 +266,21 @@ class GRPOTrainer:
             for i in range(batch_size):
                 start_idx = prompts_len[i].item()
                 end_idx = input_ids.shape[1] - 1
+                
+                logp = 0.0
+                count = 0
+                
                 for j in range(start_idx, end_idx):
                     if token_mask[i, j + 1]:
                         token_id = input_ids[i, j + 1]
-                        per_token_logps[i] += log_probs[i, j, token_id]
-                        valid_token_counts[i] += 1
-                if valid_token_counts[i] > 0:
-                    per_token_logps[i] /= valid_token_counts[i]
+                        logp = logp + log_probs[i, j, token_id]
+                        count += 1
+                
+                if count > 0:
+                    logp = logp / count
+                
+                per_token_logps[i] = logp
+                valid_token_counts[i] = count
         
         rewards = reward_fn(completions, prompts, references=references)
         rewards_tensor = torch.tensor(rewards, device=per_token_logps.device)
@@ -413,7 +424,7 @@ grpo_config = {
 
 
 
-POSTGRES_URL = 'postgres://secondment:ofa3eebohgh6chioqu9Aep9maev6eejothith5bot4iuqu3oge7doo8uoCe0ooda@10.0.0.118:5432/postgres?tablename=trienewgpt'
+POSTGRES_URL = 'postgres://secondment:ofa3eebohgh6chioqu9Aep9maev6eejothith5bot4iuqu3oge7doo8uoCe0ooda@10.0.0.118:5432/postgres?tablename=trienewqwen'
 
 index = refactx.load_index(POSTGRES_URL)
 
