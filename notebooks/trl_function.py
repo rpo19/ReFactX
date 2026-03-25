@@ -364,6 +364,7 @@ class GRPOTrainer:
             for key, value in eval_metrics.items():
                 print(f"  {key}: {value:.4f}")
             if self.use_wandb:
+                print('logging to wandb')
                 wandb.log({
                     "eval/reward_mean": eval_metrics.get("eval_reward_mean", 0),
                     "eval/samples": eval_metrics.get("eval_samples", 0),
@@ -417,6 +418,7 @@ class GRPOTrainer:
                 if self.global_step % self.logging_steps == 0:
                     epoch_pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{mean_reward:.4f}"})
                     if self.use_wandb:
+                        print('logging to wandb')
                         wandb.log({
                             "train/loss": loss,
                             "train/reward": mean_reward,
@@ -433,8 +435,10 @@ class GRPOTrainer:
                 
                 if self.eval_steps > 0 and self.global_step % self.eval_steps == 0:
                     eval_metrics = self.evaluate()
+                    print(f"Step {self.global_step} evaluation:")
                     for key, value in eval_metrics.items():
-                        epoch_pbar.write(f"Step {self.global_step} - {key}: {value:.4f}")
+                        print(f"  {key}: {value:.4f}")
+                    epoch_pbar.set_postfix(eval_metrics)
                     if self.use_wandb:
                         wandb.log({
                             "eval/reward_mean": eval_metrics.get("eval_reward_mean", 0),
@@ -458,7 +462,7 @@ grpo_config = {
     "logging_steps": 10,
     "save_steps": 10,
     "eval_steps": 10,
-    "use_wandb": True,
+    "use_wandb": False,
     "wandb_project": None,
     "wandb_run_name": None,
 }
@@ -485,6 +489,8 @@ trainer = GRPOTrainer(
     num_beams=1,
     **grpo_config
 )
+
+print(f"Wandb enabled: {trainer.use_wandb}, project: {trainer.wandb_project or 'refactx_grpo'}")
 
 trainer.train()
 
