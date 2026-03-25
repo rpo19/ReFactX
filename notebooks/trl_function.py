@@ -10,6 +10,7 @@ from peft import LoraConfig, get_peft_model
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import copy
+import wandb
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -132,7 +133,10 @@ class GRPOTrainer:
         logits_processor_list=[],
         eval_dataset=None,
         eval_steps=100,
-        num_beams=1
+        num_beams=1,
+        use_wandb=False,
+        wandb_project=None,
+        wandb_run_name=None
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -150,7 +154,17 @@ class GRPOTrainer:
         self.logging_steps = logging_steps
         self.save_steps = save_steps
         self.eval_steps = eval_steps
+        self.use_wandb = use_wandb
+        self.wandb_project = wandb_project
+        self.wandb_run_name = wandb_run_name
         self.bf16 = bf16
+        
+        if self.use_wandb:
+            wandb.init(
+                project=self.wandb_project or "refactx_grpo",
+                name=self.wandb_run_name or None,
+                resume="allow"
+            )
         self.generation_kwargs = generation_kwargs or {}
         self.mask_token_ids = mask_token_ids or []
         if tokenizer.pad_token_id is not None:
@@ -344,6 +358,18 @@ class GRPOTrainer:
         self.model.train()
         dataloader = DataLoader(self.train_dataset, batch_size=self.per_device_train_batch_size, shuffle=True)
         
+        if self.eval_steps > 0 and self.eval_dataset is not None:
+            print("Evaluating initial model...")
+            eval_metrics = self.evaluate()
+            for key, value in eval_metrics.items():
+                print(f"  {key}: {value:.4f}")
+            if self.use_wandb:
+                wandb.log({
+                    "eval/reward_mean": eval_metrics.get("eval_reward_mean", 0),
+                    "eval/samples": eval_metrics.get("eval_samples", 0),
+                    "train/step": 0,
+                })
+        
         for epoch in range(self.num_train_epochs):
             epoch_pbar = tqdm(dataloader, desc=f"Epoch {epoch + 1}")
             for batch in epoch_pbar:
@@ -390,6 +416,12 @@ class GRPOTrainer:
                 
                 if self.global_step % self.logging_steps == 0:
                     epoch_pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{mean_reward:.4f}"})
+                    if self.use_wandb:
+                        wandb.log({
+                            "train/loss": loss,
+                            "train/reward": mean_reward,
+                            "train/step": self.global_step,
+                        })
                 
                 if self.global_step % self.save_steps == 0:
                     self.model.save_pretrained(f"{self.output_dir}/checkpoint-{self.global_step}")
@@ -403,6 +435,12 @@ class GRPOTrainer:
                     eval_metrics = self.evaluate()
                     for key, value in eval_metrics.items():
                         epoch_pbar.write(f"Step {self.global_step} - {key}: {value:.4f}")
+                    if self.use_wandb:
+                        wandb.log({
+                            "eval/reward_mean": eval_metrics.get("eval_reward_mean", 0),
+                            "eval/samples": eval_metrics.get("eval_samples", 0),
+                            "train/step": self.global_step,
+                        })
 
 
 NUM_BATCHES = 1
@@ -418,8 +456,11 @@ grpo_config = {
     "max_completion_length": 512,
     "beta": 0.1,
     "logging_steps": 10,
-    "save_steps": 500,
-    "eval_steps": 100,
+    "save_steps": 10,
+    "eval_steps": 10,
+    "use_wandb": True,
+    "wandb_project": None,
+    "wandb_run_name": None,
 }
 
 
