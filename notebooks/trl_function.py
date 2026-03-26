@@ -19,7 +19,7 @@ import refactx
 MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 DATASET_NAME = "rmanluo/RoG-cwq"
 
-PROMPT_TEMPLATE = [{'role': 'system', 'content': 'You are a helpful question-answering assistant that bases its answers on facts from a knowledge base.\n\n    You receive an input question.\n\n    You determine the reasoning path needed to answer.\n\n    You MUST get relevant facts with the "Fact:" command. You MUST rely on these facts and use them a proof for your answer.\n    While getting facts you continue the reasoning explaining it step by step.\n\n    You conclude with a concise answer that MUST be based on the proofs you found with "Fact:".\n\nIf you didn\'t find proofs with "Fact:" that support an answer you stop and you reply: "I don\'t know.".\n\n'}]
+PROMPT_TEMPLATE = [{'role': 'system', 'content': 'You are a helpful question-answering assistant that bases its answers on facts from a knowledge base.\n\n    You receive an input question.\n\n    You determine the reasoning path needed to answer.\n\n    You MUST get relevant facts with the "Fact:" command (e.g., "Fact: <Smith> <date of birth> <2000-10-01>"). You MUST rely on these facts and use them a proof for your answer.\n    While getting facts you continue the reasoning explaining it step by step.\n\n    You conclude with a concise answer that MUST be based on the proofs you found with "Fact:".\n\nIf you didn\'t find proofs with "Fact:" that support an answer you stop and you reply: "I don\'t know.".\n\n'}]
 
 TEXT_COLUMN = "prompt"
 LABEL_COLUMN = "answer"
@@ -136,7 +136,8 @@ class GRPOTrainer:
         num_beams=1,
         use_wandb=False,
         wandb_project=None,
-        wandb_run_name=None
+        wandb_run_name=None,
+        eval_max_batches=None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -158,6 +159,7 @@ class GRPOTrainer:
         self.wandb_project = wandb_project
         self.wandb_run_name = wandb_run_name
         self.bf16 = bf16
+        self.eval_max_batches = eval_max_batches
         
         if self.use_wandb:
             wandb.init(
@@ -330,7 +332,10 @@ class GRPOTrainer:
         all_token_indices = []
         
         with torch.no_grad():
+            batch_count = 0
             for batch in tqdm(eval_dataloader, desc="Evaluating"):
+                if self.eval_max_batches is not None and batch_count >= self.eval_max_batches:
+                    break
                 prompts = batch["prompt"]
                 references = batch["answer"]
                 
@@ -344,6 +349,7 @@ class GRPOTrainer:
                 all_completions.extend(completions)
                 all_references.extend(references)
                 all_token_indices.extend(token_idxs)
+                batch_count += 1
         
         self.model.train()
         
@@ -381,7 +387,6 @@ class GRPOTrainer:
                 all_token_indices = []
                 refactx_generated_idx = []
                 for i in range(self.num_generations):
-                    self.logits_processor_list[0].states[0]
                     completions, token_idxs = self.generate(prompts)
                     all_completions.extend(completions)
                     all_token_indices.extend(token_idxs)
@@ -459,12 +464,13 @@ grpo_config = {
     "num_generations": 4,
     "max_completion_length": 512,
     "beta": 0.1,
-    "logging_steps": 10,
-    "save_steps": 10,
-    "eval_steps": 10,
-    "use_wandb": False,
+    "logging_steps": 1,
+    "save_steps": 50,
+    "eval_steps": 50,
+    "use_wandb": True,
     "wandb_project": None,
     "wandb_run_name": None,
+    "eval_max_batches": 10,
 }
 
 
