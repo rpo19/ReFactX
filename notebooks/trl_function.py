@@ -91,6 +91,8 @@ model.print_trainable_parameters()
 
 
 def reward_fn(completions, prompts, references=None, **kwargs):
+    # TODO answer only once. also compare answer with gt after extracting answer with regex
+    # if answer correct is best to use few tokens and facts
     rewards = []
     for i, (completion, prompt) in enumerate(zip(completions, prompts)):
         completion_lower = completion.strip().lower()
