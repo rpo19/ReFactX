@@ -25,20 +25,10 @@ def patch_model(model, verbose=True):
 
 # def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True):
 def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, return_list, avoid_duplicates):
-    states = []
-    for _ in range(num_batches):
-        batch_states = []
-        for _ in range(num_beams):
-            batch_states.append(PatternConstrainedState(
-                tokenizer = tokenizer,
-                cache_index = DictIndex(),
-                subtree_cache = DictIndex(),
-            ))
-        states.append(batch_states)
-
-    CONSTRAINED_STATES.__init__(states,
+    CONSTRAINED_STATES.__init__('auto',
                 num_beams=num_beams,
                 num_batches =num_batches,
+                debug_tokenizer=tokenizer
         )
 
     constrained_processor = ConstrainedLogitsProcessor(
@@ -57,7 +47,19 @@ class ConstrainedStateList():
     # states is list of list [num_batches, num_beams]
     def __init__(self, states, num_beams = 1, num_batches = 1, debug=False, debug_tokenizer=None):
         self.states = states
-        if states != []:
+        if states == 'auto':
+            assert debug_tokenizer is not None, 'debug_tokenizer must be provided when states is "auto"'
+            states = []
+            for _ in range(num_batches):
+                batch_states = []
+                for _ in range(num_beams):
+                    batch_states.append(PatternConstrainedState(
+                        tokenizer = debug_tokenizer,
+                        cache_index = DictIndex(),
+                        subtree_cache = DictIndex(),
+                    ))
+                states.append(batch_states)
+        elif states != []:
             assert isinstance(states, list) and isinstance(states[0], list), 'ERROR: states is not a list of lists'
             assert len(states) == num_batches and len(states[0]) == num_beams, 'ERROR: states size does not match num_batches or num_beams'
         self.num_beams = num_beams
@@ -294,24 +296,39 @@ class PatternConstrainedState():
         return self.cursor
 
 class ConstrainedLogitsProcessor(LogitsProcessor):
-    def __init__(self, index, states, tokenizer=None, error_strategy=0, avoid_duplicates=True):
+    def __init__(self, index, states, tokenizer=None, error_strategy=0, avoid_duplicates=True, reinit_states=False):
         self.index = index
         self.states = states
         self.error_strategy = error_strategy
         self.avoid_duplicates = avoid_duplicates
+        self.reinit_states = reinit_states
 
         self.ERROR_STRATEGY_WARN = 0
         self.ERROR_STRATEGY_FAIL = 1
 
         self.tokenizer=tokenizer # for debugging
 
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
-        assert input_ids.shape[0] == len(self.states), \
-            f'Error: number of states ({len(self.states)}) should match `num_batches * num_beams` ({input_ids.shape[0]})'
+    def _reinit_states(self, num_beams, num_batches):
+        self.states.__init__('auto',
+                num_beams=num_beams,
+                num_batches = num_batches,
+                debug_tokenizer = self.tokenizer
+        )
 
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
+        if input_ids.shape[0] == len(self.states):
+            message = f'number of states ({len(self.states)}) should match `num_batches * num_beams` ({input_ids.shape[0]})'
+            if self.reinit_states:
+                num_beams = 1
+                num_batches = input_ids.shape[0]
+                self._reinit_states(num_beams, num_batches)
+                print(f'Warning: {message}')
+            else:
+                raise ValueError(f'Error: {message}')
+            self.reinit_states(num_beams=1, num_batches=input_ids.shape[0])
+            
         self.states.beam_permutation()
 
-        # TODO create a mask of zeros same shape as scores and same device
         mask = torch.zeros_like(scores)
         mask = mask.to(scores.dtype)
 
@@ -322,11 +339,25 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
             if not self.states[batch_idx, beam_i].first_call():
                 last_token = sequence[-1]
-                self.states[batch_idx, beam_i].update(last_token)
+                # we should save the entire prompt in the state
+                if sequence != self.states[batch_idx, beam_i].token_ids:
+                    if self.reinit_states:
+                        self.states.reset()
+                        # then continue as first call
+                        # initialize state token ids
+                        self.states[batch_idx, beam_i].token_ids = sequence
+                        print(f'Warning: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}, reinitializing state.')
+                    else:
+                        raise ValueError(f'Error: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}')
+                else:
+                    self.states[batch_idx, beam_i].update(last_token)
+            else:
+                # initialize state token ids
+                self.states[batch_idx, beam_i].token_ids = sequence
 
             if self.states[batch_idx, beam_i].is_constrained(): # odd number means constrained generation
                 # constrained generation
-                mask[i] = -1e9 # set for all tokens by default
+                mask[i] = -math.inf # set for all tokens by default
                 constrain_generation_sequence_start_idx = len(sequence) - self.states[batch_idx, beam_i].get_cursor()
                 constrain_generation_sequence = sequence[constrain_generation_sequence_start_idx:]
                 self.constrained_generation(
