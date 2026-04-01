@@ -46,7 +46,6 @@ def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, r
 class ConstrainedStateList():
     # states is list of list [num_batches, num_beams]
     def __init__(self, states, num_beams = 1, num_batches = 1, debug=False, debug_tokenizer=None):
-        self.states = states
         if states == 'auto':
             assert debug_tokenizer is not None, 'debug_tokenizer must be provided when states is "auto"'
             states = []
@@ -62,6 +61,9 @@ class ConstrainedStateList():
         elif states != []:
             assert isinstance(states, list) and isinstance(states[0], list), 'ERROR: states is not a list of lists'
             assert len(states) == num_batches and len(states[0]) == num_beams, 'ERROR: states size does not match num_batches or num_beams'
+        
+        self.states = states
+            
         self.num_beams = num_beams
         self.num_batches = num_batches # used for computing beam id
         self.beam_idx = [] # torch.tensor([-1]*num_batches*num_beams).view(num_batches,num_beams,1) # running beam idx
