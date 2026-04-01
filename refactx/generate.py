@@ -24,7 +24,7 @@ def patch_model(model, verbose=True):
         print('WARNING: this patching method relies on shared mutable global state to support constrained generation with beam search. It is not thread-safe and may produce incorrect results in concurrent or multi-process setups (e.g. multiple workers).')
 
 # def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True):
-def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, return_list, avoid_duplicates):
+def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, return_list, **kwargs):
     CONSTRAINED_STATES.__init__('auto',
                 num_beams=num_beams,
                 num_batches =num_batches,
@@ -33,7 +33,7 @@ def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, r
 
     constrained_processor = ConstrainedLogitsProcessor(
         index=index,
-        states=CONSTRAINED_STATES, tokenizer=tokenizer, avoid_duplicates=avoid_duplicates)
+        states=CONSTRAINED_STATES, tokenizer=tokenizer, **kwargs)
 
     if return_list:
         logits_processor_list = LogitsProcessorList([
@@ -318,7 +318,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         )
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
-        if input_ids.shape[0] == len(self.states):
+        if input_ids.shape[0] != len(self.states):
             message = f'number of states ({len(self.states)}) should match `num_batches * num_beams` ({input_ids.shape[0]})'
             if self.reinit_states:
                 num_beams = 1
@@ -327,7 +327,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                 print(f'Warning: {message}')
             else:
                 raise ValueError(f'Error: {message}')
-            self.reinit_states(num_beams=1, num_batches=input_ids.shape[0])
+            self._reinit_states(num_beams=1, num_batches=input_ids.shape[0])
             
         self.states.beam_permutation()
 

@@ -158,7 +158,7 @@ index = refactx.load_index(POSTGRES_URL)
 
 
 constrained_processor = refactx.get_constrained_logits_processor(
-    tokenizer, index, num_beams=1, num_batches=4, return_list=True, avoid_duplicates=True
+    tokenizer, index, num_beams=1, num_batches=4, return_list=True, avoid_duplicates=True, reinit_states=True
 )
 
 # -----------------------
@@ -196,6 +196,22 @@ class ReFactXGRPOTrainer(GRPOTrainer):
 
 
     def get_mask(self):
+        """
+        (Pdb) p completion_mask
+tensor([[1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]], device='cuda:0')
+(Pdb) p completion_mask.shape
+torch.Size([2, 64])
+
+(Pdb) p inputs["tool_mask"]
+[[[], [], [], [], [], [], [], []], [[], [], [], [], [], [], [], []], [[], [], [], [], [], [], [], []], [[], [], [], [], [], [], [], []]]
+4 x 8 empty??? maybe not token has been generated with refactx 
+
+        """
         refactx_generated_idx = []
         for i in range(self.num_generations):
             refactx_generated_idx.append([])
