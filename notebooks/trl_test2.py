@@ -166,15 +166,15 @@ constrained_processor = refactx.get_constrained_logits_processor(
 # -----------------------
 config = GRPOConfig(
     output_dir="./grpo-qwen",
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=4,
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=8,
     num_train_epochs=1,
 
     learning_rate=5e-6,
 
     # GRPO-specific
     num_generations=4,   # samples per prompt batch_size?? TODO make dynamic in refactx?
-    max_completion_length=64,
+    max_completion_length=256,
 
     logging_steps=10,
     save_steps=200,
@@ -209,7 +209,18 @@ torch.Size([2, 64])
 
 (Pdb) p inputs["tool_mask"]
 [[[], [], [], [], [], [], [], []], [[], [], [], [], [], [], [], []], [[], [], [], [], [], [], [], []], [[], [], [], [], [], [], [], []]]
-4 x 8 empty??? maybe not token has been generated with refactx 
+4 x 8 empty??? maybe no token has been generated with refactx 
+
+--- second test with current config
+completion_mask
+torch.Size([4, 247]) # 247 could be the maximum length of the generation?
+
+
+inputs['tool_mask'] shape # TODO make tool mask a 1/0 matrix as completion_mask
+(4, 32)
+
+
+
 
         """
         refactx_generated_idx = []
