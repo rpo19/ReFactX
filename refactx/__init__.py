@@ -9,9 +9,9 @@ def apply_prompt_template(tokenizer, prompt_template=PROMPT_TEMPLATE, question=N
         question_w_role = {'role':'user', 'content': question}
         return tokenizer.apply_chat_template(prompt_template + [question_w_role], tokenize=False, add_generation_prompt=True)
 
-def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True, avoid_duplicates=True):
+def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True, **kwargs):
     from refactx.generate import get_constrained_logits_processor as _base
-    return _base(tokenizer, index, num_beams=num_beams, num_batches=num_batches, return_list=return_list, avoid_duplicates=avoid_duplicates)
+    return _base(tokenizer, index, num_beams=num_beams, num_batches=num_batches, return_list=return_list, **kwargs)
 
 def patch_model(model):
     from refactx.generate import patch_model as _base

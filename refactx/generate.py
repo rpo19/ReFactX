@@ -348,7 +348,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                         # then continue as first call
                         # initialize state token ids
                         self.states[batch_idx, beam_i].token_ids = sequence
-                        print(f'Warning: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}, reinitializing state.')
+                        # print(f'Warning: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}, reinitializing state.')
                     else:
                         raise ValueError(f'Error: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}')
                 else:

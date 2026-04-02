@@ -192,10 +192,19 @@ class ReFactXGRPOTrainer(GRPOTrainer):
     def __init__(self, mask_constrained_generation=True, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        self.get_state_idx = 0
+
         self.mask_constrained_generation = mask_constrained_generation
 
+    def _get_next_state(self):
+        states = refactx.get_constrained_states().states
+        if self.get_state_idx >= len(states):
+            self.get_state_idx = 0
+        state = states[self.get_state_idx]
+        self.get_state_idx += 1
+        return state
 
-    def get_mask(self):
+    def get_mask(self, completion_ids):
         """
         (Pdb) p completion_mask
 tensor([[1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -226,16 +235,20 @@ inputs['tool_mask'] shape # TODO make tool mask a 1/0 matrix as completion_mask
         refactx_generated_idx = []
         for i in range(self.num_generations):
             refactx_generated_idx.append([])
-            for _, states_batch in enumerate(refactx.get_constrained_states().states):
-                assert len(states_batch) == 1, "Expected batch size of 1 (No beam search)"
-                refactx_generated_idx[i].append(copy.deepcopy(states_batch[0].generated_triples_idx))  
+            state = self._get_next_state()
+            refactx_generated_idx[i].append(copy.deepcopy(state[0].generated_triples_idx))
         # TODO need to change mask and also to keep the masking somewhere until it is used
         # TODO probably need to use a global variable to fill and empty
-        return refactx_generated_idx
+        # refactx_generated_idx[i] contains the indexes of the tokens generated with constrained gen
+        mask = torch.ones(completion_ids.shape, dtype=completion_ids.dtype, device=completion_ids.device)
+        assert mask.shape[0] == len(refactx_generated_idx), f"Mask batch size {mask.shape[0]} does not match number of generations {len(refactx_generated_idx)}"
+        for i, indexes in enumerate(refactx_generated_idx):
+            mask[i, indexes] = 0
+        return mask
 
     def _compute_loss(self, model, inputs):
         if self.mask_constrained_generation:
-            mask = self.get_mask()
+            mask = self.get_mask(inputs['completion_ids'])
             assert 'tool_mask' not in inputs, 'Error: tool_mask already exists.'
             inputs['tool_mask'] = mask
         # call the original method
