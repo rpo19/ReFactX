@@ -8,6 +8,10 @@ from peft import LoraConfig, get_peft_model
 import copy
 import re
 
+import wandb
+
+wandb.init(project="trl", name="trl_test2_qwen_refactx_masking")
+
 import refactx
 
 from dotenv import load_dotenv
@@ -108,7 +112,7 @@ split_pattern = tokenizer.eos_token
 def get_answer(full_prediction, remove_dot=True, answer_pattern=answer_pattern, split_pattern=split_pattern):
     prediction = ''
 
-    full_prediction = re.split(split_pattern, full_prediction, 1)[0]
+    full_prediction = re.split(split_pattern, full_prediction, maxsplit=1)[0]
     if remove_dot and full_prediction.endswith('.'):
         full_prediction = full_prediction[:-len('.')]
     match = answer_pattern.search(full_prediction)
@@ -117,10 +121,11 @@ def get_answer(full_prediction, remove_dot=True, answer_pattern=answer_pattern, 
 
     return prediction
 
-def reward_fn(completions, prompts, references=None, **kwargs):
+def reward_fn(completions, prompts, references=None, log_extra=None, log_metric=None, **kwargs):
     ESTIMATED_NUM_WORDS=50
 
     rewards = []
+    tp = 0
     for i, (completion, prompt) in enumerate(zip(completions, prompts)):
         completion_lower = completion.strip().lower()
         reward = 0.0
@@ -140,6 +145,7 @@ def reward_fn(completions, prompts, references=None, **kwargs):
             if references is not None:
                 ref = references[i][0].strip().lower()
                 if extracted_answer_lower == ref:
+                    tp += 1
                     reward += 1.0
                     word_count = len(completion_lower.split())
                     reward += ESTIMATED_NUM_WORDS / word_count
@@ -148,6 +154,19 @@ def reward_fn(completions, prompts, references=None, **kwargs):
                     word_count = len(completion_lower.split())
                     reward += ESTIMATED_NUM_WORDS / word_count
         rewards.append(reward)
+
+        accuracy = tp / len(completions) if completions else 0
+
+    if log_extra:
+        for i, item in enumerate(completions):
+            if 'fact:' in item.lower():
+                to_log = 'completion', [item, references[i] if references is not None else None]
+                break
+        log_extra(*to_log)
+        print('log_extra', *to_log)
+    if log_metric:
+        log_metric('accuratezza', accuracy)
+        log_metric('fact_calls', completion_lower.count("fact:"))
     return rewards
 
 
@@ -182,6 +201,8 @@ config = GRPOConfig(
     # generation_kwargs = {
     #     'logits_processor': constrained_processor
     # } # not working here
+
+    report_to='wandb',
 )
 
 patch_generate(model, constrained_processor)

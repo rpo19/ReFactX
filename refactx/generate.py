@@ -178,7 +178,8 @@ class PatternConstrainedState():
         self.NORMAL_GENERATION = 0 # even numbers for normal
         self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
 
-        self.token_ids = [] # keep all the token ids
+        self.token_ids = [] # keep all the token ids of the constrained generation
+        self.input_ids = [] # keep all the input ids. no reset after pattern is found
 
         self.tokenizer = tokenizer
         self.regex_window = regex_window # regex will be performed on the last N tokens
@@ -240,6 +241,7 @@ class PatternConstrainedState():
     def reset(self):
         self.state = 0
         self.token_ids = []
+        self.input_ids = []
         self.history = ()
         self.cursor = 0
         self.generated_triples = []
@@ -252,6 +254,7 @@ class PatternConstrainedState():
         self.tokenizer = other.tokenizer
         self.regex_window = other.regex_window
         self.token_ids = deepcopy(other.token_ids)
+        self.input_ids = deepcopy(other.input_ids)
 
         self.history = other.history  # Assuming it's immutable or should be shallow copied
         self.cursor = other.cursor
@@ -267,12 +270,13 @@ class PatternConstrainedState():
     def update(self, new_token):
         state = self.state
         self.token_ids.append(new_token)
+        self.input_ids.append(new_token)
         self.cursor += 1
 
         text = self.tokenizer.decode(self.token_ids[-self.regex_window:])
         if self.ignore_case:
             text = text.lower()
-
+        # print(text, self.pattern, self.ignore_case)
         _match = text.rstrip().endswith(self.pattern)
         if _match:
             state = self.CONSTRAINED_GENERATION
@@ -283,7 +287,8 @@ class PatternConstrainedState():
             self.debug_history.append({
                 'state': self.state,
                 'token': new_token,
-                'token_ids': deepcopy(self.token_ids)
+                'token_ids': deepcopy(self.token_ids),
+                'input_ids': deepcopy(self.input_ids),
             })
 
     def _update_state(self, state, initial_cursor = 0):
@@ -341,21 +346,29 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
             if not self.states[batch_idx, beam_i].first_call():
                 last_token = sequence[-1]
-                # we should save the entire prompt in the state
-                if sequence != self.states[batch_idx, beam_i].token_ids:
+                # we save the entire prompt in the state input_ids
+                # i do not know why sometimes 
+                # TODO probably the items are "shuffled". find a way to reorder them
+                # TODO try to understand it
+                if sequence[:-1] != self.states[batch_idx, beam_i].input_ids:
+                    # and \
+                    # sequence != self.states[batch_idx, beam_i].token_ids:
                     if self.reinit_states:
-                        self.states.reset()
                         # then continue as first call
                         # initialize state token ids
-                        self.states[batch_idx, beam_i].token_ids = sequence
-                        # print(f'Warning: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}, reinitializing state.')
+                        print(f'Warning: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}, reinitializing state.')
+                        print('sequence',  self.tokenizer.decode(sequence))
+                        print('previous', self.tokenizer.decode(self.states[batch_idx, beam_i].input_ids))
+
+                        self.states.reset()
+                        self.states[batch_idx, beam_i].input_ids = sequence
                     else:
                         raise ValueError(f'Error: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}')
                 else:
                     self.states[batch_idx, beam_i].update(last_token)
             else:
                 # initialize state token ids
-                self.states[batch_idx, beam_i].token_ids = sequence
+                self.states[batch_idx, beam_i].input_ids = sequence
 
             if self.states[batch_idx, beam_i].is_constrained(): # odd number means constrained generation
                 # constrained generation
