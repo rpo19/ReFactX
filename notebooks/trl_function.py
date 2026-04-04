@@ -1,4 +1,6 @@
 import sys
+
+from flask import json
 sys.settrace(None)
 
 import torch
@@ -11,6 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import copy
 import wandb
+import re
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -19,7 +22,7 @@ import refactx
 MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 DATASET_NAME = "rmanluo/RoG-cwq"
 
-PROMPT_TEMPLATE = [{'role': 'system', 'content': 'You are a helpful question-answering assistant that bases its answers on facts from a knowledge base.\n\n    You receive an input question.\n\n    You determine the reasoning path needed to answer.\n\n    You MUST get relevant facts with the "Fact:" command (e.g., "Fact: <Smith> <date of birth> <2000-10-01>"). You MUST rely on these facts and use them a proof for your answer.\n    While getting facts you continue the reasoning explaining it step by step.\n\n    You conclude with a concise answer that MUST be based on the proofs you found with "Fact:".\n\nIf you didn\'t find proofs with "Fact:" that support an answer you stop and you reply: "I don\'t know.".\n\n'}]
+PROMPT_TEMPLATE = [{'role': 'system', 'content': 'You are a helpful question-answering assistant that bases its answers on facts from a knowledge base.\n\n    You receive an input question.\n\n    You determine the reasoning path needed to answer.\n\n    You MUST get relevant facts with the "Fact:" command (e.g., "Fact: <Smith> <date of birth> <2000-10-01>"). You MUST rely on these facts and use them a proof for your answer.\n    While getting facts you continue the reasoning explaining it step by step.\n\n    You conclude with a concise answer that MUST be based on the proofs you found with "Fact:".\n\nExample answer format: `Answer: ["Italy", "United States", "France"]`.\n\nIf you didn\'t find proofs with "Fact:" that support an answer you stop and you reply: "I don\'t know.".\n\n'}]
 
 TEXT_COLUMN = "prompt"
 LABEL_COLUMN = "answer"
@@ -89,24 +92,61 @@ lora_config = LoraConfig(
 model = get_peft_model(model, lora_config)
 model.print_trainable_parameters()
 
+#@click.option('--split-pattern', required=False, default=r'(<\|im_end\|>|<\|end_of_text\|>)', help='Pattern to split the full prediction. Use with --fix-predictions.')
+answer_pattern = 'answer: '
+split_pattern = tokenizer.eos_token
+def get_answer(full_prediction, split_pattern, answer_pattern=answer_pattern):
+    prediction = ''
 
-def reward_fn(completions, prompts, references=None, **kwargs):
-    # TODO answer only once. also compare answer with gt after extracting answer with regex
-    # if answer correct is best to use few tokens and facts
+    full_prediction = re.split(split_pattern, full_prediction, 1)[0]
+    idx = full_prediction.index(answer_pattern)
+    if idx != -1:
+        prediction = full_prediction[idx + len(answer_pattern):].strip()
+
+    return prediction
+
+def reward_fn(completions, question, answer, **kwargs):
+    ESTIMATED_NUM_WORDS=50
+
     rewards = []
-    for i, (completion, prompt) in enumerate(zip(completions, prompts)):
+    for i, (completion, question_i, answer_i) in enumerate(zip(completions, question, answer)):
+        assert question_i in completion, f"Question not found in completion. Question: {question_i}, Completion: {completion}"
         completion_lower = completion.strip().lower()
         reward = 0.0
         if len(completion_lower) > 10:
             reward += 0.1
         if "fact:" in completion_lower:
             reward += 0.5
-        if "answer:" in completion_lower:
+        answer_count = completion_lower.count("answer:")
+        if answer_count == 1:
             reward += 0.3
-        if references is not None:
-            ref = references[i][0].strip().lower()
-            if completion_lower in ref or ref in completion_lower:
-                reward += 0.5
+        elif answer_count > 1:
+            reward -= 0.2
+        
+        extracted_answer = get_answer(completion_lower, remove_dot=True)
+        try:
+            # answer should be a list of answers
+            answer_json = json.loads(extracted_answer)
+            reward += 0.5
+
+            if answer_json:
+                answer_json_lower = [ans.strip().lower() for ans in answer_json]
+                ref = [r.strip().lower() for r in answer_i]
+
+                # intersection over union
+                intersection = set(answer_json_lower).intersection(set(ref))
+                union = set(answer_json_lower).union(set(ref))
+                iou = len(intersection) / len(union) if union else 0
+                reward += iou
+
+                # incentivate concise answers (if correct)
+                if iou > 0.5:
+                    word_count = len(completion_lower.split())
+                    reward += ESTIMATED_NUM_WORDS / word_count
+
+        except Exception as e:
+            pass
+
         rewards.append(reward)
     return rewards
 
@@ -242,6 +282,8 @@ class GRPOTrainer:
         return rewards
 
     def train_step(self, prompts, completions, token_indices=None, references=None, mask_token_ids=None, mask_constrained_generation=True, refactx_generated_idx=None):
+        # why tokenize again?
+        # TODO generate should return tokens in this case
         prompts_tok = self.tokenizer(
             prompts,
             return_tensors="pt",
@@ -274,6 +316,8 @@ class GRPOTrainer:
                     token_mask[i, idx] = False
 
         with torch.set_grad_enabled(True):
+            # why calling the model again?
+            # doing this only for last token but why?
             logits = self.model(input_ids, attention_mask=attention_mask).logits
             log_probs = F.log_softmax(logits, dim=-1)
             
@@ -281,6 +325,7 @@ class GRPOTrainer:
             per_token_logps = torch.zeros(batch_size, device=input_ids.device)
             valid_token_counts = torch.zeros(batch_size, device=input_ids.device)
             
+            # calculating avg log per token
             for i in range(batch_size):
                 start_idx = prompts_len[i].item()
                 end_idx = input_ids.shape[1] - 1
