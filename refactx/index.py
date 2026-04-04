@@ -548,7 +548,7 @@ class Cache():
         return next_tokens, subtree_cache
 
 class PostgresTrieIndex(Index):
-    def __init__(self, postgresql_connection, table_name, switch_parameter : int = DEFAULT_SWITCH_PARAMETER, rootkey : int = DEFAULT_ROOTKEY, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False, tokenizer_name=None):
+    def __init__(self, postgresql_connection, table_name, switch_parameter : int = DEFAULT_SWITCH_PARAMETER, rootkey : int = DEFAULT_ROOTKEY, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False, tokenizer=None):
         super().__init__()
         self.rootkey = rootkey
         self.configkey = configkey
@@ -560,6 +560,8 @@ class PostgresTrieIndex(Index):
         self.select_query = self.base_select_query.format(sql.Identifier(self.table_name))
         self.return_state = return_state
         self.do_count_leaves = do_count_leaves # slower if true
+
+        self.tokenizer = tokenizer
 
         if self.postgresql_connection:
             self.get_config()
@@ -661,7 +663,7 @@ class PostgresTrieIndex(Index):
                         subtree = pickle.loads(subtree)
                         current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
                         if self.do_count_leaves and numleaves != state.subtree_cache.count_leaves(current_tree):
-                            print('WARNING: number of leaves does not match after COUNT LEAVES.')
+                            print('WARNING: number of leaves does not match after COUNT LEAVES for sequence {}.'.format(sequence))
 
                         merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
                         numleaves_diff = totalnumleaves_subtree - merge_numleaves
@@ -669,7 +671,7 @@ class PostgresTrieIndex(Index):
                             # TODO debug
                             # reduce all the upper numleaves by the difference
                             # WORKAROUND to solve duplicates (or wrong count) problem
-                            print('WARNING: number of leaves does not match.')
+                            print('WARNING: number of leaves does not match for sequence {}.'.format(sequence))
 
             # TODO maybe do it only when there is no subtree cache to save space and bandwidth
             # (first calls are the slowest)

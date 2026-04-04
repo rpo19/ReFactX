@@ -201,6 +201,7 @@ class PatternConstrainedState():
         self.cache_index = cache_index
         self.generated_triples = []
         self.generated_triples_idx = []
+        self.generated_triples_str = []
 
         self.subtree_cache = subtree_cache
 
@@ -229,6 +230,8 @@ class PatternConstrainedState():
         # removing end of triple
         self.generated_triples.append(sequence)
         self.generated_triples_idx.append([list(range(start_idx, len(sequence)))])
+        if self.tokenizer is not None:
+            self.generated_triples_str.append(self.tokenizer.decode(sequence))
 
     def is_constrained(self):
         return self.state % 2 == self.CONSTRAINED_GENERATION
@@ -310,6 +313,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         self.avoid_duplicates = avoid_duplicates
         self.reinit_states = reinit_states
         self.eot = eot
+        # TODO debug no leaves does not match with the eot
 
         self.ERROR_STRATEGY_WARN = 0
         self.ERROR_STRATEGY_FAIL = 1

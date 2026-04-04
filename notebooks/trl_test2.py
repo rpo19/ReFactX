@@ -24,7 +24,22 @@ load_dotenv()
 MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 DATASET_NAME = "rmanluo/RoG-cwq"
 
-PROMPT_TEMPLATE = [{'role': 'system', 'content': 'You are a helpful question-answering assistant that bases its answers on facts from a knowledge base.\n\n    You receive an input question.\n\n    You determine the reasoning path needed to answer.\n\n    You MUST get relevant facts with the "Fact:" command (e.g., "Fact: <Smith> <date of birth> <2000-10-01>"). You MUST rely on these facts and use them a proof for your answer.\n    While getting facts you continue the reasoning explaining it step by step.\n\n    You conclude with a concise answer that MUST be based on the proofs you found with "Fact:".\n\nExample answer format: `Answer: ["Italy", "United States", "France"]`.\n\nIf you didn\'t find proofs with "Fact:" that support an answer you stop and you reply: Answer: ["I don\'t know."].\n\n'}]
+PROMPT_TEMPLATE = [{'role': 'system', 'content': '''You are a helpful question answering assistant that bases its answers on facts from a knowledge base.
+    You receive an input question.
+    You determine the reasoning path needed to answer.
+    You MUST get relevant facts with the "Fact:" command and use them a proof for your answer.
+    While getting facts you continue the reasoning explaining it step by step.
+    You conclude with a concise answer that MUST be based on the proofs you found with "Fact:".
+    The answer MUST be a JSON list: e.g. Answer: ["Italy", "United States", "France"].
+    If you don\'t find proofs with "Fact:" that support an answer you stop and you reply: Answer: ["I don\'t know."].
+
+## Example:
+    Question: When was the director of Slumdog Millionaire born?'
+    Reasoning: To answer this question, I need to find who is the director of Slumdog Millionaire and then his birth date.
+    Fact: <Slumdog Millionaire> <description> <2008 film directed by Danny Boyle> .
+    I found the director. I need the birth date.
+    Fact: <Danny Boyle> <date of birth> <1956-10-20T00:00:00Z> .
+    Answer: ["October 20, 1956"]'''}]
 
 
 TEXT_COLUMN = "prompt"
@@ -111,36 +126,52 @@ if eval_dataset is not None:
 #@click.option('--split-pattern', required=False, default=r'(<\|im_end\|>|<\|end_of_text\|>)', help='Pattern to split the full prediction. Use with --fix-predictions.')
 answer_pattern = 'answer: '
 split_pattern = tokenizer.eos_token
-def get_answer(full_prediction, split_pattern, answer_pattern=answer_pattern):
+def get_answer(full_prediction, split_pattern=split_pattern, answer_pattern=answer_pattern):
     prediction = ''
 
     full_prediction = re.split(split_pattern, full_prediction, 1)[0]
-    idx = full_prediction.index(answer_pattern)
-    if idx != -1:
+    try:
+        idx = full_prediction.index(answer_pattern)
         prediction = full_prediction[idx + len(answer_pattern):].strip()
+    except ValueError:
+        pass
 
     return prediction
 
-def reward_fn(completions, question, answer, references=None, log_extra=None, log_metric=None, **kwargs):
+def reward_fn(completions, question, answer, log_extra=None, log_metric=None, **kwargs):
     ESTIMATED_NUM_WORDS=50
+    # TODO access generated fact from here and make them match the number of "fact:" calls as well as disincentivize use of <> more than the ones generated with fact
+
+    states = refactx.get_constrained_states().states
+    assert len(states) == len(completions)
 
     rewards = []
     tp = 0
-    for i, (completion, question_i, answer_i) in enumerate(zip(completions, question, answer)):
+    for i, (completion, question_i, answer_i, state_batch) in enumerate(zip(completions, question, answer, states)):
+        state = state_batch[0] # this is because beam_size is 1 (no beam search)
         completion_lower = completion.strip().lower()
         reward = 0.0
         if len(completion_lower) > 10:
             reward += 0.1
         # TODO fact should be before answer
         if "fact:" in completion_lower:
-            reward += 0.5
+            reward += 0.3
+        if completion_lower.count("fact:") > len(state.generated_triples):
+            reward -= 0.2
+
+        count_angular = completion_lower.count('<') + completion_lower.count('>')
+        all_facts = '\n'.join(state.generated_triples_str)
+        count_angular_facts = all_facts.count('<') + all_facts.count('>')
+        # disincentivize angular parentheses outside facts
+        reward += count_angular - count_angular_facts
+
         answer_count = completion_lower.count("answer:")
         if answer_count == 1:
             reward += 0.3
         elif answer_count > 1:
             reward -= 0.2
         
-        extracted_answer = get_answer(completion_lower, remove_dot=True)
+        extracted_answer = get_answer(completion_lower)
         try:
             # answer should be a list of answers
             answer_json = json.loads(extracted_answer)
@@ -187,6 +218,7 @@ def reward_fn(completions, question, answer, references=None, log_extra=None, lo
 
 POSTGRES_URL = os.environ.get("POSTGRES_URL")
 index = refactx.load_index(POSTGRES_URL)
+index.tokenizer = tokenizer # for debugging
 
 
 constrained_processor = refactx.get_constrained_logits_processor(
@@ -261,10 +293,6 @@ torch.Size([4, 247]) # 247 could be the maximum length of the generation?
 
 inputs['tool_mask'] shape # TODO make tool mask a 1/0 matrix as completion_mask
 (4, 32)
-
-
-
-
         """
         refactx_generated_idx = []
         for i in range(self.num_generations):
