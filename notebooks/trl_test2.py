@@ -109,17 +109,15 @@ if eval_dataset is not None:
 # Reward function
 # -----------------------
 #@click.option('--split-pattern', required=False, default=r'(<\|im_end\|>|<\|end_of_text\|>)', help='Pattern to split the full prediction. Use with --fix-predictions.')
-answer_pattern = re.compile(r'answer: (.*)\.?')
+answer_pattern = 'answer: '
 split_pattern = tokenizer.eos_token
-def get_answer(full_prediction, remove_dot=True, answer_pattern=answer_pattern, split_pattern=split_pattern):
+def get_answer(full_prediction, split_pattern, answer_pattern=answer_pattern):
     prediction = ''
 
-    full_prediction = re.split(split_pattern, full_prediction, maxsplit=1)[0]
-    if remove_dot and full_prediction.endswith('.'):
-        full_prediction = full_prediction[:-len('.')]
-    match = answer_pattern.search(full_prediction)
-    if match:
-        prediction = match.group(1)
+    full_prediction = re.split(split_pattern, full_prediction, 1)[0]
+    idx = full_prediction.index(answer_pattern)
+    if idx != -1:
+        prediction = full_prediction[idx + len(answer_pattern):].strip()
 
     return prediction
 
