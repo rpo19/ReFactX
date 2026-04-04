@@ -224,7 +224,7 @@ class PatternConstrainedState():
         else:
             return False
 
-    def cache_add(self, sequence, start_idx):
+    def cache_add(self, sequence, start_idx=0):
         self.cache_index.add(sequence, new_leaf=True)
         # removing end of triple
         self.generated_triples.append(sequence)
@@ -322,6 +322,12 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                 debug_tokenizer = self.tokenizer
         )
 
+    def _reinit_states_to_input_ids(self, input_ids):
+        for i in range(input_ids.shape[0]):
+            batch_idx = self.states.get_batch_idx(i)
+            beam_i = self.states.get_beam_idx(i)
+            self.states[batch_idx, beam_i].input_ids = input_ids[i].tolist()[:-1]
+
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
         if input_ids.shape[0] != len(self.states):
             message = f'number of states ({len(self.states)}) should match `num_batches * num_beams` ({input_ids.shape[0]})'
@@ -357,11 +363,13 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                         # then continue as first call
                         # initialize state token ids
                         print(f'Warning: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}, reinitializing state.')
-                        print('sequence',  self.tokenizer.decode(sequence))
-                        print('previous', self.tokenizer.decode(self.states[batch_idx, beam_i].input_ids))
+                        # print('sequence',  self.tokenizer.decode(sequence))
+                        # print('previous', self.tokenizer.decode(self.states[batch_idx, beam_i].input_ids))
 
+                        # reset all the states once
                         self.states.reset()
-                        self.states[batch_idx, beam_i].input_ids = sequence
+                        self._reinit_states_to_input_ids(input_ids)
+                        self.states[batch_idx, beam_i].update(last_token)
                     else:
                         raise ValueError(f'Error: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}')
                 else:
