@@ -303,17 +303,22 @@ class PatternConstrainedState():
         return self.cursor
 
 class ConstrainedLogitsProcessor(LogitsProcessor):
-    def __init__(self, index, states, tokenizer=None, error_strategy=0, avoid_duplicates=True, reinit_states=False):
+    def __init__(self, index, states, tokenizer, error_strategy=0, avoid_duplicates=True, reinit_states=False, eot='\n'):
         self.index = index
         self.states = states
         self.error_strategy = error_strategy
         self.avoid_duplicates = avoid_duplicates
         self.reinit_states = reinit_states
+        self.eot = eot
 
         self.ERROR_STRATEGY_WARN = 0
         self.ERROR_STRATEGY_FAIL = 1
 
         self.tokenizer=tokenizer # for debugging
+
+        self.eot_token = None
+        if self.eot is not None:
+            self.eot_token = self.tokenizer.encode(self.eot, add_special_tokens=False)[0]
 
     def _reinit_states(self, num_beams, num_batches):
         self.states.__init__('auto',
@@ -362,7 +367,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                     if self.reinit_states:
                         # then continue as first call
                         # initialize state token ids
-                        print(f'Warning: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}, reinitializing state.')
+                        print(f'Warning: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}, reinitializing all states.')
                         # print('sequence',  self.tokenizer.decode(sequence))
                         # print('previous', self.tokenizer.decode(self.states[batch_idx, beam_i].input_ids))
 
@@ -416,12 +421,15 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         if len(possible_tokens) == 0:
             # end of constrained generation
             # send end of string
-            generated_triple = sequence
-            state.cache_add(generated_triple, start_idx)
+
+            state.cache_add(sequence, start_idx)
+
+            if self.eot_token is not None:
+                possible_tokens = [self.eot_token]
+
             # ensure to reset after eof triple
             state.end_of_triple_reset()
-            # end of constrained generation
-            mask[mask_idx, :] = 0
+
         else:
             vocab_size = mask.shape[-1]
 
@@ -433,6 +441,6 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                     f"(showing up to 10) with vocab_size={vocab_size}"
                 )
 
-            mask[mask_idx, possible_tokens] = 0
+        mask[mask_idx, possible_tokens] = 0
 
 CONSTRAINED_STATES = ConstrainedStateList([])
