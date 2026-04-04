@@ -129,8 +129,6 @@ def reward_fn(completions, question, answer, references=None, log_extra=None, lo
     rewards = []
     tp = 0
     for i, (completion, question_i, answer_i) in enumerate(zip(completions, question, answer)):
-        assert question_i in completion, f"Question not found in completion. Question: {question_i}, Completion: {completion}"
-
         completion_lower = completion.strip().lower()
         reward = 0.0
         if len(completion_lower) > 10:
@@ -177,7 +175,7 @@ def reward_fn(completions, question, answer, references=None, log_extra=None, lo
     if log_extra:
         for i, item in enumerate(completions):
             if 'fact:' in item.lower():
-                to_log = 'completion', [item, references[i] if references is not None else None]
+                to_log = 'completion', [question[i], item, answer[i]]
                 break
         log_extra(*to_log)
         print('log_extra', *to_log)
