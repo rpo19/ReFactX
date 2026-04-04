@@ -1,3 +1,4 @@
+import json
 import os
 from shutil import copy
 import torch
@@ -23,7 +24,8 @@ load_dotenv()
 MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 DATASET_NAME = "rmanluo/RoG-cwq"
 
-PROMPT_TEMPLATE = [{'role': 'system', 'content': 'You are a helpful question-answering assistant that bases its answers on facts from a knowledge base.\n\n    You receive an input question.\n\n    You determine the reasoning path needed to answer.\n\n    You MUST get relevant facts with the "Fact:" command (e.g., "Fact: <Smith> <date of birth> <2000-10-01>"). You MUST rely on these facts and use them a proof for your answer.\n    While getting facts you continue the reasoning explaining it step by step.\n\n    You conclude with a concise answer that MUST be based on the proofs you found with "Fact:".\n\nIf you didn\'t find proofs with "Fact:" that support an answer you stop and you reply: "I don\'t know.".\n\n'}]
+PROMPT_TEMPLATE = [{'role': 'system', 'content': 'You are a helpful question-answering assistant that bases its answers on facts from a knowledge base.\n\n    You receive an input question.\n\n    You determine the reasoning path needed to answer.\n\n    You MUST get relevant facts with the "Fact:" command (e.g., "Fact: <Smith> <date of birth> <2000-10-01>"). You MUST rely on these facts and use them a proof for your answer.\n    While getting facts you continue the reasoning explaining it step by step.\n\n    You conclude with a concise answer that MUST be based on the proofs you found with "Fact:".\n\nExample answer format: `Answer: ["Italy", "United States", "France"]`.\n\nIf you didn\'t find proofs with "Fact:" that support an answer you stop and you reply: Answer: ["I don\'t know."].\n\n'}]
+
 
 TEXT_COLUMN = "prompt"
 LABEL_COLUMN = "answer"
@@ -121,16 +123,19 @@ def get_answer(full_prediction, remove_dot=True, answer_pattern=answer_pattern, 
 
     return prediction
 
-def reward_fn(completions, prompts, references=None, log_extra=None, log_metric=None, **kwargs):
+def reward_fn(completions, question, answer, references=None, log_extra=None, log_metric=None, **kwargs):
     ESTIMATED_NUM_WORDS=50
 
     rewards = []
     tp = 0
-    for i, (completion, prompt) in enumerate(zip(completions, prompts)):
+    for i, (completion, question_i, answer_i) in enumerate(zip(completions, question, answer)):
+        assert question_i in completion, f"Question not found in completion. Question: {question_i}, Completion: {completion}"
+
         completion_lower = completion.strip().lower()
         reward = 0.0
         if len(completion_lower) > 10:
             reward += 0.1
+        # TODO fact should be before answer
         if "fact:" in completion_lower:
             reward += 0.5
         answer_count = completion_lower.count("answer:")
@@ -140,19 +145,31 @@ def reward_fn(completions, prompts, references=None, log_extra=None, log_metric=
             reward -= 0.2
         
         extracted_answer = get_answer(completion_lower, remove_dot=True)
-        if extracted_answer:
-            extracted_answer_lower = extracted_answer.strip().lower()
-            if references is not None:
-                ref = references[i][0].strip().lower()
-                if extracted_answer_lower == ref:
+        try:
+            # answer should be a list of answers
+            answer_json = json.loads(extracted_answer)
+            reward += 0.5
+
+            if answer_json:
+                answer_json_lower = [ans.strip().lower() for ans in answer_json]
+                ref = [r.strip().lower() for r in answer_i]
+
+                # intersection over union
+                intersection = set(answer_json_lower).intersection(set(ref))
+                union = set(answer_json_lower).union(set(ref))
+                iou = len(intersection) / len(union) if union else 0
+                reward += iou
+
+                # incentivate concise answers (if correct)
+                if iou >= 0.9:
                     tp += 1
-                    reward += 1.0
                     word_count = len(completion_lower.split())
                     reward += ESTIMATED_NUM_WORDS / word_count
-                elif extracted_answer_lower in ref or ref in extracted_answer_lower:
-                    reward += 0.5
-                    word_count = len(completion_lower.split())
-                    reward += ESTIMATED_NUM_WORDS / word_count
+
+        except Exception as e:
+            print('Warning: Exception in reward_fn: {}'.format(e))
+            pass
+
         rewards.append(reward)
 
         accuracy = tp / len(completions) if completions else 0
@@ -165,7 +182,7 @@ def reward_fn(completions, prompts, references=None, log_extra=None, log_metric=
         log_extra(*to_log)
         print('log_extra', *to_log)
     if log_metric:
-        log_metric('accuratezza', accuracy)
+        log_metric('accuracy', accuracy)
         log_metric('fact_calls', completion_lower.count("fact:"))
     return rewards
 
