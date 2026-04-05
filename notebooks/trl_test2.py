@@ -147,6 +147,7 @@ def reward_fn(completions, question, answer, log_extra=None, log_metric=None, **
 
     rewards = []
     tp = 0
+    all_iou = []
     for i, (completion, question_i, answer_i, state_batch) in enumerate(zip(completions, question, answer, states)):
         state = state_batch[0] # this is because beam_size is 1 (no beam search)
         completion_lower = completion.strip().lower()
@@ -163,7 +164,10 @@ def reward_fn(completions, question, answer, log_extra=None, log_metric=None, **
         all_facts = '\n'.join(state.generated_triples_str)
         count_angular_facts = all_facts.count('<') + all_facts.count('>')
         # disincentivize angular parentheses outside facts
-        reward += count_angular - count_angular_facts
+        # only facts -> 0
+        # also some fake facts: -0.2
+        if count_angular > count_angular_facts:
+            reward -= 0.2
 
         answer_count = completion_lower.count("answer:")
         if answer_count == 1:
@@ -193,6 +197,8 @@ def reward_fn(completions, question, answer, log_extra=None, log_metric=None, **
                     word_count = len(completion_lower.split())
                     reward += ESTIMATED_NUM_WORDS / word_count
 
+                all_iou.append(iou)
+
         except Exception as e:
             print('Warning: Exception in reward_fn: {}'.format(e))
             pass
@@ -200,6 +206,7 @@ def reward_fn(completions, question, answer, log_extra=None, log_metric=None, **
         rewards.append(reward)
 
         accuracy = tp / len(completions) if completions else 0
+        final_iou = sum(all_iou) / len(all_iou) if all_iou else 0
 
     if log_extra:
         for i, item in enumerate(completions):
@@ -211,6 +218,7 @@ def reward_fn(completions, question, answer, log_extra=None, log_metric=None, **
     if log_metric:
         log_metric('accuracy', accuracy)
         log_metric('fact_calls', completion_lower.count("fact:"))
+        log_metric('iou', final_iou)
     return rewards
 
 
