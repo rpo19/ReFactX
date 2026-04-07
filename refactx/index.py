@@ -7,6 +7,8 @@ import os
 import gzip
 from tqdm import trange
 from urllib.parse import urlparse, parse_qs
+from transformers import ProcessorMixin
+
 
 from refactx.SimpleCache import SimpleCache
 
@@ -252,7 +254,11 @@ class Index():
             batch = self.verbalized_triples[batch_start:batch_end]
             if self.tokenizer is None:
                 raise ValueError('tokenizer must be set before tokenizing triples.')
-            ids = self.tokenizer(batch, add_special_tokens=add_special_tokens)['input_ids']
+            elif isinstance(self.tokenizer, ProcessorMixin):
+                ids = self.tokenizer.tokenizer(text=batch, add_special_tokens=add_special_tokens)['input_ids']
+            else:
+                ids = self.tokenizer(text=batch, add_special_tokens=add_special_tokens)['input_ids']
+
             self.batch_append(ids)
 
     def clean(self):
