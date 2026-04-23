@@ -1,13 +1,13 @@
 from refactx.index import load_index, populate_postgres_index
 from refactx.prompt_base import PROMPT_TEMPLATE
 
-def apply_prompt_template(tokenizer, prompt_template=PROMPT_TEMPLATE, question=None):
+def apply_prompt_template(tokenizer, prompt_template=PROMPT_TEMPLATE, question=None, **kwargs):
     if question is None:
         # only prompt for caching
-        return tokenizer.apply_chat_template(prompt_template, tokenize=False, add_generation_prompt=False)
+        return tokenizer.apply_chat_template(prompt_template, tokenize=False, add_generation_prompt=False, **kwargs)
     else:
         question_w_role = {'role':'user', 'content': question}
-        return tokenizer.apply_chat_template(prompt_template + [question_w_role], tokenize=False, add_generation_prompt=True)
+        return tokenizer.apply_chat_template(prompt_template + [question_w_role], tokenize=False, add_generation_prompt=True, **kwargs)
 
 def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True, **kwargs):
     from refactx.generate import get_constrained_logits_processor as _base
