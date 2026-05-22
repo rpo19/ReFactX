@@ -59,9 +59,10 @@ def _load_index_from_string(triple_text, tokenizer=None, add_special_tokens=Fals
     assert tokenizer is not None, 'tokenizer must be provided when loading from text.'
     index = DictIndex()
     index.set_tokenizer(tokenizer)
-    self.verbalized_triples = triple_text.split('\n')
+    index.verbalized_triples = triple_text.split('\n')
+    index.tokenize_triples(add_special_tokens, batch_size)
     if clean:
-        index.clean()ndex.tokenize_triples(add_special_tokens, batch_size)
+        index.clean()
 
     return index
 
@@ -69,9 +70,10 @@ def _load_index_from_triple_list(triple_lst, tokenizer=None, add_special_tokens=
     assert tokenizer is not None, 'tokenizer must be provided when loading from triple list.'
     index = DictIndex()
     index.set_tokenizer(tokenizer)
-    self.verbalized_triples = triple_lst
+    index.verbalized_triples = triple_lst
+    index.tokenize_triples(add_special_tokens, batch_size)
     if clean:
-        index.clean()ndex.tokenize_triples(add_special_tokens, batch_size)
+        index.clean()
 
     return index
 
