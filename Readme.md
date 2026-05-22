@@ -38,9 +38,17 @@ pip install refactx[torch]
 For quickly trying ReFactX with an in-memory prefix tree (derived from a 31k-facts knowledge base) use the notebook [try_refactx.ipynb](notebooks/try_refactx.ipynb).
 
 ## Development Setup
-- install the requirements `pip install -r requirements.txt`
-- prepare the `.env` file: `cp env-sample.txt .env`, then edit `.env` (can be skipped if using the simple index in the try_refactx notebook)
-
+```
+# clone the repository
+git clone
+# install the package (complete/torch version) in editable mode
+pip install -e ".[torch]"
+# prepare the `.env` file
+# you'll need the env file in the same folder from which you run refactx (e.g., `notebooks` if your are using notebooks from this repo)
+cp env-sample.txt .env
+# edit `.env`
+# can be skipped if using the simple index in the try_refactx notebook
+```
 
 ## Wikidata Prefix Tree
 Refer to [PrefixTree.md](PrefixTree.md) for creating the Wikidata prefix tree we used in our work.
