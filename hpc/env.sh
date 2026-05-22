@@ -1,5 +1,6 @@
+PS1LOGIN="${PS1LOGIN:-$PS1}"
 if [ -z "${WS_PATH:-}" ]; then
-    # pass PS1LOGIN to sbatch
+    # pass PS1LOGIN to sbatch: > sbatch "--export=ALL,PS1LOGIN=$PS1" populate.sh
     case "$PS1LOGIN" in
         *capella*)
             WS_PATH="/data/cat/ws/$USER-horse"

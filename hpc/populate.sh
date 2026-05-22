@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --output=refactx_%j.out
+#SBATCH --output=logs/refactx_%j.out
 #SBATCH --job-name=refactx_pg
 #SBATCH -N 1
-#SBATCH --error=refactx_%j.err
-#SBATCH --time=06:00:00
+#SBATCH --error=logs/refactx_%j.err
+#SBATCH --time=72:00:00
 #SBATCH --mem=20G
 #SBATCH --cpus-per-task=1
 #SBATCH --gres=gpu:1
