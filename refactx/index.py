@@ -24,14 +24,17 @@ def _load_cache(cache):
     return cache
 
 def load_index(url, **kwargs):
-    if os.path.isfile(url):
+    if isinstance(url, list):
+        return _load_index_from_triple_list(url, **kwargs)
+    elif os.path.isfile(url):
         return _load_index_from_txt(url, **kwargs)
     elif url.startswith('postgresql://') or url.startswith('postgres://'):
         return _load_index_from_postgresql(url, **kwargs)
     elif url.startswith('http://') or url.startswith('https://'):
         return _load_http_index(url, **kwargs)
     else:
-        raise ValueError(f'Cannot load index from {url}')
+        print('Trying to load index from string...')
+        return _load_from_string(url, **kwargs)
 
 def _load_http_index(url, configkey=DEFAULT_CONFIGKEY, cache='simple', rootcert=None):
     cache = _load_cache(cache)
@@ -52,6 +55,25 @@ def _load_http_index(url, configkey=DEFAULT_CONFIGKEY, cache='simple', rootcert=
 
     return index
 
+def _load_index_from_string(triple_text, tokenizer=None, add_special_tokens=False, clean=True, batch_size=100):
+    assert tokenizer is not None, 'tokenizer must be provided when loading from text.'
+    index = DictIndex()
+    index.set_tokenizer(tokenizer)
+    self.verbalized_triples = triple_text.split('\n')
+    if clean:
+        index.clean()ndex.tokenize_triples(add_special_tokens, batch_size)
+
+    return index
+
+def _load_index_from_triple_list(triple_lst, tokenizer=None, add_special_tokens=False, clean=True, batch_size=100):
+    assert tokenizer is not None, 'tokenizer must be provided when loading from triple list.'
+    index = DictIndex()
+    index.set_tokenizer(tokenizer)
+    self.verbalized_triples = triple_lst
+    if clean:
+        index.clean()ndex.tokenize_triples(add_special_tokens, batch_size)
+
+    return index
 
 def _load_index_from_txt(path, tokenizer=None, add_special_tokens=False, clean=True, batch_size=100):
     assert tokenizer is not None, 'tokenizer must be provided when loading from text file.'
