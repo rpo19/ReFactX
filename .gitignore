@@ -16,7 +16,6 @@
 .env
 ca.crt
 data
-hpc
 **/.htpasswd
 **/htpasswd
 wandb
@@ -26,3 +25,4 @@ dist
 build/
 *.egg-info
 .eggs/
+*.swp
