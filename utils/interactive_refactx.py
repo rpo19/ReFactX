@@ -1,6 +1,6 @@
 import click
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextStreamer
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextStreamer, AutoProcessor, AutoModelForImageTextToText
 from transformers.generation.logits_process import LogitsProcessorList
 import refactx
 from refactx.prompt_base import PROMPT_TEMPLATE
@@ -12,29 +12,50 @@ from refactx.generate import (
 )
 from refactx import patch_model
 import json
+from dotenv import load_dotenv
+import os
 
 @click.command()
 @click.option("--model", "model_path", default="Qwen/Qwen2.5-3B-Instruct", help="Model name or path")
-@click.option("--index", "index_path", default="./indexes/simple_index.txt.gz", help="Path to the index file")
+@click.option("--index", "index_path", default=None, help="Path to the index file (otherwise uses environment)")
 @click.option("--device", default="auto", help="Device to use (e.g. 'auto', 'cuda', 'cpu')")
 @click.option("--http-rootcert", required=False, default=None, help="Speficy https certificates file (or false to disable verification)")
 @click.option("--avoid-duplicates", required=False, default=True, help="Speficy whether to avoid generating duplicates or not.")
+@click.option("--thinking", required=False, default=False, help="Enable model thinking mode.")
 @click.option("--ignore-case", is_flag=True, default=True, help="Whether to ignore case when matching patterns.")
 @click.option("--pattern", default='Fact:', help="Pattern that triggers constrained generation of KB facts.")
-def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore_case, pattern):
+def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinking, ignore_case, pattern):
     """
     An interactive script to ask questions to the ReFactX model.
     """
     print("Loading tokenizer and model...")
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+    except Exception as e:
+        print('exc vlm', e)
+        tokenizer = AutoProcessor.from_pretrained(model_path)
     if device == "auto":
-        model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto")
+        try:
+            model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto")
+        except Exception as e:
+            print('exc loading model. maybe a vlm', e)
+            model = AutoModelForImageTextToText.from_pretrained(model_path, device_map="auto")
     else:
-        model = AutoModelForCausalLM.from_pretrained(model_path).to(device)
+        try:
+            model = AutoModelForCausalLM.from_pretrained(model_path).to(device)
+        except Exception as e:
+            print('exc loading model. maybe a vlm', e)
+            model = AutoModelForImageTextToText.from_pretrained(model_path).to(device)
+
     patch_model(model)
     model.eval()
 
     print("Loading index...")
+    load_dotenv()
+    if index_path is None:
+        index_path = os.getenv("INDEX_PATH")
+    assert index_path is not None, 'ERROR: index must be provided via --index or INDEX_PATH environment variables.'
+
     index = refactx.load_index(
         index_path,
         rootcert=http_rootcert)
@@ -71,6 +92,7 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore
                         print(f"Prompt template: {json.dumps(current_prompt_template)}")
                         print(f"Generation config: {gen_config}")
                         print(f"avoid_duplicates: {avoid_duplicates}")
+                        print(f"thinking: {thinking}")
                         print(f"ignore_case: {ignore_case}")
                         print(f"pattern: {pattern}")
                     elif len(parts) >= 2:
@@ -79,6 +101,8 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore
                             print(f"{key}: {json.dumps(current_prompt_template)}")
                         elif key == "avoid_duplicates":
                             print(f"{key}: {avoid_duplicates}")
+                        elif key == "thinking":
+                            print(f"{key}: {thinking}")
                         elif key == "ignore_case":
                             print(f"{key}: {ignore_case}")
                         elif key == "pattern":
@@ -97,7 +121,7 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore
                     if key == "prompt_template":
                         current_prompt_template = json.loads(val)
                         print(f"Updated {key}")
-                    elif key in gen_config or key in ["avoid_duplicates", "ignore_case"]:
+                    elif key in gen_config or key in ["avoid_duplicates", "ignore_case", "thinking"]:
                         if val.lower() == "none":
                             val = None
                         elif val.lower() == "true":
@@ -114,6 +138,8 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore
                                     pass
                         if key == "avoid_duplicates":
                             avoid_duplicates = bool(val)
+                        if key == "thinking":
+                            thinking = bool(val)
                         elif key == "ignore_case":
                             ignore_case = bool(val)
                         elif key == "pattern":
@@ -132,7 +158,7 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore
                 break
 
             prompted_text = refactx.apply_prompt_template(
-                tokenizer, prompt_template=current_prompt_template, question=question
+                tokenizer, prompt_template=current_prompt_template, question=question, enable_thinking=False
             )
             inputs = tokenizer([prompted_text], return_tensors="pt").to(model.device)
 
@@ -171,7 +197,12 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, ignore
 
             print('Triples generated:')
             for i, triple in enumerate(refactx.CONSTRAINED_STATES[0][0].generated_triples):
-                print(i, tokenizer.decode(triple), end='\n')
+                try:
+                    print(i, tokenizer.decode(triple), end='\n')
+                except Exception as e:
+                    print('exc vlm processor', e)
+                    print(i, tokenizer.tokenizer.decode(triple), end='\n')
+
 
         except (KeyboardInterrupt, EOFError):
             print("\nExiting...")
