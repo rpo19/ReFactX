@@ -7,6 +7,7 @@ import os
 import gzip
 from tqdm import trange
 from urllib.parse import urlparse, parse_qs
+from transformers import ProcessorMixin
 
 
 from refactx.SimpleCache import SimpleCache
@@ -88,7 +89,7 @@ def _load_index_from_txt(path, tokenizer=None, add_special_tokens=False, clean=T
     return index
 
 def _parse_postgresql_url(url):
-    # postgres://user:pwd@host:port/dbname?tablename=tablename&switch_parameter=7&rootkey=500000
+    # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000
     # Parse the URL
     parsed = urlparse(url)
 
@@ -277,14 +278,10 @@ class Index():
             batch = self.verbalized_triples[batch_start:batch_end]
             if self.tokenizer is None:
                 raise ValueError('tokenizer must be set before tokenizing triples.')
-            try:
-                ids = self.tokenizer(text=batch, add_special_tokens=add_special_tokens)['input_ids']
-            except Exception as e:
-                print('tokenization exc. probably cause of vlms', e)
+            elif isinstance(self.tokenizer, ProcessorMixin):
                 ids = self.tokenizer.tokenizer(text=batch, add_special_tokens=add_special_tokens)['input_ids']
-
-
-
+            else:
+                ids = self.tokenizer(text=batch, add_special_tokens=add_special_tokens)['input_ids']
 
             self.batch_append(ids)
 

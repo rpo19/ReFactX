@@ -1,6 +1,7 @@
 from transformers import LogitsProcessorList
 from refactx.index import DictIndex
 from transformers.generation.logits_process import LogitsProcessor
+from transformers import ProcessorMixin
 import torch
 from copy import deepcopy
 import math
@@ -322,11 +323,10 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
         self.eot_token = None
         if self.eot is not None:
-            try:
-                self.eot_token = self.tokenizer.encode(self.eot, add_special_tokens=False)[0]
-            except Exception as e:
-                print('tokenization exc. probably casue vlms', e)
+            if isinstance(self.tokenizer, ProcessorMixin):
                 self.eot_token = self.tokenizer.tokenizer.encode(self.eot, add_special_tokens=False)[0]
+            else:
+                self.eot_token = self.tokenizer.encode(self.eot, add_special_tokens=False)[0]
 
     def _reinit_states(self, num_beams, num_batches):
         self.states.__init__('auto',
