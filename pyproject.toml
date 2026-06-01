@@ -23,7 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 torch = [
 	"torch",
-	"transformers>=4.0",
+	"transformers>=5.3",
 	"accelerate",
 ]
 httpindex = [
