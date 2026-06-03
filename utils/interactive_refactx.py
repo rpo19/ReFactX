@@ -119,7 +119,8 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
                     key = parts[1]
                     val = parts[2]
                     if key == "prompt_template":
-                        current_prompt_template = json.loads(val)
+                        with open(val, 'r') as fd:
+                            current_prompt_template = json.load(fd)
                         print(f"Updated {key}")
                     elif key in gen_config or key in ["avoid_duplicates", "ignore_case", "thinking"]:
                         if val.lower() == "none":
