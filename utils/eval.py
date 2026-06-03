@@ -1,6 +1,6 @@
 import torch
 from tqdm import tqdm
-from transformers import DynamicCache, LogitsProcessorList
+from transformers import LogitsProcessorList
 from refactx import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex, patch_model
 import refactx
 import json
@@ -11,125 +11,119 @@ import copy
 import datetime
 import click
 import time
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor, AutoModelForImageTextToText
+from datasets import load_dataset
 
-def eq_metadata(metadata1, metadata2):
-    if metadata1['index_config_path'] != metadata2['index_config_path']:
-        return False
-    if metadata1['model_config_path'] != metadata2['model_config_path']:
-        return False
-    if metadata1['dataset_config_path'] != metadata2['dataset_config_path']:
-        return False
-    # if metadata1['experiment_name'] != metadata2['experiment_name']: # ignore exp name
-    #     return False
-    # if metadata1['date'] != metadata2['date']: # ignore date
-    #     return False
-    if metadata1['index_config'] != metadata2['index_config']:
-        return False
-    if metadata1['model_config'] != metadata2['model_config']:
-        return False
-    if metadata1['dataset_config'] != metadata2['dataset_config']:
-        return False
-    return True
+
+def eq_metadata(m1, m2):
+    keys = ['index_config_path', 'model_config_path', 'dataset_config_path',
+            'index_config', 'model_config', 'dataset_config']
+    return all(m1.get(k) == m2.get(k) for k in keys)
+
 
 def logrotate(file_name, dataset_length=None, metadata=None):
     idx = 0
     dataset_start_from = 0
     while True:
-        if os.path.isfile(f'{file_name}.{idx}'):
-            print(f'Found file: {file_name}.{idx}. Checking if it is complete.')
-            if dataset_length is not None:
-                with open(f'{file_name}.{idx}', 'r') as fd:
-                    prev_output = fd.readlines()
-                    header = json.loads(prev_output[0])
-                    prev_output = prev_output[1:]
-                    prev_dataset_length = len(prev_output)
-                if prev_dataset_length < dataset_length:
-                    if eq_metadata(header, metadata):
-                        dataset_start_from = prev_dataset_length
-                        print(f'Found incomplete run file: {file_name}.{idx}. Continuing from {dataset_start_from}.')
-                        break
-                    else:
-                        print(f'Found incomplete run file: {file_name}.{idx}, but metadata mismatch. Ignoring it.')
-        else:
+        path = f'{file_name}.{idx}'
+        if not os.path.isfile(path):
             break
+        print(f'Found file: {path}. Checking if it is complete.')
+        if dataset_length is not None:
+            with open(path) as fd:
+                prev_output = fd.readlines()
+                header = json.loads(prev_output[0])
+                prev_output = prev_output[1:]
+                prev_dataset_length = len(prev_output)
+            if prev_dataset_length < dataset_length:
+                if eq_metadata(header, metadata):
+                    dataset_start_from = prev_dataset_length
+                    print(f'Found incomplete run file: {path}. Continuing from {dataset_start_from}.')
+                    break
+                else:
+                    print(f'Found incomplete run file: {path}, but metadata mismatch. Ignoring it.')
         idx += 1
-
     return f'{file_name}.{idx}', dataset_start_from
 
+
 def get_utc_date_and_time():
-    now = datetime.datetime.now(datetime.timezone.utc)
-    nowstr = now.strftime("%d/%m/%Y %H:%M:%S UTC")
-    return nowstr
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%d/%m/%Y %H:%M:%S UTC")
+
+
+def import_module(path):
+    if path.endswith('.py'):
+        path = path[:-3]
+    return importlib.import_module(path)
+
 
 @click.command()
-@click.option("--name", "experiment_name", default=None, required=False, help="Experiment name.")
-@click.option("--output", "output_file", required=False, default=None, type=click.Path(), help="Output file for the results.")
-@click.option("--index", "index_config_path", required=True, help="Index configuration module (without .py).")
-@click.option("--model", "model_config_path", required=True, help="Model configuration module (without .py).")
-@click.option("--dataset", "dataset_config_path", required=True, help="Dataset configuration module (without .py).")
-@click.option("--prompt", "prompt_config_path", required=False, default=None, help="Prompt configuration module (without .py).")
-@click.option("--wandb", "wandb", is_flag=True, default=False, help="Log in wandb")
-@click.option("--unconstrained-generation", is_flag=True, help="Unconstrained generation")
-@click.option("--debug", is_flag=True, help="Print debug information.")
-@click.option("--debug-states", is_flag=True, help="Print debug information about states (very verbose).")
-@click.option("--continue", 'continue_from_previous_run', is_flag=True, help="Continue previous run if not concluded (and if config was the same).")
-@click.option("--log-dir", default='.', help="Log dir (only use if --output is not specified).")
-def main(experiment_name, output_file, index_config_path, model_config_path, dataset_config_path, wandb, unconstrained_generation, debug, debug_states, continue_from_previous_run, log_dir):
-    if index_config_path.endswith('.py'):
-        index_config_path = index_config_path[:-3]
-    index_module = importlib.import_module(index_config_path)
-    index_config = getattr(index_module, 'index_config')
+@click.option("--config", "config_path", required=True, type=click.Path(exists=True), help="Path to JSON config file.")
+def main(config_path):
+    with open(config_path) as f:
+        cfg = json.load(f)
 
-    if model_config_path.endswith('.py'):
-        model_config_path = model_config_path[:-3]
-    model_module = importlib.import_module(model_config_path)
-    model_config = getattr(model_module, 'model_config')
+    print("Loading tokenizer and model...")
+    try:
+        processor = None
+        tokenizer = AutoTokenizer.from_pretrained(cfg["model_name"])
+    except Exception as e:
+        print('exc vlm', e)
+        processor = AutoProcessor.from_pretrained(cfg["model_name"])
+        tokenizer = processor.tokenizer
 
-    if dataset_config_path.endswith('.py'):
-        dataset_config_path = dataset_config_path[:-3]
-    dataset_module = importlib.import_module(dataset_config_path)
-    dataset = getattr(dataset_module, 'dataset').questions_dataset()
+    device = cfg.get("device", "auto")
+    try:
+        if device == "auto":
+            model = AutoModelForCausalLM.from_pretrained(cfg["model_name"], device_map="auto")
+        else:
+            model = AutoModelForCausalLM.from_pretrained(cfg["model_name"]).to(device)
+    except Exception as e:
+        print('exc loading model, trying VLM path', e)
+        if device == "auto":
+            model = AutoModelForImageTextToText.from_pretrained(cfg["model_name"], device_map="auto")
+        else:
+            model = AutoModelForImageTextToText.from_pretrained(cfg["model_name"]).to(device)
 
-    if prompt_config_path:
-        if prompt_config_path.endswith('.py'):
-            prompt_config_path = prompt_config_path[:-3]
-        prompt_module = importlib.import_module(prompt_config_path)
-        PROMPT_TEMPLATE = getattr(prompt_module, 'PROMPT_TEMPLATE')
+    patch_model(model)
+    model.eval()
+
+    if cfg.get("prompt"):
+        with open(cfg["prompt"]) as fd:
+            PROMPT_TEMPLATE = json.load(fd)
     else:
-        PROMPT_TEMPLATE = dataset.prompt_template
+        PROMPT_TEMPLATE = None
+        print(20 * '-', 'Using default prompt!')
 
+    experiment_name = cfg.get("experiment_name")
     if experiment_name is None:
-        experiment_name = f'{os.path.basename(dataset_config_path)}.{os.path.basename(model_config_path)}.{os.path.basename(index_config_path)}'
+        experiment_name = f'{os.path.basename(cfg["dataset"])}.{os.path.basename(cfg.get("model_config", cfg["model_name"]))}.{os.path.basename(cfg["index_config"])}'
+
+    output_file = cfg.get("output")
     if output_file is None:
-        output_file = f'{experiment_name}.out'
-        output_file = os.path.join(log_dir, output_file)
+        output_file = os.path.join(cfg.get("log_dir", "."), f'{experiment_name}.out')
 
-    prompt_length = model_config.tokenizer(model_config.apply_prompt_template(PROMPT_TEMPLATE),
-                    return_tensors='pt',
-                    padding=False)['input_ids'].shape[1]
+    try:
+        prompt_length = tokenizer(refactx.apply_prompt_template(PROMPT_TEMPLATE),
+                        return_tensors='pt', padding=False)['input_ids'].shape[1]
+    except Exception as e:
+        print('exc vlm prompt length', e)
+        prompt_length = tokenizer.tokenizer(refactx.apply_prompt_template(PROMPT_TEMPLATE),
+                        return_tensors='pt', padding=False)['input_ids'].shape[1]
 
-    metadata_plus = {
-        'index_config_path': index_config_path,
-        'model_config_path': model_config_path,
-        'dataset_config_path': dataset_config_path,
-        'experiment_name': experiment_name,
-        'date': get_utc_date_and_time(),
-        'index_config': dict(index_config),
-        'model_config': dict(model_config),
-        'dataset_config': dict(dataset.dump_config()),
-        'prompt': PROMPT_TEMPLATE,
-        'prompt_length': prompt_length,
-        'constrained': 'no' if unconstrained_generation else 'yes',
-    }
+    index = refactx.load_index(cfg["index_data"], rootcert=cfg.get("http_rootcert"))
+    index.set_tokenizer(tokenizer)
 
-    if continue_from_previous_run:
-        output_file, dataset_start_from = logrotate(output_file, len(dataset), metadata_plus)
+    metadata = {**cfg, 'date': get_utc_date_and_time(), 'prompt_length': prompt_length}
+
+    if cfg.get("continue", False):
+        output_file, dataset_start_from = logrotate(output_file, len(dataset), metadata)
     else:
         output_file, dataset_start_from = logrotate(output_file)
     print('Output file:', output_file)
-    if wandb:
+
+    if cfg.get("wandb", False):
         print('Logging in wandb.')
-        time.sleep(5) # let the user time to stop
+        time.sleep(5)
 
     assert os.path.isfile(output_file) or dataset_start_from == 0
 
@@ -138,151 +132,124 @@ def main(experiment_name, output_file, index_config_path, model_config_path, dat
         dataset = dataset[dataset_start_from:]
     else:
         output_file_mode = 'w'
+
     with open(output_file, output_file_mode) as output_fd:
         if dataset_start_from == 0:
-            output_fd.write(json.dumps(metadata_plus) + '\n')
+            output_fd.write(json.dumps(metadata) + '\n')
 
-        if wandb:
+        if cfg.get("wandb", False):
             import wandb
             wandb.init(
                 project=experiment_name,
-                config=metadata_plus,
+                config=metadata,
                 name=f"{experiment_name}_{get_utc_date_and_time()}",
             )
+
         try:
-            if index_config.rootkey <= max(model_config.tokenizer.vocab.values()):
+            try:
+                max_id = max(tokenizer.vocab.values())
+            except Exception as e:
+                print('exc vlm', e)
+                max_id = max(tokenizer.tokenizer.vocab.values())
+
+            if index.rootkey <= max_id:
                 print('WARNING: rootkey could interfere with model tokens (if using postgres index)')
-        except:
+        except Exception:
             print('WARNING: rootkey could interfere with model tokens (if using postgres index)')
 
-        num_batches = model_config.batch_size
-        num_beams = model_config.generate_args.get('num_beams', 1)
 
-        states_lol = [[ConstrainedState(
-                begin_pattern = model_config.switch_pattern,
-                end_pattern = model_config.newline_token,
-                cache_index = DictIndex(end_of_triple=index_config.index.end_of_triple),
-                subtree_cache = DictIndex(end_of_triple=index_config.index.end_of_triple),
-                debug = debug_states
-            ) for _ in range(num_beams)] 
-                for _ in range(num_batches)]
-
-        refactx.CONSTRAINED_STATES = ConstrainedStateList(states_lol,
-                    num_beams=num_beams,
-                    num_batches = num_batches,
-                    pad_token_id = model_config.tokenizer.eos_token_id,
-                    debug = debug_states,
-                    debug_tokenizer = model_config.tokenizer if debug_states else None
-                    )
-
-        constrained_processor = ConstrainedLogitsProcessor(
-            index=index_config.index,
-            end_token=model_config.newline_token,
-            states=refactx.CONSTRAINED_STATES,
-            tokenizer=model_config.tokenizer
-            )
-        logits_processor_list = LogitsProcessorList([
-            constrained_processor
-        ])
-        if unconstrained_generation:
+        if cfg.get("unconstrained_generation", False):
             logits_processor_list = LogitsProcessorList([])
+        else:
+            logits_processor_list = refactx.get_constrained_logits_processor(
+                tokenizer,
+                index,
+                cfg.get('num_beams', 1),
+                cfg.get('batch_size', 1),
+                cfg.get('avoid_duplicates', True)
+            )
 
-        dataloader = DataLoader(dataset, batch_size=model_config.batch_size, shuffle=False)
+        dataset = load_dataset(
+            cfg["dataset"],
+            revision=cfg.get("dataset_revision", None),
+            split=cfg.get("dataset_split", "train"),
+        )
 
-        # cache the prompt only when batch_size == 1 or the padding is right
-        # otherwise if padding left the prompt will change for each batch because of padding
-        cache_prompt = model_config.generate_args.get('use_cache', False) and (
-                    model_config.batch_size == 1 or model_config.tokenizer_args.get('padding_side')=='right')
+        dataloader = DataLoader(
+            dataset,
+            batch_size=cfg.get('batch_size', 1),
+            sampler=cfg.get('sampler', None)
+        )
 
-        patch_model(model_config.model)
-        model_config.model.eval()
+        try:
+            pad_token_id = tokenizer.pad_token_id
+        except Exception as e:
+            print('exc vlm pad_token_id', e)
+            pad_token_id = tokenizer.tokenizer.pad_token_id
+
+        patch_model(model)
+        model.eval()
+
         with torch.no_grad():
-
-            if cache_prompt:
-                # only cache the prompt if padding_size is right
-                prompt_cache = DynamicCache()
-                inputs_prompt_begin = model_config.tokenizer(
-                    [model_config.apply_prompt_template(PROMPT_TEMPLATE)] * model_config.batch_size * model_config.generate_args.get('num_beams', 1),
-                    return_tensors='pt',
-                    padding=False)
-                inputs_prompt_begin.to(model_config.model.device)
-
-                prompt_cache = model_config.model(
-                        **inputs_prompt_begin,
-                        use_cache=True,
-                        past_key_values=prompt_cache,
-                    ).past_key_values
-            else:
-                prompt_cache = None
+            prompt_cache = None
+            first_inputs = None
 
             for batch_number, batch in enumerate(tqdm(dataloader)):
-                if debug:
+                if cfg.get("debug", False):
                     print(f'\nBatch {batch_number}:')
-                    for question in batch:
-                        print(question)
-                prompted_batch = [model_config.apply_prompt_template(PROMPT_TEMPLATE, question) for question in batch]
+                    for q in batch:
+                        print(q)
 
-                refactx.CONSTRAINED_STATES.reset() # reset caches
+                prompted_batch = [refactx.apply_prompt_template(PROMPT_TEMPLATE, q, enable_thinking=cfg.get("thinking", False)) for q in batch]
 
-                batch_inputs = model_config.tokenize_fun(prompted_batch)
+                refactx.CONSTRAINED_STATES.reset()
 
-                if cache_prompt:
-                    if inputs_prompt_begin.input_ids.shape[0] != batch_inputs.input_ids.shape[0] * model_config.generate_args.get('num_beams', 1):
-                        # last batch can mismatch in dimensions wrt the prompt cache
-                        assert batch_number == len(dataloader) - 1
-                        # in this case do not use the cache
-                        past_key_values = None
-                    else:
-                        past_key_values = copy.deepcopy(prompt_cache)
-                else:
-                    past_key_values = None
+                batch_inputs = tokenizer(prompted_batch, return_tensors="pt").to(model.device)
 
-                if len(refactx.CONSTRAINED_STATES) != batch_inputs.input_ids.shape[0] * model_config.generate_args.get('num_beams', 1):
-                    assert batch_number == len(dataloader) - 1
-                    refactx.CONSTRAINED_STATES = refactx.CONSTRAINED_STATES[:batch_inputs.input_ids.shape[0], :model_config.generate_args.get('num_beams', 1)]
-                    constrained_processor.states = refactx.CONSTRAINED_STATES
+                if first_inputs is None:
+                    first_inputs = batch_inputs
 
-                output = model_config.model.generate(
+                output = model.generate(
                     **batch_inputs,
                     logits_processor=logits_processor_list,
-                    **model_config.generate_args,
-                    past_key_values=past_key_values,
+                    **cfg.get("generation_config", {}),
                 )
 
-                refactx.CONSTRAINED_STATES.beam_permutation() # final permutation to match final beams
+                refactx.CONSTRAINED_STATES.beam_permutation()
 
-                # iter all questions in the batch
-                for i, (question, prompted_question, output_i) in enumerate(zip(batch, prompted_batch, output)):
-                    full_prediction = model_config.tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):])
-                    prediction = model_config.get_prediction(full_prediction)
+                for i, (question, _, output_i) in enumerate(zip(batch, prompted_batch, output)):
+                    full_prediction = tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):])
+                    prediction = refactx.get_answer(full_prediction)
                     prediction_complete = bool(prediction)
-                    # TODO also save worse beams
 
-                    state = refactx.CONSTRAINED_STATES[i, 0] # first state of the batch is the best beam
+                    state = refactx.CONSTRAINED_STATES[i, 0]
 
                     new_tokens_generated = 0
-                    pad_token_id = model_config.generate_args.get('pad_token_id')
                     for token in output_i[len(batch_inputs.input_ids[0]):]:
                         if token == pad_token_id:
                             break
                         new_tokens_generated += 1
-                    reached_max_tokens = bool(output_i[len(batch_inputs.input_ids[0]):].shape[0] == model_config.generate_args.get('max_new_tokens') and output_i[-1] != pad_token_id)
+                    reached_max_tokens = bool(
+                        output_i[len(batch_inputs.input_ids[0]):].shape[0] == cfg.get('generation_config', {}).get('max_new_tokens')
+                        and output_i[-1] != pad_token_id
+                    )
 
                     sample = dict(
-                            question=question,
-                            answer_complete=prediction_complete,
-                            prediction=prediction,
-                            full_prediction=full_prediction,
-                            prompt=model_config.tokenizer.decode(output_i[:len(batch_inputs.input_ids[0])]),
-                            full_sample=model_config.tokenizer.decode(output_i),
-                            triples=list(map(model_config.tokenizer.decode, state.generated_triples)),
-                            new_tokens_generated=new_tokens_generated,
-                            reached_max_tokens=reached_max_tokens,
-                        )
+                        question=question,
+                        answer_complete=prediction_complete,
+                        prediction=prediction,
+                        full_prediction=full_prediction,
+                        prompt=tokenizer.decode(output_i[:len(batch_inputs.input_ids[0])]),
+                        full_sample=tokenizer.decode(output_i),
+                        triples=list(map(tokenizer.decode, state.generated_triples)),
+                        new_tokens_generated=new_tokens_generated,
+                        reached_max_tokens=reached_max_tokens,
+                    )
                     output_fd.write(json.dumps(sample) + '\n')
 
-                    if wandb:
+                    if cfg.get("wandb", False):
                         wandb.log(sample)
+
 
 if __name__ == "__main__":
     main()
