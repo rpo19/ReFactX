@@ -1,5 +1,6 @@
 from refactx.index import load_index, populate_postgres_index
 from refactx.prompt_base import PROMPT_TEMPLATE
+import json
 
 def apply_prompt_template(tokenizer, prompt_template=PROMPT_TEMPLATE, question=None, **kwargs):
     if question is None:
@@ -34,6 +35,14 @@ def _read_version_from_pyproject():
 	except Exception:
 		pass
 	return '0.0.0'
+
+def get_answer(full_answer):
+    answer_pattern = "Answer:"
+    if answer_pattern in full_answer:
+        answer_raw = full_answer.split(answer_pattern)[1]
+        answer = json.loads(answer_raw.strip())
+        return answer
+    return None
 
 __version__ = _read_version_from_pyproject()
 

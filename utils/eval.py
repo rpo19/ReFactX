@@ -1,7 +1,7 @@
 import torch
 from tqdm import tqdm
 from transformers import LogitsProcessorList
-from refactx import ConstrainedLogitsProcessor, ConstrainedStateList, ConstrainedState, DictIndex, patch_model
+from refactx import patch_model
 import refactx
 import json
 import importlib
@@ -102,13 +102,8 @@ def main(config_path):
     if output_file is None:
         output_file = os.path.join(cfg.get("log_dir", "."), f'{experiment_name}.out')
 
-    try:
-        prompt_length = tokenizer(refactx.apply_prompt_template(PROMPT_TEMPLATE),
-                        return_tensors='pt', padding=False)['input_ids'].shape[1]
-    except Exception as e:
-        print('exc vlm prompt length', e)
-        prompt_length = tokenizer.tokenizer(refactx.apply_prompt_template(PROMPT_TEMPLATE),
-                        return_tensors='pt', padding=False)['input_ids'].shape[1]
+    prompt_length = tokenizer(refactx.apply_prompt_template(PROMPT_TEMPLATE),
+                    return_tensors='pt', padding=False)['input_ids'].shape[1]
 
     index = refactx.load_index(cfg["index_data"], rootcert=cfg.get("http_rootcert"))
     index.set_tokenizer(tokenizer)
@@ -145,16 +140,7 @@ def main(config_path):
                 name=f"{experiment_name}_{get_utc_date_and_time()}",
             )
 
-        try:
-            try:
-                max_id = max(tokenizer.vocab.values())
-            except Exception as e:
-                print('exc vlm', e)
-                max_id = max(tokenizer.tokenizer.vocab.values())
-
-            if index.rootkey <= max_id:
-                print('WARNING: rootkey could interfere with model tokens (if using postgres index)')
-        except Exception:
+        if index.rootkey <= max(tokenizer.vocab.values()):
             print('WARNING: rootkey could interfere with model tokens (if using postgres index)')
 
 
@@ -181,11 +167,7 @@ def main(config_path):
             sampler=cfg.get('sampler', None)
         )
 
-        try:
-            pad_token_id = tokenizer.pad_token_id
-        except Exception as e:
-            print('exc vlm pad_token_id', e)
-            pad_token_id = tokenizer.tokenizer.pad_token_id
+        pad_token_id = tokenizer.pad_token_id
 
         patch_model(model)
         model.eval()
