@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 import torch
 from tqdm import tqdm
 from transformers import LogitsProcessorList
@@ -105,7 +106,19 @@ def main(config_path):
     prompt_length = tokenizer(refactx.apply_prompt_template(PROMPT_TEMPLATE),
                     return_tensors='pt', padding=False)['input_ids'].shape[1]
 
-    index = refactx.load_index(cfg["index_data"], rootcert=cfg.get("http_rootcert"))
+
+    print("Loading index...")
+    load_dotenv()
+    index_path = os.getenv("INDEX_PATH")
+    assert index_path is not None, 'ERROR: index must be provided via --index or INDEX_PATH environment variables.'
+
+    tablename = cfg.get("tablename", None)
+    assert tablename or 'tablename' in index_path, 'tablename must be provided in config or as part of index filename'
+
+    if tablename:
+        index_path = f'{index_path}?tablename={tablename}'
+
+    index = refactx.load_index(index_path, rootcert=cfg.get("http_rootcert"))
     index.set_tokenizer(tokenizer)
 
     metadata = {**cfg, 'date': get_utc_date_and_time(), 'prompt_length': prompt_length}
@@ -173,7 +186,6 @@ def main(config_path):
         model.eval()
 
         with torch.no_grad():
-            prompt_cache = None
             first_inputs = None
 
             for batch_number, batch in enumerate(tqdm(dataloader)):
