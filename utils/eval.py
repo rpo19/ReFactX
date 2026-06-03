@@ -66,10 +66,10 @@ def main(config_path):
     print("Loading tokenizer and model...")
     try:
         processor = None
-        tokenizer = AutoTokenizer.from_pretrained(cfg["model_name"])
+        tokenizer = AutoTokenizer.from_pretrained(cfg["model_name"], padding_side='left')
     except Exception as e:
         print('exc vlm', e)
-        processor = AutoProcessor.from_pretrained(cfg["model_name"])
+        processor = AutoProcessor.from_pretrained(cfg["model_name"], padding_side='left')
         tokenizer = processor.tokenizer
 
     device = cfg.get("device", "auto")
@@ -79,7 +79,7 @@ def main(config_path):
         else:
             model = AutoModelForCausalLM.from_pretrained(cfg["model_name"]).to(device)
     except Exception as e:
-        print('exc loading model, trying VLM path', e)
+        print('exc loading model, trying VLM path', type(e), e)
         if device == "auto":
             model = AutoModelForImageTextToText.from_pretrained(cfg["model_name"], device_map="auto")
         else:
@@ -89,8 +89,7 @@ def main(config_path):
     model.eval()
 
     if cfg.get("prompt"):
-        with open(cfg["prompt"]) as fd:
-            PROMPT_TEMPLATE = json.load(fd)
+        PROMPT_TEMPLATE = refactx.load_prompt(cfg["prompt"])
     else:
         PROMPT_TEMPLATE = None
         print(20 * '-', 'Using default prompt!')
@@ -103,7 +102,7 @@ def main(config_path):
     if output_file is None:
         output_file = os.path.join(cfg.get("log_dir", "."), f'{experiment_name}.out')
 
-    prompt_length = tokenizer(refactx.apply_prompt_template(PROMPT_TEMPLATE),
+    prompt_length = tokenizer(refactx.apply_prompt_template(tokenizer, PROMPT_TEMPLATE, "question"),
                     return_tensors='pt', padding=False)['input_ids'].shape[1]
 
 
@@ -121,7 +120,21 @@ def main(config_path):
     index = refactx.load_index(index_path, rootcert=cfg.get("http_rootcert"))
     index.set_tokenizer(tokenizer)
 
+    pad_token_id = tokenizer.pad_token_id
+    eos_token_id = tokenizer.eos_token_id
+
+    generation_config = cfg.get("generation_config", {})
+    if not 'pad_token_id' in generation_config:
+        generation_config['pad_token_id'] = pad_token_id
+        cfg['generation_config'] = generation_config
+
     metadata = {**cfg, 'date': get_utc_date_and_time(), 'prompt_length': prompt_length}
+
+    dataset = load_dataset(
+        cfg["dataset"],
+        revision=cfg.get("dataset_revision", None),
+        split=cfg.get("dataset_split", "train"),
+    )
 
     if cfg.get("continue", False):
         output_file, dataset_start_from = logrotate(output_file, len(dataset), metadata)
@@ -137,7 +150,7 @@ def main(config_path):
 
     if dataset_start_from > 0:
         output_file_mode = 'a'
-        dataset = dataset[dataset_start_from:]
+        dataset = dataset.select(range(dataset_start_from, len(dataset)))
     else:
         output_file_mode = 'w'
 
@@ -153,8 +166,8 @@ def main(config_path):
                 name=f"{experiment_name}_{get_utc_date_and_time()}",
             )
 
-        if index.rootkey <= max(tokenizer.vocab.values()):
-            print('WARNING: rootkey could interfere with model tokens (if using postgres index)')
+        if index.rootkey >= 0 and index.rootkey <= max(tokenizer.vocab.values()):
+            print(f'WARNING: rootkey ({index.rootkey}) could interfere with model tokens (if using postgres index)')
 
 
         if cfg.get("unconstrained_generation", False):
@@ -168,19 +181,11 @@ def main(config_path):
                 cfg.get('avoid_duplicates', True)
             )
 
-        dataset = load_dataset(
-            cfg["dataset"],
-            revision=cfg.get("dataset_revision", None),
-            split=cfg.get("dataset_split", "train"),
-        )
-
         dataloader = DataLoader(
             dataset,
             batch_size=cfg.get('batch_size', 1),
             sampler=cfg.get('sampler', None)
         )
-
-        pad_token_id = tokenizer.pad_token_id
 
         patch_model(model)
         model.eval()
@@ -194,11 +199,18 @@ def main(config_path):
                     for q in batch:
                         print(q)
 
-                prompted_batch = [refactx.apply_prompt_template(PROMPT_TEMPLATE, q, enable_thinking=cfg.get("thinking", False)) for q in batch]
+                prompted_batch = [
+                    refactx.apply_prompt_template(
+                        tokenizer,
+                        PROMPT_TEMPLATE,
+                        q,
+                        enable_thinking=cfg.get("thinking", False)
+                    ) for q in batch['question']]
 
-                refactx.CONSTRAINED_STATES.reset()
+                batch_inputs = tokenizer(prompted_batch, return_tensors="pt", padding=True).to(model.device)
 
-                batch_inputs = tokenizer(prompted_batch, return_tensors="pt").to(model.device)
+                refactx.get_constrained_states().reset()
+                logits_processor_list[0]._reinit_states_to_input_ids(batch_inputs['input_ids'])
 
                 if first_inputs is None:
                     first_inputs = batch_inputs
@@ -206,34 +218,40 @@ def main(config_path):
                 output = model.generate(
                     **batch_inputs,
                     logits_processor=logits_processor_list,
-                    **cfg.get("generation_config", {}),
+                    **generation_config,
                 )
 
-                refactx.CONSTRAINED_STATES.beam_permutation()
+                refactx.get_constrained_states().beam_permutation()
 
-                for i, (question, _, output_i) in enumerate(zip(batch, prompted_batch, output)):
-                    full_prediction = tokenizer.decode(output_i[len(batch_inputs.input_ids[0]):])
-                    prediction = refactx.get_answer(full_prediction)
-                    prediction_complete = bool(prediction)
+                for i, (question, _, output_i) in enumerate(zip(batch['question'], prompted_batch, output)):
+                    state = refactx.get_constrained_states()[i, 0]
 
-                    state = refactx.CONSTRAINED_STATES[i, 0]
+                    start_idx = len(batch_inputs.input_ids[0])
 
                     new_tokens_generated = 0
-                    for token in output_i[len(batch_inputs.input_ids[0]):]:
+                    end_idx = start_idx
+                    for token in output_i[start_idx:]:
                         if token == pad_token_id:
                             break
+                        if token == eos_token_id and end_idx == start_idx:
+                            # for removing imend, eos and padding tokens
+                            end_idx = start_idx + new_tokens_generated
                         new_tokens_generated += 1
                     reached_max_tokens = bool(
-                        output_i[len(batch_inputs.input_ids[0]):].shape[0] == cfg.get('generation_config', {}).get('max_new_tokens')
+                        output_i[start_idx:].shape[0] == generation_config.get('max_new_tokens')
                         and output_i[-1] != pad_token_id
                     )
+
+                    full_prediction = tokenizer.decode(output_i[start_idx:end_idx])
+                    prediction = refactx.get_answer(full_prediction)
+                    prediction_complete = bool(prediction)
 
                     sample = dict(
                         question=question,
                         answer_complete=prediction_complete,
                         prediction=prediction,
                         full_prediction=full_prediction,
-                        prompt=tokenizer.decode(output_i[:len(batch_inputs.input_ids[0])]),
+                        prompt=tokenizer.decode(output_i[:start_idx]),
                         full_sample=tokenizer.decode(output_i),
                         triples=list(map(tokenizer.decode, state.generated_triples)),
                         new_tokens_generated=new_tokens_generated,

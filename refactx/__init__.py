@@ -37,12 +37,28 @@ def _read_version_from_pyproject():
 	return '0.0.0'
 
 def get_answer(full_answer):
+
     answer_pattern = "Answer:"
+    answer = None
     if answer_pattern in full_answer:
         answer_raw = full_answer.split(answer_pattern)[1]
-        answer = json.loads(answer_raw.strip())
+        try:
+            answer = json.loads(answer_raw.strip())
+        except json.decoder.JSONDecodeError:
+             pass
         return answer
-    return None
+    return answer
+
+def load_prompt(path):
+    with open(path) as f:
+        system_prompt = f.read()
+    full_prompt = [
+        {
+                "role": "system",
+                    "content": system_prompt
+        }
+    ]
+    return full_prompt
 
 __version__ = _read_version_from_pyproject()
 

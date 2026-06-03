@@ -1,19 +1,22 @@
 {
     "experiment_name": "twowikimultihop_eval",
     "output": null,
-    "log_dir": ".",
-    "tablenmae": "qwen36",
+    "log_dir": "logs",
+    "tablename": "qwen36",
     "model_name": "Qwen/Qwen3.5-4B",
     "dataset": "xanhho/2WikiMultihopQA",
     "revision": "refs/convert/parquet",
     "split": "validation",
-    "prompt": "prompts/prompt_18122025.txt",
+    "prompt": "prompts/prompt_qwen36_mini2.txt",
     "wandb": false,
     "unconstrained_generation": false,
     "debug": false,
     "debug_states": false,
-    "continue": false,
+    "continue": true,
     "http_rootcert": null,
     "device": "auto",
-    "thinking": false
+    "thinking": false,
+    "num_beams": 1,
+    "batch_size": 4,
+    "generation_config": {"max_length": 1024, "do_sample": false}
 }
