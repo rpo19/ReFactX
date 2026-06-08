@@ -18,7 +18,7 @@ from datasets import load_dataset
 
 def eq_metadata(m1, m2):
     ignore_keys = set(["date"])
-	all_keys = set(m1.keys()).intersection(set(m2.keys())) - ignore_keys
+    all_keys = set(m1.keys()).intersection(set(m2.keys())) - ignore_keys
     return all(m1.get(k) == m2.get(k) for k in all_keys)
 
 def logrotate(file_name, dataset_length=None, metadata=None):
