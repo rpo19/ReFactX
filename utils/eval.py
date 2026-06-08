@@ -57,6 +57,20 @@ def import_module(path):
     return importlib.import_module(path)
 
 
+def calculate_metrics(prediction, input_sample, answer_key='answer'):
+    # Calculate precision, recall, and F1 score
+    if not bool(prediction):
+        return 0, 0, 0
+    reference = input_sample.get(answer_key, [])
+    if isinstance(reference, list):
+        reference = set(reference)
+    prediction_set = set(prediction)
+    precision = len(prediction_set & reference) / len(prediction_set) if prediction_set else 0
+    recall = len(prediction_set & reference) / len(reference) if reference else 0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0
+    return precision, recall, f1
+
+
 @click.command()
 @click.option("--config", "config_path", required=True, type=click.Path(exists=True), help="Path to JSON config file.")
 def main(config_path):
@@ -190,6 +204,12 @@ def main(config_path):
         patch_model(model)
         model.eval()
 
+        macro_evaluation = {
+            "precision": [],
+            "recall": [],
+            "f1": []
+        }
+
         with torch.no_grad():
             first_inputs = None
 
@@ -223,7 +243,7 @@ def main(config_path):
 
                 refactx.get_constrained_states().beam_permutation()
 
-                for i, (question, _, output_i) in enumerate(zip(batch['question'], prompted_batch, output)):
+                for i, (question, input_sample, output_i) in enumerate(zip(batch['question'], batch, output)):
                     state = refactx.get_constrained_states()[i, 0]
 
                     start_idx = len(batch_inputs.input_ids[0])
@@ -246,7 +266,14 @@ def main(config_path):
                     prediction = refactx.get_answer(full_prediction)
                     prediction_complete = bool(prediction)
 
+                    # calculate metrics p r f1
+                    precision, recall, f1 = calculate_metrics(prediction, input_sample, answer_key=cfg.get('answer_key', 'answer'))
+                    macro_evaluation["precision"].append(precision)
+                    macro_evaluation["recall"].append(recall)
+                    macro_evaluation["f1"].append(f1)
+
                     sample = dict(
+                        input_sample=input_sample,
                         question=question,
                         answer_complete=prediction_complete,
                         prediction=prediction,
@@ -256,12 +283,31 @@ def main(config_path):
                         triples=list(map(tokenizer.decode, state.generated_triples)),
                         new_tokens_generated=new_tokens_generated,
                         reached_max_tokens=reached_max_tokens,
+                        evaluation={
+                            "precision": precision,
+                            "recall": recall,
+                            "f1": f1,
+                        }
                     )
+
                     output_fd.write(json.dumps(sample) + '\n')
 
                     if cfg.get("wandb", False):
                         wandb.log(sample)
 
+                macro_precision = sum(macro_evaluation["precision"]) / len(macro_evaluation["precision"]) if macro_evaluation["precision"] else 0,
+                macro_recall = sum(macro_evaluation["recall"]) / len(macro_evaluation["recall"]) if macro_evaluation["recall"] else 0,
+                macro_f1 = sum(macro_evaluation["f1"]) / len(macro_evaluation["f1"]) if macro_evaluation["f1"] else 0,
+
+                macro_metrics = {
+                    "macro_precision": macro_precision,
+                    "macro_recall": macro_recall,
+                    "macro_f1": macro_f1,
+                }
+
+                output_fd.write(json.dumps(macro_metrics) + '\n')
+
+                wandb.log(macro_metrics)
 
 if __name__ == "__main__":
     main()
