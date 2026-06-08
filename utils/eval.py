@@ -61,11 +61,13 @@ def calculate_metrics(prediction, input_sample, answer_key='answer'):
     if not bool(prediction):
         return 0, 0, 0
     reference = input_sample.get(answer_key, [])
-    if isinstance(reference, list):
-        reference = set(reference)
+    if isinstance(reference, str):
+        reference = list(reference)
+    reference_set = set(reference)
+    assert isinstance(prediction, list)
     prediction_set = set(prediction)
-    precision = len(prediction_set & reference) / len(prediction_set) if prediction_set else 0
-    recall = len(prediction_set & reference) / len(reference) if reference else 0
+    precision = len(prediction_set & reference_set) / len(prediction_set) if prediction_set else 0
+    recall = len(prediction_set & reference_set) / len(reference_set) if reference_set else 0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0
     return precision, recall, f1
 
@@ -255,7 +257,8 @@ def main(config_path):
 
                 refactx.get_constrained_states().beam_permutation()
 
-                for i, (question, input_sample, output_i) in enumerate(zip(batch['question'], batch, output)):
+                for i, (question, output_i) in enumerate(zip(batch['question'], output)):
+                    input_sample = {k: batch[k][i] for k in batch}
                     state = refactx.get_constrained_states()[i, 0]
 
                     start_idx = len(batch_inputs.input_ids[0])
