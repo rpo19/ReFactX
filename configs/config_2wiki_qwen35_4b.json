@@ -5,10 +5,10 @@
     "tablename": "qwen36",
     "model_name": "Qwen/Qwen3.5-4B",
     "dataset": "xanhho/2WikiMultihopQA",
-    "revision": "refs/convert/parquet",
-    "split": "validation",
+    "dataset_revision": "refs/convert/parquet",
+    "dataset_split": "validation",
     "prompt": "prompts/prompt_qwen36_mini2.txt",
-    "wandb": false,
+    "wandb": true,
     "unconstrained_generation": false,
     "debug": false,
     "debug_states": false,
@@ -17,6 +17,6 @@
     "device": "auto",
     "thinking": false,
     "num_beams": 1,
-    "batch_size": 4,
+    "batch_size": 8,
     "generation_config": {"max_length": 1024, "do_sample": false}
 }

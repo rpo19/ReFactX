@@ -17,10 +17,9 @@ from datasets import load_dataset
 
 
 def eq_metadata(m1, m2):
-    keys = ['index_config_path', 'model_config_path', 'dataset_config_path',
-            'index_config', 'model_config', 'dataset_config']
-    return all(m1.get(k) == m2.get(k) for k in keys)
-
+    ignore_keys = set(["date"])
+	all_keys = set(m1.keys()).intersection(set(m2.keys())) - ignore_keys
+    return all(m1.get(k) == m2.get(k) for k in all_keys)
 
 def logrotate(file_name, dataset_length=None, metadata=None):
     idx = 0
@@ -87,17 +86,29 @@ def main(config_path):
         tokenizer = processor.tokenizer
 
     device = cfg.get("device", "auto")
+
+    dtype_map = {
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+        "float32": torch.float32,
+    }
+
+    torch_dtype = dtype_map.get(
+        cfg.get("model_dtype", "bfloat16"),
+        torch.bfloat16,
+    )
+
     try:
         if device == "auto":
-            model = AutoModelForCausalLM.from_pretrained(cfg["model_name"], device_map="auto")
+            model = AutoModelForCausalLM.from_pretrained(cfg["model_name"], device_map="auto", dtype=torch_dtype)
         else:
-            model = AutoModelForCausalLM.from_pretrained(cfg["model_name"]).to(device)
+            model = AutoModelForCausalLM.from_pretrained(cfg["model_name"], dtype=torch_dtype).to(device)
     except Exception as e:
         print('exc loading model, trying VLM path', type(e), e)
         if device == "auto":
-            model = AutoModelForImageTextToText.from_pretrained(cfg["model_name"], device_map="auto")
+            model = AutoModelForImageTextToText.from_pretrained(cfg["model_name"], device_map="auto", dtype=torch_dtype)
         else:
-            model = AutoModelForImageTextToText.from_pretrained(cfg["model_name"]).to(device)
+            model = AutoModelForImageTextToText.from_pretrained(cfg["model_name"], dtype=torch_dtype).to(device)
 
     patch_model(model)
     model.eval()
@@ -114,6 +125,7 @@ def main(config_path):
 
     output_file = cfg.get("output")
     if output_file is None:
+        os.makedirs(cfg.get("log_dir", "."), exist_ok=True)
         output_file = os.path.join(cfg.get("log_dir", "."), f'{experiment_name}.out')
 
     prompt_length = tokenizer(refactx.apply_prompt_template(tokenizer, PROMPT_TEMPLATE, "question"),

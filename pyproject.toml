@@ -25,8 +25,6 @@ torch = [
 	"torch",
 	"transformers>=5.3",
 	"accelerate",
-	"flash-linear-attention",
-	"causal-conv1d",
 ]
 httpindex = [
 	"flask",
