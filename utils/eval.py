@@ -59,10 +59,10 @@ def import_module(path):
 def calculate_metrics(prediction, input_sample, answer_key='answer', lowercase=True):
     # Calculate precision, recall, F1 score, boolean accuracy (1 correct or 0 error), i don't know
     if not bool(prediction):
-        return 0, 0, 0
+        return 0, 0, 0, 0, 0
     reference = input_sample.get(answer_key, [])
     if isinstance(reference, str):
-        reference = list(reference)
+        reference = [reference]
 
     assert isinstance(prediction, list)
     if lowercase:
@@ -298,6 +298,7 @@ def main(config_path):
 
                     sample = dict(
                         input_sample=input_sample,
+                        gt_answer=input_sample.get(cfg.get('answer_key', 'answer'), None),
                         question=question,
                         answer_complete=prediction_complete,
                         prediction=prediction,
