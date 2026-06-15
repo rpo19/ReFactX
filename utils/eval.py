@@ -56,20 +56,27 @@ def import_module(path):
     return importlib.import_module(path)
 
 
-def calculate_metrics(prediction, input_sample, answer_key='answer'):
-    # Calculate precision, recall, and F1 score
+def calculate_metrics(prediction, input_sample, answer_key='answer', lowercase=True):
+    # Calculate precision, recall, F1 score, boolean accuracy (1 correct or 0 error), i don't know
     if not bool(prediction):
         return 0, 0, 0
     reference = input_sample.get(answer_key, [])
     if isinstance(reference, str):
         reference = list(reference)
-    reference_set = set(reference)
+
     assert isinstance(prediction, list)
+    if lowercase:
+        prediction = [p.lower() for p in prediction]
+        reference = [r.lower() for r in reference]
+
+    reference_set = set(reference)
     prediction_set = set(prediction)
     precision = len(prediction_set & reference_set) / len(prediction_set) if prediction_set else 0
     recall = len(prediction_set & reference_set) / len(reference_set) if reference_set else 0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0
-    return precision, recall, f1
+    correct = int(prediction_set == reference_set)
+    dont_know = int("i don't know" in prediction[0].lower())
+    return precision, recall, f1, correct, dont_know
 
 
 @click.command()
@@ -282,10 +289,12 @@ def main(config_path):
                     prediction_complete = bool(prediction)
 
                     # calculate metrics p r f1
-                    precision, recall, f1 = calculate_metrics(prediction, input_sample, answer_key=cfg.get('answer_key', 'answer'))
+                    precision, recall, f1, correct, dont_know = calculate_metrics(prediction, input_sample, answer_key=cfg.get('answer_key', 'answer'))
                     macro_evaluation["precision"].append(precision)
                     macro_evaluation["recall"].append(recall)
                     macro_evaluation["f1"].append(f1)
+                    macro_evaluation["correct"].append(correct)
+                    macro_evaluation["dont_know"].append(dont_know)
 
                     sample = dict(
                         input_sample=input_sample,
@@ -302,6 +311,8 @@ def main(config_path):
                             "precision": precision,
                             "recall": recall,
                             "f1": f1,
+                            "correct": correct,
+                            "dont_know": dont_know
                         }
                     )
 
@@ -310,14 +321,43 @@ def main(config_path):
                     if cfg.get("wandb", False):
                         wandb.log(sample)
 
-                macro_precision = sum(macro_evaluation["precision"]) / len(macro_evaluation["precision"]) if macro_evaluation["precision"] else 0,
-                macro_recall = sum(macro_evaluation["recall"]) / len(macro_evaluation["recall"]) if macro_evaluation["recall"] else 0,
-                macro_f1 = sum(macro_evaluation["f1"]) / len(macro_evaluation["f1"]) if macro_evaluation["f1"] else 0,
+                macro_precision = sum(macro_evaluation["precision"]) / len(macro_evaluation["precision"]) if macro_evaluation["precision"] else 0
+                macro_recall = sum(macro_evaluation["recall"]) / len(macro_evaluation["recall"]) if macro_evaluation["recall"] else 0
+                macro_f1 = sum(macro_evaluation["f1"]) / len(macro_evaluation["f1"]) if macro_evaluation["f1"] else 0
+                macro_correct_accuracy = sum(macro_evaluation["correct"]) / len(macro_evaluation["correct"]) if macro_evaluation["correct"] else 0
+                macro_dont_know = sum(macro_evaluation["dont_know"]) / len(macro_evaluation["dont_know"]) if macro_evaluation["dont_know"] else 0
+                
+                
+                # metrics on the answered questions only (excluding "i don't know" answers)
+                macro_answered_precision = 0
+                macro_answered_recall = 0
+                macro_answered_f1 = 0
+                macro_answered_accuracy = 0
+                
+                answered_question_num = 0
+                for p, r, f1, correct, dont_know in zip(macro_evaluation["precision"], macro_evaluation["recall"], macro_evaluation["f1"], macro_evaluation["correct"], macro_evaluation["dont_know"]):
+                    if not dont_know:
+                        answered_question_num += 1
+                        macro_answered_precision += p
+                        macro_answered_recall += r
+                        macro_answered_f1 += f1
+                        macro_answered_accuracy += correct
+
+                macro_answered_precision /= answered_question_num if answered_question_num > 0 else 0
+                macro_answered_recall /= answered_question_num if answered_question_num > 0 else 0
+                macro_answered_f1 /= answered_question_num if answered_question_num > 0 else 0
+                macro_answered_accuracy /= answered_question_num if answered_question_num > 0 else 0
 
                 macro_metrics = {
                     "macro_precision": macro_precision,
                     "macro_recall": macro_recall,
                     "macro_f1": macro_f1,
+                    "macro_correct_accuracy": macro_correct_accuracy,
+                    "macro_dont_know": macro_dont_know,
+                    "macro_answered_precision": macro_answered_precision,
+                    "macro_answered_recall": macro_answered_recall,
+                    "macro_answered_f1": macro_answered_f1,
+                    "macro_answered_accuracy": macro_answered_accuracy
                 }
 
                 output_fd.write(json.dumps(macro_metrics) + '\n')
