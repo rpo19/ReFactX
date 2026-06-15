@@ -1,12 +1,13 @@
 #!/bin/bash
-#SBATCH --output=logs/refactx_%j.out
+#SBATCH --output=logs/refactx_populate_fb_%j.out
 #SBATCH --job-name=refactx_pg
 #SBATCH -N 1
-#SBATCH --error=logs/refactx_%j.err
 #SBATCH --time=24:00:00
 #SBATCH --mem=20G
 #SBATCH --cpus-per-task=1
 #SBATCH --gres=gpu:1
+
+exec 2>&1
 
 set -euo pipefail
 
