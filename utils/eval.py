@@ -171,6 +171,11 @@ def main(config_path):
         split=cfg.get("dataset_split", "train"),
     )
 
+    n = cfg.get("n", None)
+    if n is not None:
+        dataset = dataset.select(range(min(n, len(dataset))))
+        print(f'Limited dataset to first {n} samples.')
+
     if cfg.get("continue", False):
         output_file, dataset_start_from = logrotate(output_file, len(dataset), metadata)
     else:
@@ -228,7 +233,9 @@ def main(config_path):
         macro_evaluation = {
             "precision": [],
             "recall": [],
-            "f1": []
+            "f1": [],
+            "correct": [],
+            "dont_know": []
         }
 
         with torch.no_grad():
@@ -363,7 +370,8 @@ def main(config_path):
 
                 output_fd.write(json.dumps(macro_metrics) + '\n')
 
-                wandb.log(macro_metrics)
+                if cfg.get("wandb", False):
+                    wandb.log(macro_metrics)
 
 if __name__ == "__main__":
     main()
