@@ -9,8 +9,9 @@
 : "${PGPORT:=5432}"
 : "${ADDR_FILE:=$WS_PATH/postgres.addr}"
 : "${IMG:=$WS_PATH/postgres.sif}"
-: "${PGDATA:=$WS_PATH/pgdata}"
-: "${PGSOCK:=$WS_PATH/pgsocket}"
+_NODE=$(hostname -s 2>/dev/null || echo "unknown")
+: "${PGDATA:=$WS_PATH/pgdata-$_NODE}"
+: "${PGSOCK:=$WS_PATH/pgsocket-$_NODE}"
 
 ensure_postgres() {
   # 1) Reuse running Postgres if addr file + PID are alive
@@ -30,9 +31,20 @@ ensure_postgres() {
   NODE_HOST=$(hostname -A | awk '{print $1}')
   NODE_IP=$(hostname -I | awk '{print $1}')
 
-  # 3) Start Postgres
-  echo "Starting Postgres on port ${PGPORT}..."
+  # 3) Init PGDATA if needed
   mkdir -p "$PGDATA" "$PGSOCK"
+
+  if [ ! -f "$PGDATA/PG_VERSION" ]; then
+    echo "Initializing Postgres DB in $PGDATA..."
+    singularity exec \
+      -B "$PGDATA:/var/lib/postgresql/data" \
+      "$IMG" \
+      initdb -D /var/lib/postgresql/data --username=postgres
+    echo "local   all             all                                     trust" > "$PGDATA/pg_hba.conf"
+  fi
+
+  # 4) Start Postgres
+  echo "Starting Postgres on port ${PGPORT}..."
 
   singularity exec \
     -B "$PGDATA:/var/lib/postgresql/data" \
@@ -60,8 +72,18 @@ ensure_postgres() {
     sleep 2
   done
 
+  # 4b) Fallback: if Postgres died (race with another starter), reuse theirs
   if ! kill -0 "$PG_PID" 2>/dev/null; then
-    echo "FATAL: Postgres died during startup. Check $PGDATA/logfile"
+    echo "Postgres died during startup (likely another job claimed PGDATA)."
+    if [ -f "$ADDR_FILE" ]; then
+      source "$ADDR_FILE"
+      if [ -n "${PG_PID:-}" ] && kill -0 "$PG_PID" 2>/dev/null; then
+        echo "Reusing Postgres (PID $PG_PID) started by another job."
+        export PG_HOST PG_IP PG_PORT PGPASSWORD PG_SLURM_JOB_ID PG_PID
+        return 0
+      fi
+    fi
+    echo "FATAL: No running Postgres found. Check $PGDATA/logfile"
     return 1
   fi
 
