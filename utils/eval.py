@@ -221,10 +221,14 @@ def main(config_path):
                 cfg.get('avoid_duplicates', True)
             )
 
+        def collate_fn(batch):
+            return {key: [d[key] for d in batch] for key in batch[0]}
+
         dataloader = DataLoader(
             dataset,
             batch_size=cfg.get('batch_size', 1),
-            sampler=cfg.get('sampler', None)
+            sampler=cfg.get('sampler', None),
+            collate_fn=collate_fn,
         )
 
         patch_model(model)

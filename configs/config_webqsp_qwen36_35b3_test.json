@@ -1,0 +1,22 @@
+{
+    "experiment_name": "webqsp_test_eval_qwen36_35b",
+    "output": null,
+    "log_dir": "logs",
+    "tablename": "fbctriev6qwen",
+    "model_name": "Qwen/Qwen3.6-35B-A3B",
+    "model_dtype": "bfloat16",
+    "dataset": "rmanluo/RoG-webqsp",
+    "dataset_split": "test",
+    "prompt": "prompts/prompt_qwen36_mini2.txt",
+    "wandb": true,
+    "unconstrained_generation": false,
+    "debug": false,
+    "debug_states": false,
+    "continue": true,
+    "http_rootcert": null,
+    "device": "auto",
+    "thinking": false,
+    "num_beams": 1,
+    "batch_size": 16,
+    "generation_config": {"max_length": 1024, "do_sample": false}
+}
