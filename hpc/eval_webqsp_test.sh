@@ -11,31 +11,9 @@
 set -euo pipefail
 
 source "$SLURM_SUBMIT_DIR/hpc/env.sh"
+source "$SLURM_SUBMIT_DIR/hpc/postgres_utils.sh"
 
-# -----------------------
-# WAIT FOR POSTGRES ADDR FILE
-# -----------------------
-ADDR_FILE=$WS_PATH/postgres.addr
-
-echo "Waiting for Postgres address file ($ADDR_FILE)..."
-for i in $(seq 1 60); do
-  if [ -f "$ADDR_FILE" ]; then
-    source "$ADDR_FILE"
-    echo "Postgres is running at $PG_HOST:$PG_PORT (SLURM_JOB_ID=$PG_SLURM_JOB_ID)"
-    break
-  fi
-  sleep 10
-done
-
-if [ -z "${PG_HOST:-}" ]; then
-  echo "ERROR: Postgres address file not found after 10 minutes."
-  exit 1
-fi
-
-# -----------------------
-# RUN YOUR PIPELINE
-# -----------------------
-echo "Running evaluation..."
+ensure_postgres
 
 cd /home/ripo631h/ReFactX
 python -m utils.eval --config configs/config_webqsp_qwen36_35b3_test.json
