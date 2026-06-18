@@ -95,6 +95,9 @@ if [ ! -f "$PGDATA/PG_VERSION" ]; then
 
     echo "Setting postgres password..."
 
+    PGPASSWORD="${PGPASSWORD:-$(openssl rand -base64 32)}"
+    echo "Using PGPASSWORD: $PGPASSWORD"
+
     singularity exec \
         -B "$PGDATA:/var/lib/postgresql/data" \
         -B "$PGSOCK:/pgsocket" \
@@ -104,7 +107,7 @@ if [ ! -f "$PGDATA/PG_VERSION" ]; then
             -p "$PORT" \
             -U postgres \
             -d postgres \
-            -c "ALTER USER postgres WITH PASSWORD 'postgres';"
+            -c "ALTER USER postgres WITH PASSWORD '$PGPASSWORD';"
 
     cleanup
 

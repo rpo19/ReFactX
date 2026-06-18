@@ -10,47 +10,30 @@
 
 set -euo pipefail
 
-source env.sh
+source "$SLURM_SUBMIT_DIR/hpc/env.sh"
 
 # -----------------------
-# CONFIG
+# WAIT FOR POSTGRES ADDR FILE
 # -----------------------
-IMG=$WS_PATH/postgres.sif
-WORKDIR=$PWD
-PGDATA=$WS_PATH/pgdata
-PGSOCK=$WS_PATH/pgsocket
-PORT=5432
-DB=postgres
+ADDR_FILE=$WS_PATH/postgres.addr
 
-# -----------------------
-# 3. START POSTGRES
-# -----------------------
+echo "Waiting for Postgres address file ($ADDR_FILE)..."
+for i in $(seq 1 60); do
+  if [ -f "$ADDR_FILE" ]; then
+    source "$ADDR_FILE"
+    echo "Postgres is running at $PG_HOST:$PG_PORT (SLURM_JOB_ID=$PG_SLURM_JOB_ID)"
+    break
+  fi
+  sleep 10
+done
 
-singularity exec \
-  -B "$PGDATA:/var/lib/postgresql/data" \
-  -B "$PGSOCK:/pgsocket" \
-  "$IMG" \
-  postgres \
-    -D /var/lib/postgresql/data \
-    -p "$PORT" \
-    -k /pgsocket \
-  > "$PGDATA/logfile" 2>&1 &
-
-PG_PID=$!
-echo "Postgres PID: $PG_PID"
-
-
-# ---- cleanup function ----
-cleanup() {
-  echo "Stopping Postgres (PID $PG_PID)..."
-  kill "$PG_PID" 2>/dev/null || true
-  wait "$PG_PID" 2>/dev/null || true
-}
-
-trap cleanup EXIT INT TERM
+if [ -z "${PG_HOST:-}" ]; then
+  echo "ERROR: Postgres address file not found after 10 minutes."
+  exit 1
+fi
 
 # -----------------------
-# 4. RUN YOUR PIPELINE
+# RUN YOUR PIPELINE
 # -----------------------
 echo "Running evaluation..."
 
