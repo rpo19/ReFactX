@@ -40,14 +40,16 @@ ensure_postgres() {
       -B "$PGDATA:/var/lib/postgresql/data" \
       "$IMG" \
       initdb -D /var/lib/postgresql/data --username=postgres
-    cat > "$PGDATA/pg_hba.conf" <<- EOF
+  fi
+
+  # Always rewrite pg_hba.conf so stale PGDATA gets updated rules
+  cat > "$PGDATA/pg_hba.conf" <<- EOF
 local   all             all                                     trust
 host    all             all             127.0.0.1/32            trust
 host    all             all             ::1/128                 trust
 host    all             all             0.0.0.0/0               trust
 host    all             all             ::/0                    trust
 EOF
-  fi
 
   # 4) Start Postgres
   echo "Starting Postgres on port ${PGPORT}..."
