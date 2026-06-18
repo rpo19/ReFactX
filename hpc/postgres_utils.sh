@@ -68,22 +68,30 @@ EOF
   PG_PID=$!
 
   # 4) Wait for Postgres to accept connections
+  PG_READY=false
   for i in $(seq 1 30); do
+    # Check if OUR specific Postgres process is still alive
+    if ! kill -0 "$PG_PID" 2>/dev/null; then
+      echo "Our Postgres process (PID $PG_PID) died - likely another job claimed PGDATA."
+      break
+    fi
     if singularity exec \
       -B "$PGDATA:/var/lib/postgresql/data" \
       -B "$PGSOCK:/pgsocket" \
       "$IMG" \
       psql -h /pgsocket -p "$PGPORT" -U postgres -d postgres -c "SELECT 1;" 2>/dev/null; then
       echo "Postgres is ready (PID $PG_PID)"
+      PG_READY=true
       break
     fi
     sleep 2
   done
 
-  # 4b) Fallback: if Postgres died (race with another starter), reuse theirs
-  if ! kill -0 "$PG_PID" 2>/dev/null; then
-    echo "Postgres died during startup (likely another job claimed PGDATA)."
+  # 4b) Fallback: if Postgres didn't start (race with another starter), reuse theirs
+  if [ "$PG_READY" != "true" ]; then
+    echo "Postgres not ready. Checking for another job's Postgres..."
     if [ -f "$ADDR_FILE" ]; then
+      # shellcheck disable=SC1090
       source "$ADDR_FILE"
       if [ -n "${PG_PID:-}" ] && kill -0 "$PG_PID" 2>/dev/null; then
         echo "Reusing Postgres (PID $PG_PID) started by another job."
