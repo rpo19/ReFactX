@@ -30,6 +30,8 @@ ensure_postgres() {
     if [ "$REUSE" = true ]; then
       echo "Reusing Postgres (PID ${PG_PID:-unknown}) at ${PG_HOST:-localhost}:${PG_PORT:-5432}"
       export PG_HOST PG_IP PG_PORT PGPASSWORD PG_SLURM_JOB_ID PG_PID
+      export POSTGRES_CONNECTION="postgres://postgres:${PGPASSWORD:-postgres}@${PG_IP:-127.0.0.1}:${PG_PORT:-5432}/postgres"
+      export INDEX_PATH="$POSTGRES_CONNECTION"
       return 0
     fi
     echo "Stale addr file (PID ${PG_PID:-unknown}). Starting fresh..."
@@ -113,6 +115,7 @@ EOF
       if [ "$REUSE" = true ]; then
         echo "Reusing Postgres (PID $PG_PID) started by another job."
         export PG_HOST PG_IP PG_PORT PGPASSWORD PG_SLURM_JOB_ID PG_PID
+        export INDEX_PATH="postgres://postgres:${PGPASSWORD:-postgres}@${PG_IP:-127.0.0.1}:${PG_PORT:-5432}/postgres"
         return 0
       fi
     fi
@@ -126,17 +129,19 @@ EOF
 PG_HOST=$NODE_HOST
 PG_IP=$NODE_IP
 PG_PORT=$PGPORT
-PGPASSWORD=${PGPASSWORD:-}
+PGPASSWORD=${PGPASSWORD:-postgres}
 PG_SLURM_JOB_ID=$SLURM_JOB_ID
 PG_PID=$PG_PID
 EOF
   echo "Wrote $ADDR_FILE"
 
-  # 6) Export conn vars for caller
+  # 6) Export conn vars + INDEX_PATH for caller
   export PG_HOST="$NODE_HOST"
   export PG_IP="$NODE_IP"
   export PG_PORT="$PGPORT"
   export PG_PID
+  export POSTGRES_CONNECTION="postgres://postgres:${PGPASSWORD:-postgres}@${NODE_IP}:${PGPORT}/postgres"
+  export INDEX_PATH="$POSTGRES_CONNECTION"
 
   # 7) Cleanup: kill Postgres only when the starter exits
   _pg_cleanup() {
