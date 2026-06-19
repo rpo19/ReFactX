@@ -14,12 +14,21 @@ _NODE=$(hostname -s 2>/dev/null || echo "unknown")
 : "${PGSOCK:=$WS_PATH/pgsocket-$_NODE}"
 
 ensure_postgres() {
-  # 1) Reuse running Postgres if addr file + PID are alive
+  # 1) Reuse running Postgres if addr file + PID are alive (or TCP port open)
   if [ -f "$ADDR_FILE" ]; then
     # shellcheck disable=SC1090
     source "$ADDR_FILE"
+    REUSE=false
     if [ -n "${PG_PID:-}" ] && kill -0 "$PG_PID" 2>/dev/null; then
-      echo "Reusing Postgres (PID $PG_PID) at ${PG_HOST:-localhost}:${PG_PORT:-5432}"
+      REUSE=true
+    elif [ -n "${PG_HOST:-}" ] && [ -n "${PG_PORT:-}" ]; then
+      # Cross-node check: see if TCP port is open at the recorded IP
+      if timeout 2 bash -c "echo >/dev/tcp/$PG_HOST/$PG_PORT" 2>/dev/null; then
+        REUSE=true
+      fi
+    fi
+    if [ "$REUSE" = true ]; then
+      echo "Reusing Postgres (PID ${PG_PID:-unknown}) at ${PG_HOST:-localhost}:${PG_PORT:-5432}"
       export PG_HOST PG_IP PG_PORT PGPASSWORD PG_SLURM_JOB_ID PG_PID
       return 0
     fi
@@ -93,7 +102,15 @@ EOF
     if [ -f "$ADDR_FILE" ]; then
       # shellcheck disable=SC1090
       source "$ADDR_FILE"
+      REUSE=false
       if [ -n "${PG_PID:-}" ] && kill -0 "$PG_PID" 2>/dev/null; then
+        REUSE=true
+      elif [ -n "${PG_HOST:-}" ] && [ -n "${PG_PORT:-}" ]; then
+        if timeout 2 bash -c "echo >/dev/tcp/$PG_HOST/$PG_PORT" 2>/dev/null; then
+          REUSE=true
+        fi
+      fi
+      if [ "$REUSE" = true ]; then
         echo "Reusing Postgres (PID $PG_PID) started by another job."
         export PG_HOST PG_IP PG_PORT PGPASSWORD PG_SLURM_JOB_ID PG_PID
         return 0
