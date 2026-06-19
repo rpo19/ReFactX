@@ -14,6 +14,11 @@ _NODE=$(hostname -s 2>/dev/null || echo "unknown")
 : "${PGSOCK:=$WS_PATH/pgsocket-$_NODE}"
 
 ensure_postgres() {
+  # Random stagger (0-15s) when SHARED_POSTGRES is set to reduce race
+  if [ -n "${SHARED_POSTGRES:-}" ]; then
+    sleep $(( RANDOM % 15 ))
+  fi
+
   # 1) Reuse running Postgres if addr file + PID are alive (or TCP port open)
   if [ -f "$ADDR_FILE" ]; then
     # shellcheck disable=SC1090
@@ -98,27 +103,30 @@ EOF
     sleep 2
   done
 
-  # 4b) Fallback: if Postgres didn't start (race with another starter), reuse theirs
+  # 4b) Fallback: if Postgres didn't start (race with another starter), wait for addr file and reuse
   if [ "$PG_READY" != "true" ]; then
-    echo "Postgres not ready. Checking for another job's Postgres..."
-    if [ -f "$ADDR_FILE" ]; then
-      # shellcheck disable=SC1090
-      source "$ADDR_FILE"
-      REUSE=false
-      if [ -n "${PG_PID:-}" ] && kill -0 "$PG_PID" 2>/dev/null; then
-        REUSE=true
-      elif [ -n "${PG_HOST:-}" ] && [ -n "${PG_PORT:-}" ]; then
-        if timeout 2 bash -c "echo >/dev/tcp/$PG_HOST/$PG_PORT" 2>/dev/null; then
+    echo "Postgres not ready. Waiting for another job's Postgres..."
+    for i in $(seq 1 15); do
+      if [ -f "$ADDR_FILE" ]; then
+        # shellcheck disable=SC1090
+        source "$ADDR_FILE"
+        REUSE=false
+        if [ -n "${PG_PID:-}" ] && kill -0 "$PG_PID" 2>/dev/null; then
           REUSE=true
+        elif [ -n "${PG_HOST:-}" ] && [ -n "${PG_PORT:-}" ]; then
+          if timeout 2 bash -c "echo >/dev/tcp/$PG_HOST/$PG_PORT" 2>/dev/null; then
+            REUSE=true
+          fi
+        fi
+        if [ "$REUSE" = true ]; then
+          echo "Reusing Postgres (PID $PG_PID) started by another job."
+          export PG_HOST PG_IP PG_PORT PGPASSWORD PG_SLURM_JOB_ID PG_PID
+          export INDEX_PATH="postgres://postgres:${PGPASSWORD:-postgres}@${PG_IP:-127.0.0.1}:${PG_PORT:-5432}/postgres"
+          return 0
         fi
       fi
-      if [ "$REUSE" = true ]; then
-        echo "Reusing Postgres (PID $PG_PID) started by another job."
-        export PG_HOST PG_IP PG_PORT PGPASSWORD PG_SLURM_JOB_ID PG_PID
-        export INDEX_PATH="postgres://postgres:${PGPASSWORD:-postgres}@${PG_IP:-127.0.0.1}:${PG_PORT:-5432}/postgres"
-        return 0
-      fi
-    fi
+      sleep 2
+    done
     echo "FATAL: No running Postgres found. Check $PGDATA/logfile"
     return 1
   fi
@@ -150,5 +158,10 @@ EOF
     kill "$PG_PID" 2>/dev/null || true
     wait "$PG_PID" 2>/dev/null || true
   }
-  trap _pg_cleanup EXIT INT TERM
+  # Skip cleanup if SHARED_POSTGRES is in use (other jobs may still need it)
+  if [ -z "${SHARED_POSTGRES:-}" ]; then
+    trap _pg_cleanup EXIT INT TERM
+  else
+    echo "SHARED_POSTGRES mode: keeping Postgres alive for other jobs"
+  fi
 }
