@@ -333,49 +333,47 @@ def main(config_path):
                     if cfg.get("wandb", False):
                         wandb.log(sample)
 
-                macro_precision = sum(macro_evaluation["precision"]) / len(macro_evaluation["precision"]) if macro_evaluation["precision"] else 0
-                macro_recall = sum(macro_evaluation["recall"]) / len(macro_evaluation["recall"]) if macro_evaluation["recall"] else 0
-                macro_f1 = sum(macro_evaluation["f1"]) / len(macro_evaluation["f1"]) if macro_evaluation["f1"] else 0
-                macro_correct_accuracy = sum(macro_evaluation["correct"]) / len(macro_evaluation["correct"]) if macro_evaluation["correct"] else 0
-                macro_dont_know = sum(macro_evaluation["dont_know"]) / len(macro_evaluation["dont_know"]) if macro_evaluation["dont_know"] else 0
-                
-                
-                # metrics on the answered questions only (excluding "i don't know" answers)
-                macro_answered_precision = 0
-                macro_answered_recall = 0
-                macro_answered_f1 = 0
-                macro_answered_accuracy = 0
-                
-                answered_question_num = 0
-                for p, r, f1, correct, dont_know in zip(macro_evaluation["precision"], macro_evaluation["recall"], macro_evaluation["f1"], macro_evaluation["correct"], macro_evaluation["dont_know"]):
-                    if not dont_know:
-                        answered_question_num += 1
-                        macro_answered_precision += p
-                        macro_answered_recall += r
-                        macro_answered_f1 += f1
-                        macro_answered_accuracy += correct
+            macro_precision = sum(macro_evaluation["precision"]) / len(macro_evaluation["precision"]) if macro_evaluation["precision"] else 0
+            macro_recall = sum(macro_evaluation["recall"]) / len(macro_evaluation["recall"]) if macro_evaluation["recall"] else 0
+            macro_f1 = sum(macro_evaluation["f1"]) / len(macro_evaluation["f1"]) if macro_evaluation["f1"] else 0
+            macro_correct_accuracy = sum(macro_evaluation["correct"]) / len(macro_evaluation["correct"]) if macro_evaluation["correct"] else 0
+            macro_dont_know = sum(macro_evaluation["dont_know"]) / len(macro_evaluation["dont_know"]) if macro_evaluation["dont_know"] else 0
 
-                macro_answered_precision /= answered_question_num if answered_question_num > 0 else 0
-                macro_answered_recall /= answered_question_num if answered_question_num > 0 else 0
-                macro_answered_f1 /= answered_question_num if answered_question_num > 0 else 0
-                macro_answered_accuracy /= answered_question_num if answered_question_num > 0 else 0
+            macro_answered_precision = 0
+            macro_answered_recall = 0
+            macro_answered_f1 = 0
+            macro_answered_accuracy = 0
 
-                macro_metrics = {
-                    "macro_precision": macro_precision,
-                    "macro_recall": macro_recall,
-                    "macro_f1": macro_f1,
-                    "macro_correct_accuracy": macro_correct_accuracy,
-                    "macro_dont_know": macro_dont_know,
-                    "macro_answered_precision": macro_answered_precision,
-                    "macro_answered_recall": macro_answered_recall,
-                    "macro_answered_f1": macro_answered_f1,
-                    "macro_answered_accuracy": macro_answered_accuracy
-                }
+            answered_question_num = 0
+            for p, r, f1, correct, dont_know in zip(macro_evaluation["precision"], macro_evaluation["recall"], macro_evaluation["f1"], macro_evaluation["correct"], macro_evaluation["dont_know"]):
+                if not dont_know:
+                    answered_question_num += 1
+                    macro_answered_precision += p
+                    macro_answered_recall += r
+                    macro_answered_f1 += f1
+                    macro_answered_accuracy += correct
 
-                output_fd.write(json.dumps(macro_metrics) + '\n')
+            macro_answered_precision /= answered_question_num if answered_question_num > 0 else 0
+            macro_answered_recall /= answered_question_num if answered_question_num > 0 else 0
+            macro_answered_f1 /= answered_question_num if answered_question_num > 0 else 0
+            macro_answered_accuracy /= answered_question_num if answered_question_num > 0 else 0
 
-                if cfg.get("wandb", False):
-                    wandb.log(macro_metrics)
+            macro_metrics = {
+                "macro_precision": macro_precision,
+                "macro_recall": macro_recall,
+                "macro_f1": macro_f1,
+                "macro_correct_accuracy": macro_correct_accuracy,
+                "macro_dont_know": macro_dont_know,
+                "macro_answered_precision": macro_answered_precision,
+                "macro_answered_recall": macro_answered_recall,
+                "macro_answered_f1": macro_answered_f1,
+                "macro_answered_accuracy": macro_answered_accuracy
+            }
+
+            output_fd.write(json.dumps(macro_metrics) + '\n')
+
+            if cfg.get("wandb", False):
+                wandb.log(macro_metrics)
 
 if __name__ == "__main__":
     main()
