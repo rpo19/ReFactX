@@ -167,6 +167,7 @@ def main(config_path):
 
     dataset = load_dataset(
         cfg["dataset"],
+        cfg.get("dataset_config", None),
         revision=cfg.get("dataset_revision", None),
         split=cfg.get("dataset_split", "train"),
     )

@@ -27,3 +27,4 @@ build/
 *.swp
 opencode.json
 .opencode
+*.parquet
