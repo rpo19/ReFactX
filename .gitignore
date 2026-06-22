@@ -1,6 +1,5 @@
 **/venv
 *.pickle
-*.gz
 *.bz2
 *.zip
 **/__pycache__
