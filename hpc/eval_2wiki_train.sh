@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --output=logs/eval_webqsp_train_%j.out
-#SBATCH --job-name=refactx_webqsp_train
+#SBATCH --output=logs/eval_2wiki_train_%j.out
+#SBATCH --job-name=refactx_2wiki_train
 #SBATCH -N 1
-#SBATCH --error=logs/eval_webqsp_train_%j.err
+#SBATCH --error=logs/eval_2wiki_train_%j.err
 #SBATCH --time=73:00:00
 #SBATCH --mem=100G
 #SBATCH --cpus-per-task=1
@@ -25,6 +25,6 @@ if [ -f "$SHARED_POSTGRES" ]; then
     export POSTGRES_CONNECTION="$INDEX_PATH"
 fi
 
-python -m utils.eval --config configs/config_webqsp_qwen36_35b3_train.json
+python -m utils.eval --config configs/config_2wiki_qwen36_35b3_train.json
 
-teleclinotify "refactx_webqsp_train done | SLURM_JOB_ID=$SLURM_JOB_ID"
+teleclinotify "refactx_2wiki_train done | SLURM_JOB_ID=$SLURM_JOB_ID"
