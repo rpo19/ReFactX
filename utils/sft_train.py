@@ -1,6 +1,7 @@
 import json
 import argparse
 from pathlib import Path
+from collections import defaultdict
 
 import torch
 from datasets import Dataset
@@ -50,37 +51,113 @@ def locate_fact_ranges(text):
     return ranges
 
 
-def preprocess(samples, tokenizer, mask_triples=False, max_length=2048):
-    texts = [build_text(s) for s in samples]
-    enc = tokenizer(texts, truncation=True, max_length=max_length, padding=False)
-    input_ids_list = enc["input_ids"]
-    attention_mask_list = enc["attention_mask"]
+def calculate_metrics(prediction, input_sample, answer_key="answer", lowercase=True):
+    prediction_set = set()
+    for p in prediction:
+        p = str(p).strip()
+        if lowercase:
+            p = p.lower()
+        if p:
+            prediction_set.add(p)
 
-    labels_list = []
-    for i, (text, input_ids) in enumerate(zip(texts, input_ids_list)):
-        labels = input_ids.copy()
+    ground_truth = input_sample.get(answer_key, input_sample.get("gt_answer", ""))
+    if isinstance(ground_truth, str):
+        reference_set = {ground_truth.strip().lower() if lowercase else ground_truth.strip()}
+    elif isinstance(ground_truth, list):
+        reference_set = set()
+        for gt in ground_truth:
+            gt = str(gt).strip().lower() if lowercase else str(gt).strip()
+            if gt:
+                reference_set.add(gt)
+    else:
+        reference_set = {str(ground_truth).strip().lower() if lowercase else str(ground_truth).strip()}
 
-        prompt_len = len(tokenizer.encode(samples[i]["prompt"], add_special_tokens=False))
-        for j in range(prompt_len):
-            labels[j] = -100
+    dont_know = not prediction_set or "i don't know" in prediction_set
+    correct = 1 if prediction_set == reference_set else 0
 
-        if mask_triples:
-            fact_ranges = locate_fact_ranges(text)
-            for fr_start, fr_end in fact_ranges:
-                fr_tokens = tokenizer.encode(text[fr_start:fr_end], add_special_tokens=False)
-                tok_start = prompt_len
-        # Walk through the text character-by-character to find token offsets
-        char_offset = 0
-        tok_offset = prompt_len
-        for ch_idx, ch in enumerate(text):
-            if ch_idx == fr_start:
-                # found start of fact range in chars; map to tok_offset
-                pass
+    precision = len(prediction_set & reference_set) / len(prediction_set) if prediction_set else 0
+    recall = len(prediction_set & reference_set) / len(reference_set) if reference_set else 0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0
 
-        # Simpler approach: re-encode and align
-        labels_list.append(labels)
+    return precision, recall, f1, correct, dont_know
 
-    return enc
+
+def stratified_train_val_split(samples, val_ratio, stratify_keys):
+    groups = defaultdict(list)
+    for i, s in enumerate(samples):
+        key = tuple(str(s.get(k, "unknown")) for k in stratify_keys)
+        groups[key].append(i)
+
+    train_idx = []
+    val_idx = []
+    for key, indices in groups.items():
+        n = len(indices)
+        n_val = max(1, round(n * val_ratio))
+        val_idx.extend(indices[:n_val])
+        train_idx.extend(indices[n_val:])
+
+    train_samples = [samples[i] for i in train_idx]
+    val_samples = [samples[i] for i in val_idx]
+    return train_samples, val_samples
+
+
+def generate_answer(model, tokenizer, prompt, max_new_tokens=256):
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
+    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+    generated = outputs[0][inputs["input_ids"].shape[1]:]
+    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+
+def evaluate(model, tokenizer, val_samples, args):
+    model.eval()
+    metrics_by_type = defaultdict(lambda: {"precision": [], "recall": [], "f1": [], "correct": [], "dont_know": []})
+    overall = {"precision": [], "recall": [], "f1": [], "correct": [], "dont_know": []}
+
+    for s in val_samples:
+        pred_text = generate_answer(model, tokenizer, s["prompt"])
+        prediction = [pred_text]
+        precision, recall, f1, correct, dont_know = calculate_metrics(prediction, s)
+
+        overall["precision"].append(precision)
+        overall["recall"].append(recall)
+        overall["f1"].append(f1)
+        overall["correct"].append(correct)
+        overall["dont_know"].append(dont_know)
+
+        qtype = s.get("complexityType", "unknown")
+        origin = s.get("dataset", "unknown")
+        for key in [qtype, origin]:
+            metrics_by_type[key]["precision"].append(precision)
+            metrics_by_type[key]["recall"].append(recall)
+            metrics_by_type[key]["f1"].append(f1)
+            metrics_by_type[key]["correct"].append(correct)
+            metrics_by_type[key]["dont_know"].append(dont_know)
+
+    def avg(lst):
+        return sum(lst) / len(lst) if lst else 0.0
+
+    results = {
+        "val_precision": avg(overall["precision"]),
+        "val_recall": avg(overall["recall"]),
+        "val_f1": avg(overall["f1"]),
+        "val_accuracy": avg(overall["correct"]),
+        "val_dont_know_rate": avg(overall["dont_know"]),
+    }
+
+    for group_name, group_metrics in sorted(metrics_by_type.items()):
+        results[f"val_{group_name}_f1"] = avg(group_metrics["f1"])
+        results[f"val_{group_name}_accuracy"] = avg(group_metrics["correct"])
+        results[f"val_{group_name}_count"] = len(group_metrics["f1"])
+
+    return results
 
 
 def main():
@@ -104,6 +181,10 @@ def main():
     parser.add_argument("--weight-decay", type=float, default=0.0, help="Weight decay for optimizer")
     parser.add_argument("--optim", default="adamw_torch", help="Optimizer type")
     parser.add_argument("--betas", type=float, nargs=2, default=[0.9, 0.999], metavar=("BETA1", "BETA2"), help="Adam betas")
+    parser.add_argument("--val-split", type=float, default=0.1, help="Validation split ratio")
+    parser.add_argument("--report-to", default="wandb", help="Reporting destination (wandb, none)")
+    parser.add_argument("--wandb-project", default="sft_training", help="Wandb project name")
+    parser.add_argument("--wandb-run-name", default=None, help="Wandb run name")
     args = parser.parse_args()
 
     if args.config:
@@ -116,6 +197,15 @@ def main():
     print(f"Loading data: {args.data}")
     samples = load_jsonl(args.data)
     print(f"  {len(samples)} samples loaded")
+
+    if args.val_split > 0:
+        train_samples, val_samples = stratified_train_val_split(
+            samples, args.val_split, stratify_keys=["dataset", "complexityType"]
+        )
+        print(f"  Train: {len(train_samples)}, Val: {len(val_samples)} (stratified by dataset, complexityType)")
+    else:
+        train_samples = samples
+        val_samples = []
 
     print(f"Loading tokenizer: {args.model_name}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
@@ -143,15 +233,15 @@ def main():
     model.print_trainable_parameters()
 
     print("Tokenizing...")
-    texts = [build_text(s) for s in samples]
-    prompt_texts = [s["prompt"] for s in samples]
+    texts = [build_text(s) for s in train_samples]
+    prompt_texts = [s["prompt"] for s in train_samples]
     enc = tokenizer(texts, truncation=True, max_length=args.max_length, padding=False, add_special_tokens=True)
 
     input_ids_list = enc["input_ids"]
     labels_list = []
     masked_triple_count = 0
 
-    for i in range(len(samples)):
+    for i in range(len(train_samples)):
         input_ids = input_ids_list[i]
         labels = input_ids.copy()
         full_text = texts[i]
@@ -163,13 +253,12 @@ def main():
             labels[j] = -100
 
         if args.mask_triples:
-            fact_ranges = locate_fact_ranges(samples[i]["full_prediction"])
+            fact_ranges = locate_fact_ranges(train_samples[i]["full_prediction"])
             if fact_ranges:
                 masked_triple_count += len(fact_ranges)
             for fr_start, fr_end in fact_ranges:
-                fact_text = samples[i]["full_prediction"][fr_start:fr_end]
-                # Offset: full_prediction starts after the prompt
-                fp_offset = len(samples[i]["prompt"])
+                fact_text = train_samples[i]["full_prediction"][fr_start:fr_end]
+                fp_offset = len(train_samples[i]["prompt"])
                 global_start = fp_offset + fr_start
                 global_end = fp_offset + fr_end
                 prefix_ids = tokenizer.encode(full_text[:global_start], add_special_tokens=False)
@@ -183,13 +272,15 @@ def main():
         labels_list.append(labels)
 
     if args.mask_triples:
-        print(f"  Masked {masked_triple_count} Fact: lines across {len(samples)} samples")
+        print(f"  Masked {masked_triple_count} Fact: lines across {len(train_samples)} samples")
 
     dataset = Dataset.from_dict({
         "input_ids": input_ids_list,
         "attention_mask": enc["attention_mask"],
         "labels": labels_list,
     })
+
+    report_to = args.report_to if args.report_to != "none" else "none"
 
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -203,13 +294,14 @@ def main():
         logging_steps=args.logging_steps,
         bf16=True,
         gradient_checkpointing=True,
-        report_to="none",
+        report_to=report_to,
         remove_unused_columns=False,
         dataloader_num_workers=0,
         weight_decay=args.weight_decay,
         optim=args.optim,
         adam_beta1=args.betas[0],
         adam_beta2=args.betas[1],
+        run_name=args.wandb_run_name,
     )
 
     data_collator = DataCollatorForSeq2Seq(tokenizer, pad_to_multiple_of=8)
@@ -222,10 +314,25 @@ def main():
     )
 
     print("\nStarting training...")
-    trainer.train()
+    train_result = trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     print(f"\nModel saved to {args.output_dir}")
+
+    if val_samples:
+        print(f"\nEvaluating on {len(val_samples)} validation samples...")
+        val_metrics = evaluate(model, tokenizer, val_samples, args)
+
+        print("\nValidation Results:")
+        for k, v in sorted(val_metrics.items()):
+            if isinstance(v, float):
+                print(f"  {k}: {v:.4f}")
+            else:
+                print(f"  {k}: {v}")
+
+        if args.report_to == "wandb":
+            import wandb
+            wandb.log(val_metrics)
 
 
 if __name__ == "__main__":
