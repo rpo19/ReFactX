@@ -51,37 +51,6 @@ def locate_fact_ranges(text):
     return ranges
 
 
-def calculate_metrics(prediction, input_sample, answer_key="answer", lowercase=True):
-    prediction_set = set()
-    for p in prediction:
-        p = str(p).strip()
-        if lowercase:
-            p = p.lower()
-        if p:
-            prediction_set.add(p)
-
-    ground_truth = input_sample.get(answer_key, input_sample.get("gt_answer", ""))
-    if isinstance(ground_truth, str):
-        reference_set = {ground_truth.strip().lower() if lowercase else ground_truth.strip()}
-    elif isinstance(ground_truth, list):
-        reference_set = set()
-        for gt in ground_truth:
-            gt = str(gt).strip().lower() if lowercase else str(gt).strip()
-            if gt:
-                reference_set.add(gt)
-    else:
-        reference_set = {str(ground_truth).strip().lower() if lowercase else str(ground_truth).strip()}
-
-    dont_know = not prediction_set or "i don't know" in prediction_set
-    correct = 1 if prediction_set == reference_set else 0
-
-    precision = len(prediction_set & reference_set) / len(prediction_set) if prediction_set else 0
-    recall = len(prediction_set & reference_set) / len(reference_set) if reference_set else 0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0
-
-    return precision, recall, f1, correct, dont_know
-
-
 def stratified_train_val_split(samples, val_ratio, stratify_keys):
     groups = defaultdict(list)
     for i, s in enumerate(samples):
@@ -101,63 +70,53 @@ def stratified_train_val_split(samples, val_ratio, stratify_keys):
     return train_samples, val_samples
 
 
-def generate_answer(model, tokenizer, prompt, max_new_tokens=256):
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-    generated = outputs[0][inputs["input_ids"].shape[1]:]
-    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+def tokenize_split(samples, tokenizer, args, is_train=True):
+    texts = [build_text(s) for s in samples]
+    prompt_texts = [s["prompt"] for s in samples]
+    enc = tokenizer(texts, truncation=True, max_length=args.max_length, padding=False, add_special_tokens=True)
 
+    input_ids_list = enc["input_ids"]
+    labels_list = []
+    masked_triple_count = 0
 
-def evaluate(model, tokenizer, val_samples, args):
-    model.eval()
-    metrics_by_type = defaultdict(lambda: {"precision": [], "recall": [], "f1": [], "correct": [], "dont_know": []})
-    overall = {"precision": [], "recall": [], "f1": [], "correct": [], "dont_know": []}
+    for i in range(len(samples)):
+        input_ids = input_ids_list[i]
+        labels = input_ids.copy()
+        full_text = texts[i]
+        prompt_text = prompt_texts[i]
 
-    for s in val_samples:
-        pred_text = generate_answer(model, tokenizer, s["prompt"])
-        prediction = [pred_text]
-        precision, recall, f1, correct, dont_know = calculate_metrics(prediction, s)
+        prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+        prompt_len = len(prompt_ids)
+        for j in range(min(prompt_len, len(labels))):
+            labels[j] = -100
 
-        overall["precision"].append(precision)
-        overall["recall"].append(recall)
-        overall["f1"].append(f1)
-        overall["correct"].append(correct)
-        overall["dont_know"].append(dont_know)
+        if is_train and args.mask_triples:
+            fact_ranges = locate_fact_ranges(samples[i]["full_prediction"])
+            if fact_ranges:
+                masked_triple_count += len(fact_ranges)
+            for fr_start, fr_end in fact_ranges:
+                fact_text = samples[i]["full_prediction"][fr_start:fr_end]
+                fp_offset = len(samples[i]["prompt"])
+                global_start = fp_offset + fr_start
+                global_end = fp_offset + fr_end
+                prefix_ids = tokenizer.encode(full_text[:global_start], add_special_tokens=False)
+                tok_start = len(prefix_ids)
+                fact_ids = tokenizer.encode(fact_text, add_special_tokens=False)
+                tok_end = tok_start + len(fact_ids)
+                for j in range(tok_start, min(tok_end, len(labels))):
+                    if labels[j] != -100:
+                        labels[j] = -100
 
-        qtype = s.get("complexityType", "unknown")
-        origin = s.get("dataset", "unknown")
-        for key in [qtype, origin]:
-            metrics_by_type[key]["precision"].append(precision)
-            metrics_by_type[key]["recall"].append(recall)
-            metrics_by_type[key]["f1"].append(f1)
-            metrics_by_type[key]["correct"].append(correct)
-            metrics_by_type[key]["dont_know"].append(dont_know)
+        labels_list.append(labels)
 
-    def avg(lst):
-        return sum(lst) / len(lst) if lst else 0.0
+    if is_train and args.mask_triples:
+        print(f"  Masked {masked_triple_count} Fact: lines across {len(samples)} samples")
 
-    results = {
-        "val_precision": avg(overall["precision"]),
-        "val_recall": avg(overall["recall"]),
-        "val_f1": avg(overall["f1"]),
-        "val_accuracy": avg(overall["correct"]),
-        "val_dont_know_rate": avg(overall["dont_know"]),
-    }
-
-    for group_name, group_metrics in sorted(metrics_by_type.items()):
-        results[f"val_{group_name}_f1"] = avg(group_metrics["f1"])
-        results[f"val_{group_name}_accuracy"] = avg(group_metrics["correct"])
-        results[f"val_{group_name}_count"] = len(group_metrics["f1"])
-
-    return results
+    return Dataset.from_dict({
+        "input_ids": input_ids_list,
+        "attention_mask": enc["attention_mask"],
+        "labels": labels_list,
+    })
 
 
 def main():
@@ -175,6 +134,7 @@ def main():
     parser.add_argument("--max-steps", type=int, default=None, help="Max training steps (overrides epochs)")
     parser.add_argument("--save-steps", type=int, default=50, help="Save checkpoint every N steps")
     parser.add_argument("--logging-steps", type=int, default=10, help="Log every N steps")
+    parser.add_argument("--eval-steps", type=int, default=50, help="Evaluate every N steps")
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
     parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout")
@@ -232,53 +192,13 @@ def main():
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
 
-    print("Tokenizing...")
-    texts = [build_text(s) for s in train_samples]
-    prompt_texts = [s["prompt"] for s in train_samples]
-    enc = tokenizer(texts, truncation=True, max_length=args.max_length, padding=False, add_special_tokens=True)
-
-    input_ids_list = enc["input_ids"]
-    labels_list = []
-    masked_triple_count = 0
-
-    for i in range(len(train_samples)):
-        input_ids = input_ids_list[i]
-        labels = input_ids.copy()
-        full_text = texts[i]
-        prompt_text = prompt_texts[i]
-
-        prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
-        prompt_len = len(prompt_ids)
-        for j in range(min(prompt_len, len(labels))):
-            labels[j] = -100
-
-        if args.mask_triples:
-            fact_ranges = locate_fact_ranges(train_samples[i]["full_prediction"])
-            if fact_ranges:
-                masked_triple_count += len(fact_ranges)
-            for fr_start, fr_end in fact_ranges:
-                fact_text = train_samples[i]["full_prediction"][fr_start:fr_end]
-                fp_offset = len(train_samples[i]["prompt"])
-                global_start = fp_offset + fr_start
-                global_end = fp_offset + fr_end
-                prefix_ids = tokenizer.encode(full_text[:global_start], add_special_tokens=False)
-                tok_start = len(prefix_ids)
-                fact_ids = tokenizer.encode(fact_text, add_special_tokens=False)
-                tok_end = tok_start + len(fact_ids)
-                for j in range(tok_start, min(tok_end, len(labels))):
-                    if labels[j] != -100:
-                        labels[j] = -100
-
-        labels_list.append(labels)
-
-    if args.mask_triples:
-        print(f"  Masked {masked_triple_count} Fact: lines across {len(train_samples)} samples")
-
-    dataset = Dataset.from_dict({
-        "input_ids": input_ids_list,
-        "attention_mask": enc["attention_mask"],
-        "labels": labels_list,
-    })
+    print("Tokenizing train split...")
+    train_dataset = tokenize_split(train_samples, tokenizer, args, is_train=True)
+    if val_samples:
+        print("Tokenizing val split...")
+        val_dataset = tokenize_split(val_samples, tokenizer, args, is_train=False)
+    else:
+        val_dataset = None
 
     report_to = args.report_to if args.report_to != "none" else "none"
 
@@ -291,6 +211,8 @@ def main():
         max_steps=args.max_steps if args.max_steps is not None else 0,
         save_strategy="steps",
         save_steps=args.save_steps,
+        evaluation_strategy="steps",
+        eval_steps=args.eval_steps,
         logging_steps=args.logging_steps,
         bf16=True,
         gradient_checkpointing=True,
@@ -309,30 +231,16 @@ def main():
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
         data_collator=data_collator,
     )
 
     print("\nStarting training...")
-    train_result = trainer.train()
+    trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     print(f"\nModel saved to {args.output_dir}")
-
-    if val_samples:
-        print(f"\nEvaluating on {len(val_samples)} validation samples...")
-        val_metrics = evaluate(model, tokenizer, val_samples, args)
-
-        print("\nValidation Results:")
-        for k, v in sorted(val_metrics.items()):
-            if isinstance(v, float):
-                print(f"  {k}: {v:.4f}")
-            else:
-                print(f"  {k}: {v}")
-
-        if args.report_to == "wandb":
-            import wandb
-            wandb.log(val_metrics)
 
 
 if __name__ == "__main__":
