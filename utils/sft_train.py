@@ -207,13 +207,16 @@ def main():
 
     report_to = args.report_to if args.report_to != "none" else "none"
 
-    training_args = TrainingArguments(
+    kwargs = dict(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.lr,
-        num_train_epochs=args.epochs if args.max_steps is None else 1e10,
-        max_steps=args.max_steps if args.max_steps is not None else 0,
+        num_train_epochs=args.epochs if args.max_steps is None else 1e10,)
+    if args.max_steps is not None:
+        kwargs["max_steps"] = args.max_steps
+
+    training_args = TrainingArguments(**kwargs,
         save_strategy="steps",
         save_steps=args.save_steps,
         eval_strategy="steps",
