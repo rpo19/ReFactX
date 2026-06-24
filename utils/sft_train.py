@@ -1,3 +1,4 @@
+import os
 import json
 import argparse
 from pathlib import Path
@@ -123,7 +124,7 @@ def main():
     parser = argparse.ArgumentParser(description="SFT on positive training samples")
     parser.add_argument("--config", default=None, help="JSON config file (overrides CLI defaults)")
     parser.add_argument("--data", default="logs/positive_training_samples.jsonl", help="Input JSONL (filtered positive samples)")
-    parser.add_argument("--output-dir", default="./sft_output", help="Output directory")
+    parser.add_argument("--output-dir", default=None, help="Output directory (default: $WS_PATH/sft_output or ./sft_output)")
     parser.add_argument("--model-name", default="Qwen/Qwen3.5-0.8B", help="Base model")
     parser.add_argument("--mask-triples", action="store_true", help="Mask loss on Fact: lines")
     parser.add_argument("--max-length", type=int, default=2048, help="Max sequence length")
@@ -153,6 +154,10 @@ def main():
         for k, v in cfg.items():
             if hasattr(args, k) and v is not None:
                 setattr(args, k, v)
+
+    if args.output_dir is None:
+        ws_path = os.environ.get("WS_PATH")
+        args.output_dir = f"{ws_path}/sft_output" if ws_path else "./sft_output"
 
     print(f"Loading data: {args.data}")
     samples = load_jsonl(args.data)
