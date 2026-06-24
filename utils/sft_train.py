@@ -211,7 +211,7 @@ def main():
         max_steps=args.max_steps if args.max_steps is not None else 0,
         save_strategy="steps",
         save_steps=args.save_steps,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=args.eval_steps,
         logging_steps=args.logging_steps,
         bf16=True,
