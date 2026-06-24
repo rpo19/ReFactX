@@ -85,6 +85,7 @@ def preprocess(samples, tokenizer, mask_triples=False, max_length=2048):
 
 def main():
     parser = argparse.ArgumentParser(description="SFT on positive training samples")
+    parser.add_argument("--config", default=None, help="JSON config file (overrides CLI defaults)")
     parser.add_argument("--data", default="logs/positive_training_samples.jsonl", help="Input JSONL (filtered positive samples)")
     parser.add_argument("--output-dir", default="./sft_output", help="Output directory")
     parser.add_argument("--model-name", default="Qwen/Qwen3.5-0.8B", help="Base model")
@@ -100,7 +101,17 @@ def main():
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
     parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout")
+    parser.add_argument("--weight-decay", type=float, default=0.0, help="Weight decay for optimizer")
+    parser.add_argument("--optim", default="adamw_torch", help="Optimizer type")
+    parser.add_argument("--betas", type=float, nargs=2, default=[0.9, 0.999], metavar=("BETA1", "BETA2"), help="Adam betas")
     args = parser.parse_args()
+
+    if args.config:
+        with open(args.config) as f:
+            cfg = json.load(f)
+        for k, v in cfg.items():
+            if hasattr(args, k) and v is not None:
+                setattr(args, k, v)
 
     print(f"Loading data: {args.data}")
     samples = load_jsonl(args.data)
@@ -195,6 +206,10 @@ def main():
         report_to="none",
         remove_unused_columns=False,
         dataloader_num_workers=0,
+        weight_decay=args.weight_decay,
+        optim=args.optim,
+        adam_beta1=args.betas[0],
+        adam_beta2=args.betas[1],
     )
 
     data_collator = DataCollatorForSeq2Seq(tokenizer, pad_to_multiple_of=8)

@@ -1,0 +1,21 @@
+{
+    "_description": "SFT training config for fact-grounded QA",
+    "model_name": "Qwen/Qwen3.5-0.8B",
+    "output_dir": "./sft_output",
+    "data": "logs/positive_training_samples.jsonl",
+    "mask_triples": true,
+    "max_length": 2048,
+    "batch_size": 16,
+    "grad_accum": 1,
+    "lr": 2e-5,
+    "epochs": 2,
+    "max_steps": null,
+    "save_steps": 100,
+    "logging_steps": 10,
+    "lora_r": 8,
+    "lora_alpha": 16,
+    "lora_dropout": 0.05,
+    "weight_decay": 0.01,
+    "optim": "adamw_torch",
+    "betas": [0.9, 0.999]
+}

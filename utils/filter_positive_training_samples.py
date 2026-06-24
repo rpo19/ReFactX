@@ -80,10 +80,10 @@ def type_distribution_report(samples, type_field='complexityType'):
     return dist
 
 
-def to_output_format(samples):
+def to_output_format(samples, type_field='complexityType'):
     result = []
     for s in samples:
-        result.append({
+        row = {
             "question": s["question"],
             "gt_answer": s["gt_answer"],
             "prediction": s["prediction"],
@@ -92,10 +92,12 @@ def to_output_format(samples):
             "triples": s["triples"],
             "dataset": s["_dataset"],
             "dataset_split": s["_dataset_split"],
-            "complexityType": s['input_sample'].get('complexityType'),
-            "category": s['input_sample'].get('category'),
             "evaluation": s["evaluation"],
-        })
+        }
+        row[type_field] = s['input_sample'].get(type_field)
+        if 'category' in s['input_sample']:
+            row['category'] = s['input_sample'].get('category')
+        result.append(row)
     return result
 
 
@@ -132,7 +134,7 @@ def main():
         samples = stratify_by_type(samples, target_per_type=args.target_per_type, total=args.n, seed=args.seed, type_field=args.type_field)
         print(f"  After stratification: {len(samples)}")
 
-    output = to_output_format(samples)
+    output = to_output_format(samples, args.type_field)
 
     raw_dist = type_distribution(samples, args.type_field)
     grouped = defaultdict(dict)
