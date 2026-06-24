@@ -10,9 +10,9 @@
     "lr": 2e-5,
     "epochs": 2,
     "max_steps": null,
-    "save_steps": 100,
-    "logging_steps": 5,
-    "eval_steps": 5,
+    "save_steps": 500,
+    "logging_steps": 10,
+    "eval_steps": 200,
     "lora_r": 8,
     "lora_alpha": 16,
     "lora_dropout": 0.05,
@@ -22,5 +22,5 @@
     "val_split": 0.1,
     "report_to": "wandb",
     "wandb_project": "sft_training",
-    "wandb_run_name": null
+    "wandb_run_name": "sft-qwen-0.8b-epochs2"
 }
