@@ -3,3 +3,4 @@ simple_index.txt.gz filter=lfs diff=lfs merge=lfs -text
 logs/twowikimultihop_train_eval.out.0 filter=lfs diff=lfs merge=lfs -text
 logs/positive_training_samples.jsonl filter=lfs diff=lfs merge=lfs -text
 logs/positive_samples_2wiki.jsonl filter=lfs diff=lfs merge=lfs -text
+logs/positive_training_samples_merged.jsonl filter=lfs diff=lfs merge=lfs -text

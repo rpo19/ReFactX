@@ -1,7 +1,7 @@
 {
     "_description": "SFT training config for fact-grounded QA",
     "model_name": "Qwen/Qwen3.5-0.8B",
-    "data": "logs/positive_training_samples.jsonl",
+    "data": "logs/positive_training_samples_merged.jsonl",
     "mask_triples": true,
     "max_length": 2048,
     "batch_size": 4,

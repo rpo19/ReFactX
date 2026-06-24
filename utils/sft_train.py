@@ -1,5 +1,6 @@
 import os
 import json
+import random
 import argparse
 from pathlib import Path
 from collections import defaultdict
@@ -52,7 +53,7 @@ def locate_fact_ranges(text):
     return ranges
 
 
-def stratified_train_val_split(samples, val_ratio, stratify_keys):
+def stratified_train_val_split(samples, val_ratio, stratify_keys, rng):
     groups = defaultdict(list)
     for i, s in enumerate(samples):
         key = tuple(str(s.get(k, "unknown")) for k in stratify_keys)
@@ -61,6 +62,7 @@ def stratified_train_val_split(samples, val_ratio, stratify_keys):
     train_idx = []
     val_idx = []
     for key, indices in groups.items():
+        rng.shuffle(indices)
         n = len(indices)
         n_val = max(1, round(n * val_ratio))
         val_idx.extend(indices[:n_val])
@@ -143,6 +145,7 @@ def main():
     parser.add_argument("--optim", default="adamw_torch", help="Optimizer type")
     parser.add_argument("--betas", type=float, nargs=2, default=[0.9, 0.999], metavar=("BETA1", "BETA2"), help="Adam betas")
     parser.add_argument("--val-split", type=float, default=0.1, help="Validation split ratio")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducible split")
     parser.add_argument("--report-to", default="wandb", help="Reporting destination (wandb, none)")
     parser.add_argument("--wandb-project", default="sft_training", help="Wandb project name")
     parser.add_argument("--wandb-run-name", default=None, help="Wandb run name")
@@ -164,8 +167,9 @@ def main():
     print(f"  {len(samples)} samples loaded")
 
     if args.val_split > 0:
+        rng = random.Random(args.seed)
         train_samples, val_samples = stratified_train_val_split(
-            samples, args.val_split, stratify_keys=["dataset", "complexityType"]
+            samples, args.val_split, stratify_keys=["dataset", "complexityType"], rng=rng
         )
         print(f"  Train: {len(train_samples)}, Val: {len(val_samples)} (stratified by dataset, complexityType)")
     else:
@@ -245,6 +249,9 @@ def main():
     )
 
     print("\nStarting training...")
+    if val_dataset is not None:
+        print("Pre-training validation...")
+        trainer.evaluate()
     trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
