@@ -4,3 +4,5 @@ logs/twowikimultihop_train_eval.out.0 filter=lfs diff=lfs merge=lfs -text
 logs/positive_training_samples.jsonl filter=lfs diff=lfs merge=lfs -text
 logs/positive_samples_2wiki.jsonl filter=lfs diff=lfs merge=lfs -text
 logs/positive_training_samples_merged.jsonl filter=lfs diff=lfs merge=lfs -text
+logs/mintaka_test_sft.out.0 filter=lfs diff=lfs merge=lfs -text
+logs/twowiki_test_sft.out.0 filter=lfs diff=lfs merge=lfs -text
