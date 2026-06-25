@@ -10,8 +10,6 @@
 
 set -euo pipefail
 
-module load CUDA/13.0.0
-
 source "$SLURM_SUBMIT_DIR/hpc/env.sh"
 
 cd /home/ripo631h/ReFactX
@@ -19,8 +17,6 @@ cd /home/ripo631h/ReFactX
 echo "Starting SFT training at $(date)"
 echo "SLURM_JOB_ID=$SLURM_JOB_ID"
 echo "Node: $(hostname)"
-
-pip install -q flash-linear-attention causal-conv1d
 
 python -m utils.sft_train --config configs/sft_config.json
 
