@@ -3,8 +3,8 @@
 #SBATCH --error=logs/eval_sft_test_%j.err
 #SBATCH --job-name=eval_sft_test
 #SBATCH -N 1
-#SBATCH --time=01:00:00
-#SBATCH --mem=50G
+#SBATCH --time=72:00:00
+#SBATCH --mem=100G
 #SBATCH --cpus-per-task=1
 #SBATCH --gres=gpu:1
 
@@ -25,10 +25,10 @@ if [ -f "$SHARED_POSTGRES" ]; then
     export POSTGRES_CONNECTION="$INDEX_PATH"
 fi
 
-echo "=== Mintaka test (100) ==="
+echo "=== Mintaka test (full) ==="
 python -m utils.eval --config configs/config_mintaka_sft_test.json
 
-echo "=== 2Wiki test (100) ==="
+echo "=== 2Wiki test (full) ==="
 python -m utils.eval --config configs/config_2wiki_sft_test.json
 
 echo "Eval SFT test finished at $(date)"

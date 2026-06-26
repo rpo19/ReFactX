@@ -20,7 +20,6 @@
     "device": "auto",
     "thinking": false,
     "num_beams": 1,
-    "batch_size": 4,
-    "n": 100,
+    "batch_size": 16,
     "generation_config": {"max_length": 1024, "do_sample": false}
 }
