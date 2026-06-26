@@ -5,8 +5,8 @@
 #SBATCH -N 1
 #SBATCH --time=72:00:00
 #SBATCH --mem=100G
-#SBATCH --cpus-per-task=1
-#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=2
+#SBATCH --gres=gpu:2
 
 set -euo pipefail
 
@@ -25,10 +25,21 @@ if [ -f "$SHARED_POSTGRES" ]; then
     export POSTGRES_CONNECTION="$INDEX_PATH"
 fi
 
-echo "=== Mintaka test (full) ==="
-python -m utils.eval --config configs/config_mintaka_sft_test.json
+echo "Starting 2 evals at $(date)"
 
-echo "=== 2Wiki test (full) ==="
-python -m utils.eval --config configs/config_2wiki_sft_test.json
+MERGE_DIR=/data/horse/ws/ripo631h-quokka/sft_merged
+if [ ! -d "$MERGE_DIR" ]; then
+    echo "Merged model not found, merging LoRA adapters..."
+    python -m utils.merge_lora
+fi
 
-echo "Eval SFT test finished at $(date)"
+CUDA_VISIBLE_DEVICES=0 python -m utils.eval --config configs/config_mintaka_sft_test.json \
+  &> logs/eval_mintaka_test_${SLURM_JOB_ID}.log &
+PID1=$!
+
+CUDA_VISIBLE_DEVICES=1 python -m utils.eval --config configs/config_2wiki_sft_test.json \
+  &> logs/eval_2wiki_test_${SLURM_JOB_ID}.log &
+PID2=$!
+
+wait $PID1 $PID2
+echo "All evals completed at $(date)"
