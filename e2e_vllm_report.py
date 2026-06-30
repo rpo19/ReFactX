@@ -76,6 +76,7 @@ class VLLMXgrammarAdapter:
         self.generated_triples: List[List[int]] = []
         self._triple_start_idx = -1
         self._visited_index = DictIndex()
+        self._entering_mode = False
         if self._json_matcher is not None:
             self._json_matcher.reset()
 
@@ -170,6 +171,9 @@ class VLLMXgrammarAdapter:
             return
         if len(self.generated_tokens) == 0:
             return
+        if self._entering_mode:
+            self._entering_mode = False
+            return
         self._json_matcher.accept_token(self.generated_tokens[-1])
         self._json_matcher.fill_next_token_bitmask(self.bitmask, 0)
         logits_f32 = logits_row.unsqueeze(0).float()
@@ -195,6 +199,7 @@ class VLLMXgrammarAdapter:
                 self._triple_start_idx = len(self.generated_tokens)
             elif detected == self.answer_pattern:
                 self.mode = self.MODE_JSON
+                self._entering_mode = True
                 if self._json_matcher is not None:
                     self._json_matcher.reset()
 
