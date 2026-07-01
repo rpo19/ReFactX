@@ -26,6 +26,8 @@ class VLLMXgrammarAdapter:
     MODE_FREE = "free"
     MODE_TRIPLE = "triple"
     MODE_JSON = "json"
+    MODE_BRANCHES = "branches"
+    MODE_BRANCHES_COUNT = "branches_count"
 
     def __init__(
         self,
@@ -34,6 +36,7 @@ class VLLMXgrammarAdapter:
         json_schema: Optional[Union[str, Dict]] = None,
         fact_pattern: str = "Fact:",
         answer_pattern: str = "Answer:",
+        branch_pattern: str = "count_branches(",
         eot: str = "\n",
         avoid_duplicates: bool = True,
         regex_window: int = 20,
@@ -42,12 +45,14 @@ class VLLMXgrammarAdapter:
         self.kb_index = kb_index
         self.fact_pattern = fact_pattern.lower()
         self.answer_pattern = answer_pattern.lower()
+        self.branch_pattern = branch_pattern.lower()
         self.eot = eot
         self.avoid_duplicates = avoid_duplicates
         self.regex_window = regex_window
         self.vocab_size = len(tokenizer)
 
         self._make_eot_token()
+        self._make_branch_close_token()
 
         self.bitmask = xgr.allocate_token_bitmask(1, self.vocab_size)
 
@@ -68,6 +73,10 @@ class VLLMXgrammarAdapter:
             enc = self.tokenizer.encode(self.eot, add_special_tokens=False)
             self.eot_token = enc[0] if enc else None
 
+    def _make_branch_close_token(self):
+        enc = self.tokenizer.encode(")", add_special_tokens=False)
+        self._branch_close_token = enc[0] if enc else None
+
     def reset(self):
         self._reset_count = getattr(self, '_reset_count', 0) + 1
         self.mode = self.MODE_FREE
@@ -77,6 +86,10 @@ class VLLMXgrammarAdapter:
         self._triple_start_idx = -1
         self._visited_index = DictIndex()
         self._entering_mode = False
+        self._branch_prefix: List[int] = []
+        self._branch_forced_output: List[int] = []
+        self._branch_forced_idx = 0
+        self._branch_start_idx = -1
         if self._json_matcher is not None:
             self._json_matcher.reset()
 
@@ -93,6 +106,8 @@ class VLLMXgrammarAdapter:
                 return self.fact_pattern
             if normalized.lower().endswith(self.answer_pattern):
                 return self.answer_pattern
+            if self.branch_pattern in normalized.lower():
+                return self.branch_pattern
         return None
 
     def _allow_tokens(self, logits_row, token_ids):
@@ -182,6 +197,69 @@ class VLLMXgrammarAdapter:
         if self._json_matcher.is_terminated():
             self.mode = self.MODE_FREE
 
+    def _count_at_prefix(self, prefix):
+        """Number of KB leaves under a given prefix."""
+        level = self.kb_index.tree
+        cursor = 0
+        level_cursor = 0
+        while cursor < len(prefix) and level_cursor < len(level[1]):
+            if isinstance(level[1][level_cursor], dict):
+                if prefix[cursor] in level[1][level_cursor]:
+                    level = level[1][level_cursor][prefix[cursor]]
+                    level_cursor = 0
+                else:
+                    return 0
+            else:
+                if prefix[cursor] != level[1][level_cursor]:
+                    return 0
+                level_cursor += 1
+            cursor += 1
+        return level[0]
+
+    def _mask_for_branches(self, logits_row):
+        raw_ids = self.generated_tokens[self._branch_start_idx:]
+        if not raw_ids:
+            try:
+                possible, _ = self.kb_index.next_tokens([])
+            except (EmptyIndexException, TripleNotFoundException):
+                possible = {}
+            allowed = list(possible.keys()) if possible else []
+            if self._branch_close_token is not None and self._branch_close_token not in allowed:
+                allowed.append(self._branch_close_token)
+            self._allow_tokens(logits_row, allowed)
+            return
+
+        if ')' in self.tokenizer.decode([raw_ids[-1]]):
+            return
+
+        # Re-encode prefix to strip merged chars like (< -> <
+        prefix_text = self.tokenizer.decode(raw_ids)
+        prefix_text = prefix_text.lstrip('(')
+        if prefix_text:
+            prefix = self.tokenizer.encode(prefix_text, add_special_tokens=False)
+        else:
+            prefix = []
+        try:
+            possible, _ = self.kb_index.next_tokens(prefix)
+        except (EmptyIndexException, TripleNotFoundException):
+            possible = {}
+        allowed = list(possible.keys()) if possible else []
+        if self._branch_close_token is not None and self._branch_close_token not in allowed:
+            allowed.append(self._branch_close_token)
+        self._allow_tokens(logits_row, allowed)
+
+    def _mask_for_branches_count(self, logits_row):
+        if self._branch_forced_idx < len(self._branch_forced_output):
+            next_tid = self._branch_forced_output[self._branch_forced_idx]
+            self._branch_forced_idx += 1
+            self._allow_tokens(logits_row, [next_tid])
+        else:
+            self.mode = self.MODE_FREE
+            self._branch_prefix = []
+            self._branch_forced_output = []
+            self._branch_forced_idx = 0
+            self._branch_start_idx = -1
+
     def __call__(self, past_tokens_ids: List[int], logits_row: torch.Tensor) -> torch.Tensor:
         # Sync state with vLLM's token list
         if len(past_tokens_ids) > len(self.generated_tokens):
@@ -202,11 +280,45 @@ class VLLMXgrammarAdapter:
                 self._entering_mode = True
                 if self._json_matcher is not None:
                     self._json_matcher.reset()
+            elif detected == self.branch_pattern:
+                self.mode = self.MODE_BRANCHES
+                # Find the token containing ( by scanning backwards
+                start = len(self.generated_tokens)
+                for i in range(start - 1, max(0, start - self.regex_window) - 1, -1):
+                    if '(' in self.tokenizer.decode([self.generated_tokens[i]]):
+                        start = i + 1
+                        break
+                self._branch_start_idx = start
+                self._branch_prefix = []
+
+        if self.mode == self.MODE_BRANCHES:
+            raw_ids = self.generated_tokens[self._branch_start_idx:]
+            # Check if last token contains ) (handle merged tokens like )>)
+            last_is_close = raw_ids and ')' in self.tokenizer.decode([raw_ids[-1]])
+            if last_is_close:
+                prefix_ids = []
+                for tid in raw_ids[:-1]:
+                    d = self.tokenizer.decode([tid])
+                    if '(' in d:
+                        d = d.lstrip('(')
+                    if d:
+                        prefix_ids.extend(self.tokenizer.encode(d, add_special_tokens=False))
+                count = self._count_at_prefix(prefix_ids)
+                forced = self.tokenizer.encode(f" = {count}", add_special_tokens=False)
+                self._branch_forced_output = forced
+                self._branch_forced_idx = 0
+                self.mode = self.MODE_BRANCHES_COUNT
+            else:
+                self._branch_prefix = list(raw_ids) if raw_ids else []
 
         if self.mode == self.MODE_TRIPLE:
             self._mask_for_triple(logits_row)
         elif self.mode == self.MODE_JSON:
             self._mask_for_json(logits_row)
+        elif self.mode == self.MODE_BRANCHES:
+            self._mask_for_branches(logits_row)
+        elif self.mode == self.MODE_BRANCHES_COUNT:
+            self._mask_for_branches_count(logits_row)
 
         return logits_row
 
