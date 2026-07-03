@@ -5,7 +5,7 @@
     "tablename": "qwen36",
     "model_name": "/data/horse/ws/ripo631h-quokka/sft_merged",
     "model_dtype": "bfloat16",
-    "dataset": "AmazonScience/mintaka",
+    "dataset": "rpozzi/mintaka",
     "dataset_config": "default",
     "dataset_revision": "refs/convert/parquet",
     "dataset_split": "test",
