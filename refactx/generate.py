@@ -174,7 +174,7 @@ class ConstrainedStateList():
 Pattern should be recognized as soon as it is generated. Usually you want to end it with $
 """
 class PatternConstrainedState():
-    def __init__(self, tokenizer, cache_index, subtree_cache, pattern='Fact:', state=0, debug=False, regex_window=10, ignore_case=True) -> None:
+    def __init__(self, tokenizer, cache_index, subtree_cache, pattern='Fact:', state=0, debug=False, regex_window=10, ignore_case=True, thinking_end_pattern='</think>') -> None:
 
         self.NORMAL_GENERATION = 0 # even numbers for normal
         self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
@@ -205,6 +205,14 @@ class PatternConstrainedState():
         self.generated_triples_str = []
 
         self.subtree_cache = subtree_cache
+
+        # Decode-time sentinel: token ids still to be emitted for a
+        # "no further records" object once a subject-relation is exhausted.
+        self.sentinel_remaining = []
+
+        # Feat 3: thinking-end pattern for cache reset
+        self.thinking_end_pattern = thinking_end_pattern.lower() if ignore_case else thinking_end_pattern
+        self._thinking_cache_reset_done = False
 
         self._first_call = True
 
@@ -239,6 +247,7 @@ class PatternConstrainedState():
 
     def end_of_triple_reset(self):
         self.subtree_cache.reset()
+        self.sentinel_remaining = []
         # reset to normal generation
         self.state = 0
 
@@ -250,6 +259,7 @@ class PatternConstrainedState():
         self.cursor = 0
         self.generated_triples = []
         self.cache_index.reset()
+        self._thinking_cache_reset_done = False
         self.end_of_triple_reset()
 
     def copy(self, other, copy=True):
@@ -266,6 +276,8 @@ class PatternConstrainedState():
         self.generated_triples = other.generated_triples.copy() if copy else other.generated_triples
         self.cache_index = deepcopy(other.cache_index) if copy else other.cache_index
         self.subtree_cache = deepcopy(other.subtree_cache) if copy else other.subtree_cache
+        self.thinking_end_pattern = other.thinking_end_pattern
+        self._thinking_cache_reset_done = other._thinking_cache_reset_done
 
         self.debug = other.debug
         self.debug_history = deepcopy(other.debug_history) if copy else other.debug_history
@@ -287,6 +299,14 @@ class PatternConstrainedState():
 
         self._update_state(state)
 
+        # Feat 3: detect end-of-thinking and reset duplicate cache
+        if (not self._thinking_cache_reset_done and
+                self.thinking_end_pattern is not None):
+            normalized = "".join(text.split())
+            if normalized.rstrip().endswith(self.thinking_end_pattern):
+                self.cache_index.reset()
+                self._thinking_cache_reset_done = True
+
         if self.debug:
             self.debug_history.append({
                 'state': self.state,
@@ -307,7 +327,8 @@ class PatternConstrainedState():
         return self.cursor
 
 class ConstrainedLogitsProcessor(LogitsProcessor):
-    def __init__(self, index, states, tokenizer, error_strategy=0, avoid_duplicates=True, reinit_states=False, eot='\n'):
+    def __init__(self, index, states, tokenizer, error_strategy=0, avoid_duplicates=True, reinit_states=False, eot='\n',
+                 sentinel=False, sentinel_text='no further records>'):
         self.index = index
         self.states = states
         self.error_strategy = error_strategy
@@ -315,6 +336,16 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         self.reinit_states = reinit_states
         self.eot = eot
         # TODO debug no leaves does not match with the eot
+
+        # When ``sentinel`` is on, an exhausted subject-relation is not pruned
+        # from the trie (which would force the model onto a different relation).
+        # Instead the relation stays selectable and its object slot yields a
+        # fixed "no further records" object, so the model gets an explicit
+        # "nothing more here" signal. ``sentinel_text`` is the object value
+        # (without the leading ``<``, which the model emits as the object opener).
+        self.sentinel = sentinel
+        self.sentinel_text = sentinel_text
+        self._sentinel_ids_cache = None
 
         self.ERROR_STRATEGY_WARN = 0
         self.ERROR_STRATEGY_FAIL = 1
@@ -327,6 +358,20 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                 self.eot_token = self.tokenizer.tokenizer.encode(self.eot, add_special_tokens=False)[0]
             else:
                 self.eot_token = self.tokenizer.encode(self.eot, add_special_tokens=False)[0]
+
+    def _sentinel_ids(self):
+        if self._sentinel_ids_cache is None:
+            self._sentinel_ids_cache = self.tokenizer.encode(
+                self.sentinel_text, add_special_tokens=False)
+        return self._sentinel_ids_cache
+
+    def _begin_sentinel(self, state, mask, mask_idx):
+        ids = self._sentinel_ids()
+        mask[mask_idx, :] = -math.inf
+        mask[mask_idx, ids[0]] = 0
+        state.sentinel_remaining = list(ids[1:])
+        if not state.sentinel_remaining:
+            state.end_of_triple_reset()
 
     def _reinit_states(self, num_beams, num_batches):
         self.states.__init__('auto',
@@ -409,46 +454,104 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         return scores_processed
 
     def constrained_generation(self, sequence, mask: torch.FloatTensor, mask_idx, state, start_idx):
+        # Mid-sentinel: keep emitting the "no further records" object token by token.
+        if state.sentinel_remaining:
+            nxt = state.sentinel_remaining.pop(0)
+            mask[mask_idx, :] = -math.inf
+            mask[mask_idx, nxt] = 0
+            if not state.sentinel_remaining:
+                state.end_of_triple_reset()
+            return
 
         possible_tokens, _ = self.index.next_tokens(sequence, state = state)
+
+        if not self.sentinel:
+            # ---- original behaviour: prune exhausted branches ----
+            if self.avoid_duplicates:
+                try:
+                    visited_tokens, _ = state.cache_index.next_tokens(sequence)
+                    # print(visited_tokens, end=' = ')
+                    state.cache_index.subtract_tokens(possible_tokens, visited_tokens)
+                    # print(possible_tokens)
+                except EmptyIndexException:
+                    # ignore when the cache index is empty
+                    pass
+                except TripleNotFoundException:
+                    # ignore if triple not in cache index
+                    pass
+
+            possible_tokens = list(possible_tokens.keys()) # TODO transform subtract tokens in a prob modifier
+
+            if len(possible_tokens) == 0:
+                # end of constrained generation
+                # send end of string
+
+                state.cache_add(sequence, start_idx)
+
+                if self.eot_token is not None:
+                    possible_tokens = [self.eot_token]
+
+                # ensure to reset after eof triple
+                state.end_of_triple_reset()
+
+            else:
+                vocab_size = mask.shape[-1]
+
+                invalid_tokens = [t for t in possible_tokens if t < 0 or t >= vocab_size]
+
+                if invalid_tokens:
+                    raise ValueError(
+                        f"Invalid token ids in constrained generation: {invalid_tokens[:10]} "
+                        f"(showing up to 10) with vocab_size={vocab_size}"
+                    )
+
+            mask[mask_idx, possible_tokens] = 0
+            return
+
+        # ---- sentinel-enabled behaviour ----
+        # Split continuations into `live` (new leaves remain) and `exhausted`
+        # (every leaf already generated) instead of deleting the exhausted ones.
+        live = dict(possible_tokens)
+        exhausted = {}
         if self.avoid_duplicates:
             try:
                 visited_tokens, _ = state.cache_index.next_tokens(sequence)
-                # print(visited_tokens, end=' = ')
-                state.cache_index.subtract_tokens(possible_tokens, visited_tokens)
-                # print(possible_tokens)
+                for tok, total in list(possible_tokens.items()):
+                    if total - visited_tokens.get(tok, 0) <= 0:
+                        exhausted[tok] = total
+                        del live[tok]
             except EmptyIndexException:
-                # ignore when the cache index is empty
                 pass
             except TripleNotFoundException:
-                # ignore if triple not in cache index
                 pass
 
-        possible_tokens = list(possible_tokens.keys()) # TODO transform subtract tokens in a prob modifier
-
         if len(possible_tokens) == 0:
-            # end of constrained generation
-            # send end of string
-
+            # Genuine end of a real triple in the trie.
             state.cache_add(sequence, start_idx)
-
-            if self.eot_token is not None:
-                possible_tokens = [self.eot_token]
-
-            # ensure to reset after eof triple
             state.end_of_triple_reset()
+            mask[mask_idx, :] = 0
+            return
 
+        # Object slot starts after the second "> <" of "<S> <R> <O>".
+        in_object = (self.tokenizer or state.tokenizer).decode(sequence).count('> <') >= 2
+        live_keys = list(live.keys())
+
+        if in_object:
+            if live_keys:
+                # New object value(s) still available: emit them normally.
+                vocab_size = mask.shape[-1]
+                valid_keys = [t for t in live_keys if 0 <= t < vocab_size]
+                mask[mask_idx, valid_keys] = 0
+            else:
+                # Object fully visited -> emit the sentinel instead of forcing a
+                # duplicate (object exhausted) or rerouting.
+                self._begin_sentinel(state, mask, mask_idx)
         else:
+            # Subject / relation: keep exhausted branches selectable so the model
+            # is not forced off the relation it wants.
+            all_keys = live_keys + list(exhausted.keys())
             vocab_size = mask.shape[-1]
-
-            invalid_tokens = [t for t in possible_tokens if t < 0 or t >= vocab_size]
-
-            if invalid_tokens:
-                raise ValueError(
-                    f"Invalid token ids in constrained generation: {invalid_tokens[:10]} "
-                    f"(showing up to 10) with vocab_size={vocab_size}"
-                )
-
-        mask[mask_idx, possible_tokens] = 0
+            valid_keys = [t for t in all_keys if 0 <= t < vocab_size]
+            mask[mask_idx, valid_keys] = 0
 
 CONSTRAINED_STATES = ConstrainedStateList([])
