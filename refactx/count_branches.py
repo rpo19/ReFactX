@@ -65,6 +65,9 @@ class CountBranchesLogitsProcessor(LogitsProcessor):
         self.input_ids: list[int] = []
         self._first_call = True
 
+        # Persistent log of all calls: list of (prefix_text, count)
+        self.calls: list[tuple[str, int]] = []
+
     # ------------------------------------------------------------------
     # helpers
     # ------------------------------------------------------------------
@@ -104,6 +107,8 @@ class CountBranchesLogitsProcessor(LogitsProcessor):
 
     def _finish_collecting(self):
         count = self._count_at_prefix(self.prefix_tokens)
+        prefix_text = self._decode(self.prefix_tokens).strip()
+        self.calls.append((prefix_text, count))
         count_str = f" = {count}"
         self.count_tokens = self._encode(count_str)
         self.mode = self.MODE_EMITTING

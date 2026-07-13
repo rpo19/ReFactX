@@ -96,6 +96,29 @@ class TestCountBranches(unittest.TestCase):
         _feed_sequence(proc, self.tokenizer, ids)
         torch.testing.assert_close(scores, scores_original)
 
+    def test_calls_persisted(self):
+        proc = self._make_proc()
+        self.assertEqual(proc.calls, [])
+
+        # First call
+        trigger_ids = self.tokenizer.encode("count_branches(", add_special_tokens=False)
+        prefix_ids = self.tokenizer.encode("<Paris> <capital of>", add_special_tokens=False)
+        close_paren = self.tokenizer.encode(")", add_special_tokens=False)[0]
+        _feed_sequence(proc, self.tokenizer, list(trigger_ids) + list(prefix_ids) + [close_paren])
+
+        self.assertEqual(len(proc.calls), 1)
+        prefix_text, count = proc.calls[0]
+        self.assertEqual(count, 1)  # 1 leaf for <Paris> <capital of>
+
+        # After emitting, mode returns to FREE — verify calls list survives
+        while proc.mode == CountBranchesLogitsProcessor.MODE_EMITTING:
+            scores = torch.zeros(1, len(self.tokenizer))
+            full_seq = proc.input_ids + [0]
+            input_ids = torch.tensor([full_seq])
+            proc(input_ids, scores)
+
+        self.assertEqual(len(proc.calls), 1)  # still 1 call recorded
+
 
 # ---------------------------------------------------------------------------
 # Feat 2 - Sentinel
