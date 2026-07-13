@@ -14,6 +14,10 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
     from refactx.generate import get_constrained_logits_processor as _base
     return _base(tokenizer, index, num_beams=num_beams, num_batches=num_batches, return_list=return_list, **kwargs)
 
+def get_count_branches_logits_processor(tokenizer, kb_index, **kwargs):
+    from refactx.count_branches import CountBranchesLogitsProcessor
+    return CountBranchesLogitsProcessor(tokenizer, kb_index, **kwargs)
+
 def patch_model(model):
     from refactx.generate import patch_model as _base
     return _base(model)
@@ -62,4 +66,4 @@ def load_prompt(path):
 
 __version__ = _read_version_from_pyproject()
 
-__all__ = [load_index, populate_postgres_index, apply_prompt_template, get_constrained_logits_processor, patch_model, get_constrained_states]
+__all__ = [load_index, populate_postgres_index, apply_prompt_template, get_constrained_logits_processor, get_count_branches_logits_processor, patch_model, get_constrained_states]
