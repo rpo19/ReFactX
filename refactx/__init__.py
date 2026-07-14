@@ -15,6 +15,11 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
     return _base(tokenizer, index, num_beams=num_beams, num_batches=num_batches, return_list=return_list, **kwargs)
 
 def get_count_branches_logits_processor(tokenizer, kb_index, **kwargs):
+    import warnings
+    warnings.warn(
+        "get_count_branches_logits_processor is deprecated. Use "
+        "processor.add_pattern('count_branches: ', CountBranchesGeneration, kb_index=kb_index) "
+        "instead.", DeprecationWarning, stacklevel=2)
     from refactx.count_branches import CountBranchesLogitsProcessor
     return CountBranchesLogitsProcessor(tokenizer, kb_index, **kwargs)
 

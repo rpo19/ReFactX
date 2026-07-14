@@ -1,6 +1,11 @@
 """
 Count branches LogitsProcessor.
 
+.. deprecated::
+    This standalone processor is deprecated.  Use
+    ``processor.add_pattern('count_branches: ', CountBranchesGeneration, kb_index=...)``
+    from ``refactx.generate`` instead.
+
 Detects the ``count_branches(<prefix>)`` tool call in the generated text,
 traverses the KB prefix tree to count leaves under that prefix, and forces
 emission of `` = <count>`` so the model receives the answer inline.
