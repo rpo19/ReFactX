@@ -427,5 +427,278 @@ class TestSentinel(unittest.TestCase):
         self.assertIn("no further records", decoded)
 
 
+# ---------------------------------------------------------------------------
+# Feat 2b - Generalized sentinel (fires at any trie level)
+# ---------------------------------------------------------------------------
+
+class TestSentinelGeneralized(unittest.TestCase):
+    """Generalized sentinel: fires when the model picks an exhausted token.
+
+    Both live *and* exhausted tokens (remaining == 0) are always offered.
+    After each ``constrain`` call, ``prev_exhausted`` stores the set of
+    exhausted tokens.  On the next call, if ``sequence[-1]`` is in that
+    set the sentinel fires immediately.
+    """
+
+    def setUp(self):
+        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+        self.kb = DictIndex()
+        # Two objects under <Paris> <capital of> to allow live/exhausted mix
+        self.triples = [
+            "<Paris> <capital of> <France> .",
+            "<Paris> <capital of> <Germany> .",
+            "<Paris> <country> <France> .",
+            "<Lyon> <country> <France> .",
+        ]
+        ids = self.tokenizer(self.triples, add_special_tokens=False)["input_ids"]
+        for ids_seq in ids:
+            self.kb.add(ids_seq)
+
+    def _make_state_and_gen(self):
+        state = PatternConstrainedState(
+            tokenizer=self.tokenizer,
+            cache_index=DictIndex(),
+            subtree_cache=DictIndex(),
+        )
+        gen = FactGeneration(
+            state=state, tokenizer=self.tokenizer, start_idx=0,
+            index=self.kb, sentinel=True, eot=None,
+        )
+        return state, gen
+
+    def _vocab_size(self):
+        return len(self.tokenizer)
+
+    def _allowed_tokens(self, mask):
+        return set((mask[0] == 0).nonzero(as_tuple=False).squeeze(-1).tolist())
+
+    def _mark_visited(self, state, triple_text):
+        ids = self.tokenizer.encode(triple_text, add_special_tokens=False)
+        state.cache_index.add(ids, new_leaf=True)
+
+    # -- Both live and exhausted always offered -------------------------------
+
+    def test_exhausted_tokens_always_offered(self):
+        """Exhausted tokens are offered alongside live ones at every level."""
+        state, gen = self._make_state_and_gen()
+        # Exhaust both <Paris> <capital of> objects
+        self._mark_visited(state, self.triples[0])
+        self._mark_visited(state, self.triples[1])
+
+        # Relation level: [<, paris, >, <] — 'capital' exhausted, 'country' live
+        rel_seq = self.tokenizer.encode('<Paris> <', add_special_tokens=False)
+        mask = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain(rel_seq, mask, 0)
+        allowed = self._allowed_tokens(mask)
+
+        cap_tok = self.tokenizer.encode('capital', add_special_tokens=False)[0]
+        country_tok = self.tokenizer.encode('country', add_special_tokens=False)[0]
+        self.assertIn(cap_tok, allowed,
+                      "Exhausted token should be offered")
+        self.assertIn(country_tok, allowed,
+                      "Live token should be offered")
+
+    def test_live_and_exhausted_tokens_offered(self):
+        """When some tokens are live and some exhausted, both are offered."""
+        state, gen = self._make_state_and_gen()
+        self._mark_visited(state, self.triples[0])
+        self._mark_visited(state, self.triples[1])
+
+        rel_seq = self.tokenizer.encode('<Paris> <', add_special_tokens=False)
+        mask = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain(rel_seq, mask, 0)
+        allowed = self._allowed_tokens(mask)
+        self.assertGreaterEqual(len(allowed), 2,
+                                "Both live and exhausted tokens should be offered")
+        self.assertFalse(gen.completed_with_sentinel)
+
+    # -- prev_exhausted tracking ---------------------------------------------
+
+    def test_prev_exhausted_set_after_constrain(self):
+        """After constrain, prev_exhausted contains exhausted token IDs."""
+        state, gen = self._make_state_and_gen()
+        self._mark_visited(state, self.triples[0])
+        self._mark_visited(state, self.triples[1])
+
+        rel_seq = self.tokenizer.encode('<Paris> <', add_special_tokens=False)
+        mask = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain(rel_seq, mask, 0)
+
+        cap_tok = self.tokenizer.encode('capital', add_special_tokens=False)[0]
+        country_tok = self.tokenizer.encode('country', add_special_tokens=False)[0]
+        self.assertIn(cap_tok, gen.prev_exhausted,
+                      "Exhausted 'capital' should be in prev_exhausted")
+        self.assertNotIn(country_tok, gen.prev_exhausted,
+                         "Live 'country' should NOT be in prev_exhausted")
+
+    def test_prev_exhausted_empty_when_no_exhaustion(self):
+        """prev_exhausted is empty when no tokens are exhausted."""
+        state, gen = self._make_state_and_gen()
+        # No triples visited — nothing exhausted
+        mask = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain([], mask, 0)
+        self.assertEqual(len(gen.prev_exhausted), 0)
+
+    # -- Sentinel fires when last token was exhausted ------------------------
+
+    def test_sentinel_fires_when_exhausted_token_picked(self):
+        """Sentinel fires on the call AFTER an exhausted token is picked."""
+        state, gen = self._make_state_and_gen()
+        self._mark_visited(state, self.triples[0])
+        self._mark_visited(state, self.triples[1])
+
+        # Call 1: at relation level, 'capital' becomes exhausted
+        rel_seq = self.tokenizer.encode('<Paris> <', add_special_tokens=False)
+        mask = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain(rel_seq, mask, 0)
+        self.assertIn(
+            self.tokenizer.encode('capital', add_special_tokens=False)[0],
+            gen.prev_exhausted)
+
+        # Call 2: simulate model picking 'capital' (exhausted)
+        exhausted_seq = rel_seq + self.tokenizer.encode('capital', add_special_tokens=False)
+        mask2 = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain(exhausted_seq, mask2, 0)
+
+        self.assertTrue(gen.completed_with_sentinel,
+                        "Sentinel should fire when exhausted token is picked")
+
+    def test_no_sentinel_when_live_token_picked(self):
+        """Sentinel does NOT fire when a live token is picked."""
+        state, gen = self._make_state_and_gen()
+        self._mark_visited(state, self.triples[0])
+        self._mark_visited(state, self.triples[1])
+
+        # Call 1: at relation level
+        rel_seq = self.tokenizer.encode('<Paris> <', add_special_tokens=False)
+        mask = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain(rel_seq, mask, 0)
+
+        # Call 2: simulate model picking 'country' (live)
+        live_seq = rel_seq + self.tokenizer.encode('country', add_special_tokens=False)
+        mask2 = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain(live_seq, mask2, 0)
+
+        self.assertFalse(gen.completed_with_sentinel,
+                         "Sentinel should NOT fire when live token is picked")
+
+    def test_sentinel_fires_at_object_level(self):
+        """Sentinel fires when model picks an exhausted object token."""
+        state, gen = self._make_state_and_gen()
+        # Exhaust both <Paris> <capital of> objects
+        self._mark_visited(state, self.triples[0])
+        self._mark_visited(state, self.triples[1])
+
+        # Call 1: at object level, '<' is exhausted
+        obj_seq = self.tokenizer.encode('<Paris> <capital of>',
+                                        add_special_tokens=False)
+        mask = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain(obj_seq, mask, 0)
+
+        lt_tok = self.tokenizer.encode('<', add_special_tokens=False)[0]
+        self.assertIn(lt_tok, gen.prev_exhausted,
+                      "Setup: '<' should be exhausted at object level")
+
+        # Call 2: simulate model picking '<' (exhausted)
+        exhausted_seq = obj_seq + [lt_tok]
+        mask2 = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain(exhausted_seq, mask2, 0)
+
+        self.assertTrue(gen.completed_with_sentinel,
+                        "Sentinel should fire when exhausted object token is picked")
+
+    def test_no_sentinel_when_live_object_token_picked(self):
+        """No sentinel when model picks a live object token."""
+        state, gen = self._make_state_and_gen()
+        # Visit only 1 of 2 objects — '<' still live
+        self._mark_visited(state, self.triples[0])
+
+        obj_seq = self.tokenizer.encode('<Paris> <capital of>',
+                                        add_special_tokens=False)
+        lt_tok = self.tokenizer.encode('<', add_special_tokens=False)[0]
+
+        # Call 1: at object level, '<' is live
+        mask = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain(obj_seq, mask, 0)
+        self.assertNotIn(lt_tok, gen.prev_exhausted,
+                         "Setup: '<' should be live")
+
+        # Call 2: simulate model picking '<' (live)
+        live_seq = obj_seq + [lt_tok]
+        mask2 = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain(live_seq, mask2, 0)
+
+        self.assertFalse(gen.completed_with_sentinel,
+                         "Sentinel should NOT fire when live object token is picked")
+
+    # -- All over-visited fallback -------------------------------------------
+
+    def test_sentinel_fires_when_all_overvisited(self):
+        """Sentinel fires when ALL children are over-visited (remaining < 0)."""
+        state, gen = self._make_state_and_gen()
+        # Exhaust everything + add an extra visit
+        for triple in self.triples:
+            self._mark_visited(state, triple)
+        # Add one more visit to push remaining < 0
+        self._mark_visited(state, self.triples[0])
+
+        mask = _negative_inf_mask(1, self._vocab_size())
+        gen.constrain([], mask, 0)
+        self.assertTrue(gen.completed_with_sentinel,
+                        "Sentinel should fire when all children are over-visited")
+
+    # -- Begin sentinel with custom text -------------------------------------
+
+    def test_begin_sentinel_custom_text(self):
+        """_begin_sentinel with explicit sentinel_text overrides default."""
+        state, gen = self._make_state_and_gen()
+        vocab_size = self._vocab_size()
+        mask = _negative_inf_mask(1, vocab_size)
+        custom_text = " <no further records> ."
+        gen._begin_sentinel(mask, 0, sequence=[], sentinel_text=custom_text)
+
+        self.assertTrue(gen.completed_with_sentinel)
+        self.assertTrue(len(state.sentinel_remaining) >= 0)
+
+        # Exactly one token should be unmasked (the first sentinel token)
+        allowed = self._allowed_tokens(mask)
+        self.assertEqual(len(allowed), 1)
+        tok = list(allowed)[0]
+        self.assertGreaterEqual(tok, 0)
+        self.assertLess(tok, vocab_size)
+
+    def test_begin_sentinel_default_text(self):
+        """_begin_sentinel without sentinel_text uses default sentinel_text."""
+        state, gen = self._make_state_and_gen()
+        vocab_size = self._vocab_size()
+        mask = _negative_inf_mask(1, vocab_size)
+        gen._begin_sentinel(mask, 0, sequence=[])
+
+        self.assertTrue(gen.completed_with_sentinel)
+        allowed = self._allowed_tokens(mask)
+        self.assertEqual(len(allowed), 1)
+        tok = list(allowed)[0]
+        self.assertGreaterEqual(tok, 0)
+        self.assertLess(tok, vocab_size)
+
+    def test_custom_text_produces_different_first_token(self):
+        """Different sentinel texts should produce different first tokens."""
+        vocab_size = self._vocab_size()
+
+        state1, gen1 = self._make_state_and_gen()
+        mask1 = _negative_inf_mask(1, vocab_size)
+        gen1._begin_sentinel(mask1, 0, sequence=[])
+        tok1 = list(self._allowed_tokens(mask1))[0]
+
+        state2, gen2 = self._make_state_and_gen()
+        mask2 = _negative_inf_mask(1, vocab_size)
+        gen2._begin_sentinel(mask2, 0, sequence=[],
+                             sentinel_text=' <no further records> .')
+        tok2 = list(self._allowed_tokens(mask2))[0]
+
+        self.assertNotEqual(tok1, tok2,
+                            "Object vs non-object sentinel should start with different tokens")
+
+
 if __name__ == "__main__":
     unittest.main()

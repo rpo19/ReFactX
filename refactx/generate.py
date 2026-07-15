@@ -90,6 +90,7 @@ class FactGeneration(PatternConstrainedGeneration):
 
         self._sentinel_ids_cache = None
         self.completed_with_sentinel = False
+        self.prev_exhausted = set()
 
     def _sentinel_ids(self):
         if self._sentinel_ids_cache is None:
@@ -101,8 +102,25 @@ class FactGeneration(PatternConstrainedGeneration):
                     self.sentinel_text, add_special_tokens=False)
         return self._sentinel_ids_cache
 
-    def _begin_sentinel(self, mask, mask_idx, sequence=None):
-        ids = self._sentinel_ids()
+    def _begin_sentinel(self, mask, mask_idx, sequence=None, sentinel_text=None):
+        """Start emitting sentinel tokens.
+
+        Parameters
+        ----------
+        sentinel_text : str, optional
+            Override the default ``self.sentinel_text`` for this invocation.
+            Use this to emit a level-appropriate sentinel (e.g. with
+            surrounding ``<>`` and ``.`` at subject/relation level).
+        """
+        if sentinel_text is not None:
+            if isinstance(self.tokenizer, ProcessorMixin):
+                ids = self.tokenizer.tokenizer.encode(
+                    sentinel_text, add_special_tokens=False)
+            else:
+                ids = self.tokenizer.encode(
+                    sentinel_text, add_special_tokens=False)
+        else:
+            ids = self._sentinel_ids()
         mask[mask_idx, :] = -math.inf
         mask[mask_idx, ids[0]] = 0
         self.state.sentinel_remaining = list(ids[1:])
@@ -165,41 +183,68 @@ class FactGeneration(PatternConstrainedGeneration):
             return
 
         # ---- sentinel-enabled behaviour ----
-        live = dict(possible_tokens)
+        # If the model just picked an exhausted token (remaining == 0)
+        # on the previous step, fire the sentinel — there are no valid
+        # children left down this branch.
+        if sequence and sequence[-1] in self.prev_exhausted:
+            in_object = (self.tokenizer or state.tokenizer).decode(
+                sequence).count('> <') >= 2
+            if in_object:
+                self._begin_sentinel(mask, mask_idx, sequence=sequence)
+            else:
+                self._begin_sentinel(
+                    mask, mask_idx, sequence=sequence,
+                    sentinel_text=' <no further records> .')
+            return
+
+        # Compute *live* (remaining > 0) and *exhausted* (remaining == 0)
+        # dicts.  Over-visited tokens (remaining < 0) are discarded.
+        # Both live and exhausted are always offered — the prev_exhausted
+        # check above catches when the model enters a dead end.
+        live = {}
         exhausted = {}
         if self.avoid_duplicates:
+            visited_tokens = {}
             try:
                 visited_tokens, _ = state.cache_index.next_tokens(sequence)
-                for tok, total in list(possible_tokens.items()):
-                    if total - visited_tokens.get(tok, 0) <= 0:
-                        exhausted[tok] = total
-                        del live[tok]
             except EmptyIndexException:
                 pass
             except TripleNotFoundException:
                 pass
+            for tok, total in possible_tokens.items():
+                remaining = total - visited_tokens.get(tok, 0)
+                if remaining > 0:
+                    live[tok] = remaining
+                elif remaining == 0:
+                    exhausted[tok] = remaining
+        else:
+            live = dict(possible_tokens)
+
+        self.prev_exhausted = set(exhausted.keys())
 
         if len(possible_tokens) == 0:
+            # Index itself has nothing at this prefix — record and finish.
             state.cache_add(sequence, self.start_idx)
             self._finish()
             mask[mask_idx, :] = 0
             return
 
-        in_object = (self.tokenizer or state.tokenizer).decode(sequence).count('> <') >= 2
-        live_keys = list(live.keys())
+        offer_keys = list(set(list(live.keys()) + list(exhausted.keys())))
 
-        if in_object:
-            if live_keys:
-                vocab_size = mask.shape[-1]
-                valid_keys = [t for t in live_keys if 0 <= t < vocab_size]
-                mask[mask_idx, valid_keys] = 0
-            else:
-                self._begin_sentinel(mask, mask_idx, sequence=sequence)
-        else:
-            all_keys = live_keys + list(exhausted.keys())
+        if offer_keys:
             vocab_size = mask.shape[-1]
-            valid_keys = [t for t in all_keys if 0 <= t < vocab_size]
+            valid_keys = [t for t in offer_keys if 0 <= t < vocab_size]
             mask[mask_idx, valid_keys] = 0
+        else:
+            # ALL children over-visited (remaining < 0) — fire sentinel.
+            in_object = (self.tokenizer or state.tokenizer).decode(
+                sequence).count('> <') >= 2
+            if in_object:
+                self._begin_sentinel(mask, mask_idx, sequence=sequence)
+            else:
+                self._begin_sentinel(
+                    mask, mask_idx, sequence=sequence,
+                    sentinel_text=' <no further records> .')
 
 
 # ---------------------------------------------------------------------------
