@@ -229,7 +229,17 @@ class FactGeneration(PatternConstrainedGeneration):
             mask[mask_idx, :] = 0
             return
 
-        offer_keys = list(set(list(live.keys()) + list(exhausted.keys())))
+        # At subject / relation levels offer live + exhausted so the
+        # model can explore exhausted branches (prev_exhausted catches
+        # it on the next call).  At object+ levels only live tokens
+        # are offered — exhausted objects must not be re-chosen.
+        _decoded = (self.tokenizer or state.tokenizer).decode(sequence)
+        at_or_past_object = _decoded.count('>') >= 2
+
+        if at_or_past_object:
+            offer_keys = list(live.keys())
+        else:
+            offer_keys = list(set(list(live.keys()) + list(exhausted.keys())))
 
         if offer_keys:
             vocab_size = mask.shape[-1]
