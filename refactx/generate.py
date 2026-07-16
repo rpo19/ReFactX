@@ -132,38 +132,44 @@ class ConstrainedStateList():
         return z
 
     def beam_permutation(self):
-        if len(self.beam_idx) > 0: # ignore first call
-            assert self.beam_idx.shape[0] * self.beam_idx.shape[1] == self.num_beams * self.num_batches, f'ERROR: beam_idx size unexpected: {len(self.beam_idx)} != {self.num_beams} * {self.num_batches}'
-            # copies = self[:,:] # new object
-            copies = []
-            for batch_i in range(self.num_batches):
-                batch_copies = []
-                for beam_i in range(self.num_beams):
-                    batch_copies.append(self[batch_i, beam_i].dump())
-                copies.append(batch_copies)
-            # copies = [[self[batch_i, beam_i].dump() for beam_i in range(self.num_beams)] for batch_i in range(self.num_batches)]
-            last_beam_z = self.get_last_beam_z()
-            # skip first call
-            if last_beam_z >= 0:
-                if self.debug:
-                    for batch_idx in range(self.beam_idx.shape[0]):
-                        for num_beam in range(self.beam_idx.shape[1]):
-                            print((batch_idx, num_beam), end='')
-                            self.states[batch_idx][num_beam].print_debug(self.debug_tokenizer)
+        if isinstance(self.beam_idx, torch.Tensor):
+            if self.beam_idx.ndim == 1:
+                total = self.beam_idx.shape[0]
+                assert total == self.num_beams * self.num_batches, f'ERROR: beam_idx size unexpected: {total} != {self.num_beams} * {self.num_batches}'
+                _beam_idx = self.beam_idx.view(self.num_batches, self.num_beams, 1)
+            elif self.beam_idx.ndim == 3:
+                _beam_idx = self.beam_idx
+            else:
+                return
+        elif len(self.beam_idx) > 0:
+            _beam_idx = self.beam_idx
+        else:
+            return
 
-                for batch_idx in range(self.beam_idx.shape[0]):
-                    for num_beam in range(self.beam_idx.shape[1]):
-                        replacement_idx = self.beam_idx[batch_idx, num_beam, last_beam_z]
-                        replacement_batch_idx = self.get_batch_idx(replacement_idx)
-                        local_beam_idx = self.get_beam_idx(replacement_idx)
-                        assert replacement_batch_idx == batch_idx, f'ERROR: permutating between different batches! {replacement_batch_idx} --> {batch_idx}, with num_beams {self.num_beams}. replacement_idx {replacement_idx}'
-                        # copy only when to change
-                        if num_beam != local_beam_idx:
-                            # self.states[batch_idx][num_beam].copy(copies[batch_idx][local_beam_idx], copy=True)
-                            self.states[batch_idx][num_beam].load(copies[batch_idx][local_beam_idx], copy=True)
-                            self.num_permutations += 1
-                            if self.debug:
-                                print(f'permutation {self.num_permutations}: ({batch_idx},{local_beam_idx}) into {batch_idx}{num_beam}')
+        copies = []
+        for batch_i in range(self.num_batches):
+            batch_copies = []
+            for beam_i in range(self.num_beams):
+                batch_copies.append(self[batch_i, beam_i].dump())
+            copies.append(batch_copies)
+
+        if self.debug:
+            for batch_idx in range(_beam_idx.shape[0]):
+                for num_beam in range(_beam_idx.shape[1]):
+                    print((batch_idx, num_beam), end='')
+                    self.states[batch_idx][num_beam].print_debug(self.debug_tokenizer)
+
+        for batch_idx in range(_beam_idx.shape[0]):
+            for num_beam in range(_beam_idx.shape[1]):
+                replacement_idx = _beam_idx[batch_idx, num_beam, -1].item()
+                replacement_batch_idx = self.get_batch_idx(replacement_idx)
+                local_beam_idx = self.get_beam_idx(replacement_idx)
+                assert replacement_batch_idx == batch_idx, f'ERROR: permutating between different batches! {replacement_batch_idx} --> {batch_idx}, with num_beams {self.num_beams}. replacement_idx {replacement_idx}'
+                if num_beam != local_beam_idx:
+                    self.states[batch_idx][num_beam].load(copies[batch_idx][local_beam_idx], copy=True)
+                    self.num_permutations += 1
+                    if self.debug:
+                        print(f'permutation {self.num_permutations}: ({batch_idx},{local_beam_idx}) into {batch_idx}{num_beam}')
 
 """
 Pattern should be recognized as soon as it is generated. Usually you want to end it with $
@@ -257,6 +263,30 @@ class PatternConstrainedState():
         self.debug = other.debug
         self.debug_history = deepcopy(other.debug_history) if copy else other.debug_history
 
+
+    def dump(self):
+        return {
+            'pattern': self.pattern,
+            'state': self.state,
+            'cursor': self.cursor,
+            'generated_triples': self.generated_triples.copy(),
+            'cache_index': self.cache_index.copy(),
+            'subtree_cache': self.subtree_cache.copy(),
+            'token_ids': self.token_ids.copy(),
+            'debug': self.debug,
+            'debug_history': self.debug_history.copy(),
+        }
+
+    def load(self, data, copy=True):
+        self.pattern = data['pattern']
+        self.state = data['state']
+        self.cursor = data['cursor']
+        self.generated_triples = data['generated_triples'].copy() if copy else data['generated_triples']
+        self.cache_index = deepcopy(data['cache_index']) if copy else data['cache_index']
+        self.subtree_cache = deepcopy(data['subtree_cache']) if copy else data['subtree_cache']
+        self.token_ids = data['token_ids'].copy() if copy else data['token_ids']
+        self.debug = data['debug']
+        self.debug_history = data['debug_history'].copy() if copy else data['debug_history']
 
     def update(self, new_token):
         state = self.state
