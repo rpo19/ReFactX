@@ -55,6 +55,12 @@ def import_module(path):
         path = path[:-3]
     return importlib.import_module(path)
 
+def get_field(sample, key):
+    value = sample
+    for part in key.split('.'):
+        value = value[part]
+    return value
+
 
 def calculate_metrics(prediction, input_sample, answer_key='answer', lowercase=True):
     # Calculate precision, recall, F1 score, boolean accuracy (1 correct or 0 error), i don't know
@@ -137,6 +143,8 @@ def main(config_path):
         os.makedirs(cfg.get("log_dir", "."), exist_ok=True)
         output_file = os.path.join(cfg.get("log_dir", "."), f'{experiment_name}.out')
 
+    question_key = cfg.get("question_key", "question")
+    options_key = cfg.get("options_key")
     prompt_length = tokenizer(refactx.apply_prompt_template(tokenizer, PROMPT_TEMPLATE, "question"),
                     return_tensors='pt', padding=False)['input_ids'].shape[1]
 
@@ -252,13 +260,20 @@ def main(config_path):
                     for q in batch:
                         print(q)
 
+                questions = [get_field(dataset_sample, question_key) for dataset_sample in dataset.select(
+                    range(batch_number * cfg.get('batch_size', 1), min((batch_number + 1) * cfg.get('batch_size', 1), len(dataset))))]
+                if options_key:
+                    options = [get_field(dataset_sample, options_key) for dataset_sample in dataset.select(
+                        range(batch_number * cfg.get('batch_size', 1), min((batch_number + 1) * cfg.get('batch_size', 1), len(dataset))))]
+                    questions = [q + "\n\nOptions:\n" + "\n".join(f"{k}: {v}" for k, v in o.items()) for q, o in zip(questions, options)]
+
                 prompted_batch = [
                     refactx.apply_prompt_template(
                         tokenizer,
                         PROMPT_TEMPLATE,
                         q,
                         enable_thinking=cfg.get("thinking", False)
-                    ) for q in batch['question']]
+                    ) for q in questions]
 
                 batch_inputs = tokenizer(prompted_batch, return_tensors="pt", padding=True).to(model.device)
 
@@ -276,8 +291,9 @@ def main(config_path):
 
                 refactx.get_constrained_states().beam_permutation()
 
-                for i, (question, output_i) in enumerate(zip(batch['question'], output)):
+                for i, (question, output_i) in enumerate(zip(questions, output)):
                     input_sample = {k: batch[k][i] for k in batch}
+                    input_sample[cfg.get('answer_key', 'answer')] = get_field(input_sample, cfg.get('answer_key', 'answer'))
                     state = refactx.get_constrained_states()[i, 0]
 
                     start_idx = len(batch_inputs.input_ids[0])
