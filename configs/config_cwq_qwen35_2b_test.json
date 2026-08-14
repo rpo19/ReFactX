@@ -2,7 +2,7 @@
     "experiment_name": "rogcwq_test_eval_sft",
     "output": null,
     "log_dir": "logs",
-    "tablename": "qwen36",
+    "tablename": "fbqwen36",
     "model_name": "/workspace/data/data/horse/ws/ripo631h-quokka/sft_merged",
     "model_dtype": "bfloat16",
     "dataset": "rmanluo/RoG-cwq",

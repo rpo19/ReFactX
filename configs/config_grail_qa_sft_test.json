@@ -2,7 +2,7 @@
     "experiment_name": "grail_qa_test_eval_sft_merged",
     "output": null,
     "log_dir": "logs",
-    "tablename": "qwen36",
+    "tablename": "fbqwen36\",
     "model_name": "/workspace/data/data/horse/ws/ripo631h-quokka/sft_merged",
     "model_dtype": "bfloat16",
     "dataset": "Hieuman/grail_qa",
