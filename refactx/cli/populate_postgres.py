@@ -1,5 +1,6 @@
 import bz2
-from tqdm import tqdm
+import gzip
+from pathlib import Path
 from refactx import populate_postgres_index
 from transformers import AutoTokenizer
 import click
@@ -40,8 +41,17 @@ def main(fname, model_name, postgres_connection, table_name, prefix, end_of_trip
     if not tokenizer.is_fast:
         print('WARNING: tokenizer is not fast.')
 
-    # open the compressed file and pass the file reader to the helper
-    with bz2.BZ2File(fname) as file_reader:
+    # The indexer consumes byte lines. Support the compressed formats used by
+    # the datasets as well as ordinary text files.
+    path = Path(fname)
+    if path.suffix == '.gz':
+        opener = gzip.open
+    elif path.suffix == '.bz2':
+        opener = bz2.open
+    else:
+        opener = open
+
+    with opener(path, 'rb') as file_reader:
         populate_postgres_index(
             file_reader=file_reader,
             postgres_url=postgres_connection,
