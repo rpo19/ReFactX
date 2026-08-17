@@ -744,9 +744,15 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
     constrained_processor = ConstrainedLogitsProcessor(
         states=CONSTRAINED_STATES, tokenizer=tokenizer)
 
+    fact_config = dict(kwargs)
+    fact_config.setdefault('eot', None)
     constrained_processor.add_pattern(
-        'Fact:', FactGeneration,
-        index=index, sentinel=sentinel, **kwargs)
+        '<fact>', FactGeneration,
+        index=index, sentinel=sentinel, **fact_config)
+
+    constrained_processor.add_pattern(
+        '<count>', CountBranchesGeneration,
+        kb_index=index)
 
     if return_list:
         logits_processor_list = LogitsProcessorList([
