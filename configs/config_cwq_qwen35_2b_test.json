@@ -3,13 +3,13 @@
     "output": null,
     "log_dir": "logs",
     "tablename": "fbqwen36",
-    "model_name": "/workspace/data/data/horse/ws/ripo631h-quokka/sft_merged",
+    "model_name": "Qwen/Qwen3.5-4B",
     "model_dtype": "bfloat16",
     "dataset": "rmanluo/RoG-cwq",
     "dataset_split": "test",
     "answer_key": "answer",
     "n": 10,
-    "prompt": "prompts/prompt_qwen36_mini2.txt",
+    "prompt": "prompts/prompt_qwen36_angular2.json",
     "wandb": false,
     "unconstrained_generation": false,
     "debug": false,
@@ -19,6 +19,6 @@
     "device": "auto",
     "thinking": false,
     "num_beams": 1,
-    "batch_size": 2,
-    "generation_config": {"max_length": 1024, "do_sample": false}
+    "batch_size": 1,
+    "generation_config": {"max_length": 4096, "do_sample": false}
 }
