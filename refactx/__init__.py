@@ -5,7 +5,7 @@ import json
 def apply_prompt_template(tokenizer, prompt_template=PROMPT_TEMPLATE, question=None, **kwargs):
     if question is None:
         # only prompt for caching
-        return tokenizer.apply_chat_template(prompt_template, tokenize=False, add_generation_prompt=False, **kwargs)
+        return tokenizer.apply_chat_template(prompt_template, tokenize=False, add_generation_prompt=True, **kwargs)
     else:
         question_w_role = {'role':'user', 'content': question}
         return tokenizer.apply_chat_template(prompt_template + [question_w_role], tokenize=False, add_generation_prompt=True, **kwargs)

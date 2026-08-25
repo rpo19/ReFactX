@@ -3,7 +3,6 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextStreamer, AutoProcessor, AutoModelForImageTextToText
 from transformers.generation.logits_process import LogitsProcessorList
 import refactx
-from refactx.prompt_base import PROMPT_TEMPLATE
 from refactx.generate import (
     ConstrainedLogitsProcessor,
     CONSTRAINED_STATES,
@@ -21,19 +20,34 @@ import os
 @click.option("--device", default="auto", help="Device to use (e.g. 'auto', 'cuda', 'cpu')")
 @click.option("--http-rootcert", required=False, default=None, help="Speficy https certificates file (or false to disable verification)")
 @click.option("--avoid-duplicates", required=False, default=True, help="Speficy whether to avoid generating duplicates or not.")
-@click.option("--thinking", required=False, default=False, help="Enable model thinking mode.")
+@click.option("--thinking", is_flag=True, required=False, default=False, help="Enable model thinking mode.")
 @click.option("--ignore-case", is_flag=True, default=True, help="Whether to ignore case when matching patterns.")
 @click.option("--pattern", default='<fact>', help="Pattern that triggers constrained generation of KB facts.")
-def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinking, ignore_case, pattern):
+@click.option("--prompt", "prompt_path", default="prompts/prompt_qwen36_angular2.json", show_default=True,
+              help="Prompt file (.json message list or .txt system prompt).")
+def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinking, ignore_case, pattern, prompt_path):
     """
     An interactive script to ask questions to the ReFactX model.
     """
+    def load_prompt_file(path):
+        """Load a JSON chat-message list or a TXT system prompt."""
+        with open(path, encoding="utf-8") as fd:
+            content = fd.read()
+        if path.lower().endswith(".json"):
+            prompt = json.loads(content)
+            if not isinstance(prompt, list):
+                raise ValueError("JSON prompt must be a list of chat messages")
+            return prompt
+        return [{"role": "system", "content": content}]
+
     print("Loading tokenizer and model...")
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_path)
+        eos_token_id=tokenizer.eos_token_id
     except Exception as e:
         print('exc vlm', e)
         tokenizer = AutoProcessor.from_pretrained(model_path)
+        eos_token_id=tokenizer.tokenizer.eos_token_id
     if device == "auto":
         try:
             model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto")
@@ -64,6 +78,8 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
     streamer_tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
     streamer = TextStreamer(streamer_tokenizer, skip_prompt=True)
 
+    current_prompt_template = load_prompt_file(prompt_path)
+    print(f"Loaded prompt from {prompt_path}")
     print("Ready to chat!")
 
     gen_config = {
@@ -75,7 +91,6 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
         "top_p": None,
         "min_p": None,
     }
-    current_prompt_template = PROMPT_TEMPLATE
 
     while True:
         try:
@@ -120,8 +135,7 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
                     key = parts[1]
                     val = parts[2]
                     if key == "prompt_template":
-                        with open(val, 'r') as fd:
-                            current_prompt_template = json.load(fd)
+                        current_prompt_template = load_prompt_file(val)
                         print(f"Updated {key}")
                     elif key in gen_config or key in ["avoid_duplicates", "ignore_case", "thinking", "pattern"]:
                         if val.lower() == "none":
@@ -138,6 +152,8 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
                                     val = float(val)
                                 except ValueError:
                                     pass
+                        if key == "prompt_template":
+                            current_prompt_template = load_prompt_file(str(val))
                         if key == "avoid_duplicates":
                             avoid_duplicates = bool(val)
                         elif key == "thinking":
@@ -192,6 +208,7 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
                     streamer=streamer,
                     num_return_sequences=num_beams,
                     use_cache=True,
+                    eos_token_id=eos_token_id,
                     **gen_config,
                 )
 
