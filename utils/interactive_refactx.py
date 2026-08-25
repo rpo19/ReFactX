@@ -6,9 +6,9 @@ import refactx
 from refactx.prompt_base import PROMPT_TEMPLATE
 from refactx.generate import (
     ConstrainedLogitsProcessor,
-    ConstrainedStateList,
-    PatternConstrainedState,
-    DictIndex,
+    CONSTRAINED_STATES,
+    FactGeneration,
+    CountBranchesGeneration,
 )
 from refactx import patch_model
 import json
@@ -23,7 +23,7 @@ import os
 @click.option("--avoid-duplicates", required=False, default=True, help="Speficy whether to avoid generating duplicates or not.")
 @click.option("--thinking", required=False, default=False, help="Enable model thinking mode.")
 @click.option("--ignore-case", is_flag=True, default=True, help="Whether to ignore case when matching patterns.")
-@click.option("--pattern", default='Fact:', help="Pattern that triggers constrained generation of KB facts.")
+@click.option("--pattern", default='<fact>', help="Pattern that triggers constrained generation of KB facts.")
 def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinking, ignore_case, pattern):
     """
     An interactive script to ask questions to the ReFactX model.
@@ -61,7 +61,8 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
         rootcert=http_rootcert)
     index.set_tokenizer(tokenizer)
 
-    streamer = TextStreamer(tokenizer, skip_prompt=True)
+    streamer_tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
+    streamer = TextStreamer(streamer_tokenizer, skip_prompt=True)
 
     print("Ready to chat!")
 
@@ -122,7 +123,7 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
                         with open(val, 'r') as fd:
                             current_prompt_template = json.load(fd)
                         print(f"Updated {key}")
-                    elif key in gen_config or key in ["avoid_duplicates", "ignore_case", "thinking"]:
+                    elif key in gen_config or key in ["avoid_duplicates", "ignore_case", "thinking", "pattern"]:
                         if val.lower() == "none":
                             val = None
                         elif val.lower() == "true":
@@ -139,12 +140,12 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
                                     pass
                         if key == "avoid_duplicates":
                             avoid_duplicates = bool(val)
-                        if key == "thinking":
+                        elif key == "thinking":
                             thinking = bool(val)
                         elif key == "ignore_case":
                             ignore_case = bool(val)
                         elif key == "pattern":
-                            pattern = pattern
+                            pattern = str(val)
                         else:
                             gen_config[key] = val
                         print(f"Updated {key} to {val}")
@@ -159,30 +160,28 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
                 break
 
             prompted_text = refactx.apply_prompt_template(
-                tokenizer, prompt_template=current_prompt_template, question=question, enable_thinking=False
+                tokenizer, prompt_template=current_prompt_template, question=question, enable_thinking=thinking
             )
-            inputs = tokenizer([prompted_text], return_tensors="pt").to(model.device)
+            tokenizer_for_inputs = getattr(tokenizer, "tokenizer", tokenizer)
+            inputs = tokenizer_for_inputs([prompted_text], return_tensors="pt").to(model.device)
 
             num_beams = gen_config["num_beams"]
-            states = [
-                [
-                    PatternConstrainedState(
-                        pattern=pattern,
-                        tokenizer=tokenizer,
-                        cache_index=DictIndex(),
-                        subtree_cache=DictIndex(),
-                        ignore_case=ignore_case,
-                    )
-                ]
-            ]
-            refactx.CONSTRAINED_STATES = ConstrainedStateList(
-                states,
-                num_beams=num_beams,
-                num_batches=1,
+            # Reinitialize the shared state container for every request. The
+            # patched model and processor use this global during generation.
+            CONSTRAINED_STATES.__init__(
+                "auto", num_beams=num_beams, num_batches=1,
+                debug_tokenizer=tokenizer,
             )
-
             constrained_processor = ConstrainedLogitsProcessor(
-                index=index, states=refactx.CONSTRAINED_STATES, tokenizer=tokenizer, avoid_duplicates=avoid_duplicates
+                states=CONSTRAINED_STATES, tokenizer=tokenizer,
+            )
+            constrained_processor.add_pattern(
+                pattern, FactGeneration,
+                index=index, sentinel=False,
+                avoid_duplicates=avoid_duplicates, eot=None,
+            )
+            constrained_processor.add_pattern(
+                "<count>", CountBranchesGeneration, kb_index=index,
             )
             logits_processor_list = LogitsProcessorList([constrained_processor])
 
@@ -197,12 +196,9 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
                 )
 
             print('Triples generated:')
-            for i, triple in enumerate(refactx.CONSTRAINED_STATES[0][0].generated_triples):
-                try:
-                    print(i, tokenizer.decode(triple), end='\n')
-                except Exception as e:
-                    print('exc vlm processor', e)
-                    print(i, tokenizer.tokenizer.decode(triple), end='\n')
+            state = CONSTRAINED_STATES.states[0][0]
+            for i, triple in enumerate(state.generated_triples):
+                print(i, streamer_tokenizer.decode(triple), end='\n')
 
 
         except (KeyboardInterrupt, EOFError):
