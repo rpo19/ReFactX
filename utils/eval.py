@@ -4,6 +4,12 @@ from tqdm import tqdm
 from transformers import LogitsProcessorList
 from refactx import patch_model
 import refactx
+from refactx.generate import (
+    CONSTRAINED_STATES,
+    ConstrainedLogitsProcessor,
+    FactGeneration,
+    CountBranchesGeneration,
+)
 import json
 import importlib
 import os
@@ -54,6 +60,18 @@ def import_module(path):
     if path.endswith('.py'):
         path = path[:-3]
     return importlib.import_module(path)
+
+
+def load_prompt_file(path):
+    """Load a JSON chat-message list or a TXT system prompt."""
+    with open(path, encoding="utf-8") as fd:
+        content = fd.read()
+    if path.lower().endswith(".json"):
+        prompt = json.loads(content)
+        if not isinstance(prompt, list):
+            raise ValueError("JSON prompt must be a list of chat messages")
+        return prompt
+    return [{"role": "system", "content": content}]
 
 def get_field(sample, key):
     value = sample
@@ -128,11 +146,9 @@ def main(config_path):
     patch_model(model)
     model.eval()
 
-    if cfg.get("prompt"):
-        PROMPT_TEMPLATE = refactx.load_prompt(cfg["prompt"])
-    else:
-        PROMPT_TEMPLATE = None
-        print(20 * '-', 'Using default prompt!')
+    prompt_path = cfg.get("prompt", "prompts/prompt_qwen36_angular2.json")
+    PROMPT_TEMPLATE = load_prompt_file(prompt_path)
+    print(f"Loaded prompt from {prompt_path}")
 
     experiment_name = cfg.get("experiment_name")
     if experiment_name is None:
@@ -151,8 +167,8 @@ def main(config_path):
 
     print("Loading index...")
     load_dotenv()
-    index_path = os.getenv("INDEX_PATH")
-    assert index_path is not None, 'ERROR: index must be provided via --index or INDEX_PATH environment variables.'
+    index_path = os.getenv("BASE_INDEX_PATH")
+    assert index_path is not None, 'ERROR: index must be provided via --index or BASE_INDEX_PATH environment variables.'
 
     tablename = cfg.get("tablename", None)
     assert tablename or 'tablename' in index_path, 'tablename must be provided in config or as part of index filename'
@@ -169,6 +185,7 @@ def main(config_path):
     generation_config = cfg.get("generation_config", {})
     if not 'pad_token_id' in generation_config:
         generation_config['pad_token_id'] = pad_token_id
+        generation_config['eos_token_id'] = eos_token_id
         cfg['generation_config'] = generation_config
 
     metadata = {**cfg, 'date': get_utc_date_and_time(), 'prompt_length': prompt_length}
@@ -222,13 +239,27 @@ def main(config_path):
         if cfg.get("unconstrained_generation", False):
             logits_processor_list = LogitsProcessorList([])
         else:
-            logits_processor_list = refactx.get_constrained_logits_processor(
-                tokenizer,
-                index,
-                cfg.get('num_beams', 1),
-                cfg.get('batch_size', 1),
-                cfg.get('avoid_duplicates', True)
+            num_beams = cfg.get('num_beams', 1)
+            num_batches = cfg.get('batch_size', 1)
+            CONSTRAINED_STATES.__init__(
+                'auto', num_beams=num_beams, num_batches=num_batches,
+                debug_tokenizer=tokenizer,
             )
+            constrained_processor = ConstrainedLogitsProcessor(
+                states=CONSTRAINED_STATES, tokenizer=tokenizer,
+            )
+            constrained_processor.add_pattern(
+                cfg.get('fact_pattern', '<fact>'), FactGeneration,
+                index=index,
+                sentinel=cfg.get('sentinel', False),
+                avoid_duplicates=cfg.get('avoid_duplicates', True),
+                eot=None,
+            )
+            constrained_processor.add_pattern(
+                cfg.get('count_pattern', '<count>'),
+                CountBranchesGeneration, kb_index=index,
+            )
+            logits_processor_list = LogitsProcessorList([constrained_processor])
 
         def collate_fn(batch):
             return {key: [d[key] for d in batch] for key in batch[0]}

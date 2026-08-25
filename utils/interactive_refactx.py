@@ -16,7 +16,7 @@ import os
 
 @click.command()
 @click.option("--model", "model_path", default="Qwen/Qwen2.5-3B-Instruct", help="Model name or path")
-@click.option("--index", "index_path", default=None, help="Path to the index file (otherwise uses environment)")
+@click.option("--index", "index_path", default=None, help="Path to the index file (otherwise uses environment INTERACTIVE_INDEX_PATH)")
 @click.option("--device", default="auto", help="Device to use (e.g. 'auto', 'cuda', 'cpu')")
 @click.option("--http-rootcert", required=False, default=None, help="Speficy https certificates file (or false to disable verification)")
 @click.option("--avoid-duplicates", required=False, default=True, help="Speficy whether to avoid generating duplicates or not.")
@@ -67,8 +67,8 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
     print("Loading index...")
     load_dotenv()
     if index_path is None:
-        index_path = os.getenv("INDEX_PATH")
-    assert index_path is not None, 'ERROR: index must be provided via --index or INDEX_PATH environment variables.'
+        index_path = os.getenv("INTERACTIVE_INDEX_PATH")
+    assert index_path is not None, 'ERROR: index must be provided via --index or INTERACTIVE_INDEX_PATH environment variables.'
 
     index = refactx.load_index(
         index_path,
