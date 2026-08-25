@@ -183,10 +183,13 @@ def main(config_path):
     eos_token_id = tokenizer.eos_token_id
 
     generation_config = cfg.get("generation_config", {})
-    if not 'pad_token_id' in generation_config:
-        generation_config['pad_token_id'] = pad_token_id
-        generation_config['eos_token_id'] = eos_token_id
-        cfg['generation_config'] = generation_config
+    # Qwen tokenizers commonly define pad_token_id already, so do not use
+    # its presence as a proxy for whether eos_token_id was configured. The v3
+    # notebook explicitly supplies EOS; without it, generation can continue
+    # normally after a constrained fact and emit stray text/punctuation.
+    generation_config.setdefault('pad_token_id', pad_token_id)
+    generation_config.setdefault('eos_token_id', eos_token_id)
+    cfg['generation_config'] = generation_config
 
     metadata = {**cfg, 'date': get_utc_date_and_time(), 'prompt_length': prompt_length}
 
@@ -238,29 +241,6 @@ def main(config_path):
 
         if cfg.get("unconstrained_generation", False):
             logits_processor_list = LogitsProcessorList([])
-        else:
-            num_beams = cfg.get('num_beams', 1)
-            num_batches = cfg.get('batch_size', 1)
-            CONSTRAINED_STATES.__init__(
-                'auto', num_beams=num_beams, num_batches=num_batches,
-                debug_tokenizer=tokenizer,
-            )
-            constrained_processor = ConstrainedLogitsProcessor(
-                states=CONSTRAINED_STATES, tokenizer=tokenizer,
-            )
-            constrained_processor.add_pattern(
-                cfg.get('fact_pattern', '<fact>'), FactGeneration,
-                index=index,
-                sentinel=cfg.get('sentinel', False),
-                avoid_duplicates=cfg.get('avoid_duplicates', True),
-                eot=None,
-            )
-            constrained_processor.add_pattern(
-                cfg.get('count_pattern', '<count>'),
-                CountBranchesGeneration, kb_index=index,
-            )
-            logits_processor_list = LogitsProcessorList([constrained_processor])
-
         def collate_fn(batch):
             return {key: [d[key] for d in batch] for key in batch[0]}
 
@@ -271,7 +251,6 @@ def main(config_path):
             collate_fn=collate_fn,
         )
 
-        patch_model(model)
         model.eval()
 
         macro_evaluation = {
@@ -308,8 +287,37 @@ def main(config_path):
 
                 batch_inputs = tokenizer(prompted_batch, return_tensors="pt", padding=True).to(model.device)
 
-                refactx.get_constrained_states().reset()
-                logits_processor_list[0]._reinit_states_to_input_ids(batch_inputs['input_ids'])
+                if cfg.get("unconstrained_generation", False):
+                    logits_processor_list = LogitsProcessorList([])
+                else:
+                    # Match the v3 notebook: create fresh state and pattern
+                    # registrations for every generate() call. This is important
+                    # because state is mutable and batch sizes may vary.
+                    num_beams = cfg.get('num_beams', 1)
+                    num_batches = len(questions)
+                    CONSTRAINED_STATES.__init__(
+                        'auto', num_beams=num_beams, num_batches=num_batches,
+                        debug_tokenizer=tokenizer,
+                    )
+                    constrained_processor = ConstrainedLogitsProcessor(
+                        states=CONSTRAINED_STATES, tokenizer=tokenizer,
+                    )
+                    constrained_processor.add_pattern(
+                        cfg.get('fact_pattern', '<fact>'), FactGeneration,
+                        index=index,
+                        sentinel=cfg.get('sentinel', False),
+                        avoid_duplicates=cfg.get('avoid_duplicates', True),
+                        # Once the trie reaches the terminal token (normally
+                        # '.'), keep the following token constrained too.
+                        # Otherwise the model may freely emit punctuation such
+                        # as '!' before resuming normal generation.
+                        eot=cfg.get('fact_eot', '\n'),
+                    )
+                    constrained_processor.add_pattern(
+                        cfg.get('count_pattern', '<count>'),
+                        CountBranchesGeneration, kb_index=index,
+                    )
+                    logits_processor_list = LogitsProcessorList([constrained_processor])
 
                 if first_inputs is None:
                     first_inputs = batch_inputs
@@ -320,12 +328,15 @@ def main(config_path):
                     **generation_config,
                 )
 
-                refactx.get_constrained_states().beam_permutation()
+                if not cfg.get("unconstrained_generation", False):
+                    refactx.get_constrained_states().beam_permutation()
 
                 for i, (question, output_i) in enumerate(zip(questions, output)):
                     input_sample = {k: batch[k][i] for k in batch}
                     input_sample[cfg.get('answer_key', 'answer')] = get_field(input_sample, cfg.get('answer_key', 'answer'))
-                    state = refactx.get_constrained_states()[i, 0]
+                    state = (refactx.get_constrained_states()[i, 0]
+                             if not cfg.get("unconstrained_generation", False)
+                             else None)
 
                     start_idx = len(batch_inputs.input_ids[0])
 
@@ -364,7 +375,8 @@ def main(config_path):
                         full_prediction=full_prediction,
                         prompt=tokenizer.decode(output_i[:start_idx]),
                         full_sample=tokenizer.decode(output_i),
-                        triples=list(map(tokenizer.decode, state.generated_triples)),
+                        triples=(list(map(tokenizer.decode, state.generated_triples))
+                                 if state is not None else []),
                         new_tokens_generated=new_tokens_generated,
                         reached_max_tokens=reached_max_tokens,
                         evaluation={
