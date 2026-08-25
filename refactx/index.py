@@ -33,8 +33,7 @@ def load_index(url, **kwargs):
     elif url.startswith('http://') or url.startswith('https://'):
         return _load_http_index(url, **kwargs)
     else:
-        print('Trying to load index from string...')
-        return _load_from_string(url, **kwargs)
+        raise ValueError(f'Unknown URL type: {url}')
 
 def _load_http_index(url, configkey=DEFAULT_CONFIGKEY, cache='simple', rootcert=None):
     cache = _load_cache(cache)
@@ -123,7 +122,7 @@ def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple'
         cache = cache,
         configkey=configkey
         )
-    
+
     return index
 
 def populate_postgres_index(file_reader, postgres_url, tokenizer, table_name, batch_size=5000, rootkey = DEFAULT_ROOTKEY, configkey=DEFAULT_CONFIGKEY, switch_parameter = DEFAULT_SWITCH_PARAMETER, total_number_of_triples=None, prefix='', tokenizer_batch_size=5000, add_special_tokens=False, count_leaves=True, debug=False):
@@ -614,7 +613,7 @@ class PostgresTrieIndex(Index):
                     self.rootkey = config['rootkey']
                 if 'tokenizer_name' in config:
                     self.tokenizer_name = config['tokenizer_name']
-            
+
         return config
 
     def flush_cache(self):
@@ -764,7 +763,7 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
                 self.rootkey = config['rootkey']
             if 'tokenizer_name' in config:
                 self.tokenizer_name = config['tokenizer_name']
-        
+
         return config
 
     def _next_tokens_from_postgresql(self, sequence, state):
@@ -869,7 +868,7 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
             FROM STDIN WITH (FREEZE)''').format(sql.Identifier(self.table_name))
 
         self.tokenizer_name = tokenizer_name
-        
+
     def get_config_row(self):
         config = {
             'switch_parameter': self.switch_parameter,
