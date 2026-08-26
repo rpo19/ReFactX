@@ -14,13 +14,13 @@ from refactx.index import EmptyIndexException, TripleNotFoundException
 
 def patch_model(model, verbose=True):
     _get_running_beams_for_next_iteration_original = model.__class__._get_running_beams_for_next_iteration
-    
+
     def _get_running_beams_for_next_iteration_patch(self,*args, **kwargs):
         global CONSTRAINED_STATES
         running_sequences, running_beam_scores, running_beam_indices = _get_running_beams_for_next_iteration_original(self, *args, **kwargs)
         CONSTRAINED_STATES.beam_idx = running_beam_indices
-        return running_sequences, running_beam_scores, running_beam_indices    
-    
+        return running_sequences, running_beam_scores, running_beam_indices
+
     model._get_running_beams_for_next_iteration = types.MethodType(_get_running_beams_for_next_iteration_patch, model)
 
     if verbose:
@@ -131,11 +131,34 @@ class FactGeneration(PatternConstrainedGeneration):
         if sequence is not None:
             self._sentinel_triple = sequence[:]
         if not self.state.sentinel_remaining:
+            self._queue_eot_or_finish()
+
+    def _emit_next(self, remaining, mask, mask_idx, on_complete):
+        """Constrain the next token in a queued terminal sequence."""
+        nxt = remaining.pop(0)
+        mask[mask_idx, :] = -math.inf
+        mask[mask_idx, nxt] = 0
+        if not remaining:
+            on_complete()
+
+    def _queue_eot_or_finish(self):
+        """Queue the EOT sequence, or finish when no EOT is configured."""
+        if self.eot_tokens:
+            self.eot_remaining = list(self.eot_tokens)
+        else:
             self._finish()
 
+    def _start_eot(self, mask, mask_idx):
+        """Start emitting EOT immediately from the current mask row."""
+        self._queue_eot_or_finish()
+        if self.eot_remaining:
+            self._emit_next(self.eot_remaining, mask, mask_idx, self._finish)
+
     def _finish(self):
+        # print('finish')
         if self.completed_with_sentinel and hasattr(self, '_sentinel_triple'):
             self.state.cache_add(self._sentinel_triple, self.start_idx)
+            print('Adding sentinel triple to cache', self._sentinel_triple)
         self.state.subtree_cache.reset()
         self.state.sentinel_remaining = []
         self.state.state = 0
@@ -146,19 +169,14 @@ class FactGeneration(PatternConstrainedGeneration):
 
         # Mid-sentinel: keep emitting the "no further records" object token by token.
         if state.sentinel_remaining:
-            nxt = state.sentinel_remaining.pop(0)
-            mask[mask_idx, :] = -math.inf
-            mask[mask_idx, nxt] = 0
-            if not state.sentinel_remaining:
-                self._finish()
+            self._emit_next(
+                state.sentinel_remaining, mask, mask_idx,
+                self._queue_eot_or_finish)
             return
 
         if self.eot_remaining:
-            nxt = self.eot_remaining.pop(0)
-            mask[mask_idx, :] = -math.inf
-            mask[mask_idx, nxt] = 0
-            if not self.eot_remaining:
-                self._finish()
+            self._emit_next(
+                self.eot_remaining, mask, mask_idx, self._finish)
             return
 
         possible_tokens, _ = self.index.next_tokens(sequence, state=state)
@@ -177,13 +195,10 @@ class FactGeneration(PatternConstrainedGeneration):
             possible_tokens = list(possible_tokens.keys())
 
             if len(possible_tokens) == 0:
+                print('No possible tokens')
                 state.cache_add(sequence, self.start_idx)
                 if self.eot_tokens:
-                    mask[mask_idx, :] = -math.inf
-                    mask[mask_idx, self.eot_tokens[0]] = 0
-                    self.eot_remaining = list(self.eot_tokens[1:])
-                    if not self.eot_remaining:
-                        self._finish()
+                    self._start_eot(mask, mask_idx)
                     return
                 self._finish()
             else:
@@ -239,8 +254,11 @@ class FactGeneration(PatternConstrainedGeneration):
         self.prev_exhausted = set(exhausted.keys())
 
         if len(possible_tokens) == 0:
-            # Index itself has nothing at this prefix — record and finish.
+            # Index itself has nothing at this prefix — record and emit EOT.
             state.cache_add(sequence, self.start_idx)
+            if self.eot_tokens:
+                self._start_eot(mask, mask_idx)
+                return
             self._finish()
             mask[mask_idx, :] = 0
             return
@@ -287,7 +305,7 @@ class CountBranchesGeneration(PatternConstrainedGeneration):
     MODE_COLLECTING = 0
     MODE_EMITTING = 1
 
-    def __init__(self, state, tokenizer, start_idx, kb_index, delimiter="\n"):
+    def __init__(self, state, tokenizer, start_idx, kb_index, delimiter="\n", eot="</count>\n"):
         super().__init__(state, tokenizer, start_idx)
         self.kb_index = kb_index
         self.mode = self.MODE_COLLECTING
@@ -296,6 +314,7 @@ class CountBranchesGeneration(PatternConstrainedGeneration):
         self.calls: list[tuple[str, int]] = []
         encoded_delim = self._encode(delimiter)
         self.delimiter_token = encoded_delim[0] if encoded_delim else None
+        self.eot = eot
 
     def _encode(self, text: str) -> list[int]:
         if hasattr(self.tokenizer, "tokenizer"):
@@ -343,14 +362,20 @@ class CountBranchesGeneration(PatternConstrainedGeneration):
                 count = self._count_at_prefix(self.prefix_tokens)
                 prefix_text = self._decode(self.prefix_tokens).strip()
                 self.calls.append((prefix_text, count))
-                count_str = f" = {count}"
+                count_str = f"= {count}\n{self.eot}"
                 self.count_tokens = self._encode(count_str)
                 self.mode = self.MODE_EMITTING
                 self._emit_count(mask, mask_idx)
             else:
                 if last_token is not None:
                     self.prefix_tokens.append(last_token)
-                mask[mask_idx, :] = 0
+                possible_tokens, _ = self.kb_index.next_tokens(self.prefix_tokens, state=self.state)
+                # allow the delimiter token to be generated
+                possible_tokens[self.delimiter_token] = 1
+
+                possible_tokens = list(possible_tokens.keys())
+
+                mask[mask_idx, possible_tokens] = 0
 
         elif self.mode == self.MODE_EMITTING:
             self._emit_count(mask, mask_idx)
@@ -439,17 +464,21 @@ class PatternConstrainedState():
         self.sentinel_remaining = []
         self.state = 0
 
-    def reset(self):
+    def reset(self, clear_patterns=True):
         self.state = 0
         self.token_ids = []
         self.input_ids = []
         self.history = ()
         self.cursor = 0
         self.generated_triples = []
+        self.generated_triples_idx = []
+        self.generated_triples_str = []
         self.cache_index.reset()
         self._thinking_cache_reset_done = False
+        self._first_call = True
         self.active_generation = None
-        self.patterns = []
+        if clear_patterns:
+            self.patterns = []
         self.generation_history = []
         self.end_of_triple_reset()
 
@@ -565,9 +594,9 @@ class ConstrainedStateList():
         elif states != []:
             assert isinstance(states, list) and isinstance(states[0], list), 'ERROR: states is not a list of lists'
             assert len(states) == num_batches and len(states[0]) == num_beams, 'ERROR: states size does not match num_batches or num_beams'
-        
+
         self.states = states
-            
+
         self.num_beams = num_beams
         self.num_batches = num_batches
         self.beam_idx = []
@@ -615,17 +644,17 @@ class ConstrainedStateList():
     def __len__(self):
         return len(self.states) * len(self.states[0])
 
-    def reset(self):
+    def reset(self, clear_patterns=True):
         for batch in self.states:
             for state in batch:
-                state.reset()
+                state.reset(clear_patterns=clear_patterns)
 
     def get_batch_idx(self, idx):
         return int(idx // self.num_beams)
-    
+
     def get_beam_idx(self, idx):
         return int(idx % self.num_beams)
-    
+
     def get_last_beam_z(self):
         z = -1
         ids = (self.beam_idx[0, 0] != -1).nonzero(as_tuple=False).squeeze()
@@ -675,12 +704,32 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         self.states = states
         self.reinit_states = reinit_states
         self.tokenizer = tokenizer
+        self.pattern_configs = []
 
     def add_pattern(self, pattern, generation_class, **config):
         cfg = PatternConfig(pattern=pattern, generation_class=generation_class, config=config)
+        self.pattern_configs.append(cfg)
         for batch in self.states.states:
             for state in batch:
                 state.patterns.append(cfg)
+
+    def reset_states(self, num_beams=None, num_batches=None):
+        """Reset request state while retaining registered pattern configs."""
+        num_beams = self.states.num_beams if num_beams is None else num_beams
+        num_batches = self.states.num_batches if num_batches is None else num_batches
+        if (num_beams != self.states.num_beams or
+                num_batches != self.states.num_batches or
+                len(self.states.states) == 0):
+            self.states.__init__(
+                'auto', num_beams=num_beams, num_batches=num_batches,
+                debug_tokenizer=self.tokenizer,
+            )
+            for cfg in self.pattern_configs:
+                for batch in self.states.states:
+                    for state in batch:
+                        state.patterns.append(cfg)
+        else:
+            self.states.reset(clear_patterns=False)
 
     def _reinit_states(self, num_beams, num_batches):
         self.states.__init__('auto',
@@ -706,7 +755,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             else:
                 raise ValueError(f'Error: {message}')
             self._reinit_states(num_beams=1, num_batches=input_ids.shape[0])
-            
+
         self.states.beam_permutation()
 
         mask = torch.zeros_like(scores)
@@ -752,7 +801,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1,
                                      return_list=True, sentinel=False,
                                      fact_pattern='<fact>', count_pattern='<count>',
-                                     eot='</fact>\n', **kwargs):
+                                     eot=' </fact>\n', **kwargs):
     CONSTRAINED_STATES.__init__('auto',
                 num_beams=num_beams,
                 num_batches=num_batches,

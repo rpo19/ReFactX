@@ -41,11 +41,11 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
     print("Loading tokenizer and model...")
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_path)
-        eos_token_id=tokenizer.eos_token_id
+        eos_token_id = tokenizer.eos_token_id
     except Exception as e:
         print('exc vlm', e)
         tokenizer = AutoProcessor.from_pretrained(model_path)
-        eos_token_id=tokenizer.tokenizer.eos_token_id
+        eos_token_id = tokenizer.tokenizer.eos_token_id
     if device == "auto":
         try:
             model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto")
@@ -78,6 +78,15 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
 
     current_prompt_template = load_prompt_file(prompt_path)
     print(f"Loaded prompt from {prompt_path}")
+
+    num_beams = 1
+    logits_processor_list = get_constrained_logits_processor(
+        tokenizer, index, num_beams=num_beams, num_batches=1,
+        fact_pattern=pattern, count_pattern="<count>",
+        avoid_duplicates=avoid_duplicates,
+    )
+    constrained_processor = logits_processor_list[0]
+
     print("Ready to chat!")
 
     gen_config = {
@@ -180,15 +189,9 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
             inputs = tokenizer_for_inputs([prompted_text], return_tensors="pt").to(model.device)
 
             num_beams = gen_config["num_beams"]
-            # The shared factory initializes state and registers all patterns.
-            logits_processor_list = get_constrained_logits_processor(
-                tokenizer,
-                index,
-                num_beams=num_beams,
-                num_batches=1,
-                fact_pattern=pattern,
-                count_pattern="<count>",
-                avoid_duplicates=avoid_duplicates,
+            # Keep the processor stable; reset only per-request state.
+            constrained_processor.reset_states(
+                num_beams=num_beams, num_batches=1,
             )
 
             with torch.no_grad():

@@ -239,6 +239,21 @@ def main(config_path):
 
         if cfg.get("unconstrained_generation", False):
             logits_processor_list = LogitsProcessorList([])
+            constrained_processor = None
+        else:
+            logits_processor_list = get_constrained_logits_processor(
+                tokenizer,
+                index,
+                num_beams=cfg.get('num_beams', 1),
+                num_batches=cfg.get('batch_size', 1),
+                sentinel=cfg.get('sentinel', False),
+                fact_pattern=cfg.get('fact_pattern', '<fact>'),
+                count_pattern=cfg.get('count_pattern', '<count>'),
+                eot=cfg.get('fact_eot', '</fact>\n'),
+                avoid_duplicates=cfg.get('avoid_duplicates', True),
+            )
+            constrained_processor = logits_processor_list[0]
+
         def collate_fn(batch):
             return {key: [d[key] for d in batch] for key in batch[0]}
 
@@ -285,22 +300,13 @@ def main(config_path):
 
                 batch_inputs = tokenizer(prompted_batch, return_tensors="pt", padding=True).to(model.device)
 
-                if cfg.get("unconstrained_generation", False):
-                    logits_processor_list = LogitsProcessorList([])
-                else:
-                    # Match the v3 notebook: create fresh state and pattern
-                    # registrations for every generate() call. This is important
-                    # because state is mutable and batch sizes may vary.
-                    logits_processor_list = get_constrained_logits_processor(
-                        tokenizer,
-                        index,
+                if constrained_processor is not None:
+                    # Keep the processor object stable; only reset its mutable
+                    # per-request states. The helper also handles a short final
+                    # batch by resizing and restoring the registered patterns.
+                    constrained_processor.reset_states(
                         num_beams=cfg.get('num_beams', 1),
                         num_batches=len(questions),
-                        sentinel=cfg.get('sentinel', False),
-                        fact_pattern=cfg.get('fact_pattern', '<fact>'),
-                        count_pattern=cfg.get('count_pattern', '<count>'),
-                        eot=cfg.get('fact_eot', '</fact>\n'),
-                        avoid_duplicates=cfg.get('avoid_duplicates', True),
                     )
 
                 if first_inputs is None:
