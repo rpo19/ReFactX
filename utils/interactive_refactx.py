@@ -4,10 +4,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TextStreamer, Auto
 from transformers.generation.logits_process import LogitsProcessorList
 import refactx
 from refactx.generate import (
-    ConstrainedLogitsProcessor,
     CONSTRAINED_STATES,
-    FactGeneration,
-    CountBranchesGeneration,
+    get_constrained_logits_processor,
 )
 from refactx import patch_model
 import json
@@ -182,24 +180,16 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
             inputs = tokenizer_for_inputs([prompted_text], return_tensors="pt").to(model.device)
 
             num_beams = gen_config["num_beams"]
-            # Reinitialize the shared state container for every request. The
-            # patched model and processor use this global during generation.
-            CONSTRAINED_STATES.__init__(
-                "auto", num_beams=num_beams, num_batches=1,
-                debug_tokenizer=tokenizer,
+            # The shared factory initializes state and registers all patterns.
+            logits_processor_list = get_constrained_logits_processor(
+                tokenizer,
+                index,
+                num_beams=num_beams,
+                num_batches=1,
+                fact_pattern=pattern,
+                count_pattern="<count>",
+                avoid_duplicates=avoid_duplicates,
             )
-            constrained_processor = ConstrainedLogitsProcessor(
-                states=CONSTRAINED_STATES, tokenizer=tokenizer,
-            )
-            constrained_processor.add_pattern(
-                pattern, FactGeneration,
-                index=index, sentinel=False,
-                avoid_duplicates=avoid_duplicates, eot=None,
-            )
-            constrained_processor.add_pattern(
-                "<count>", CountBranchesGeneration, kb_index=index,
-            )
-            logits_processor_list = LogitsProcessorList([constrained_processor])
 
             with torch.no_grad():
                 model.generate(

@@ -6,9 +6,7 @@ from refactx import patch_model
 import refactx
 from refactx.generate import (
     CONSTRAINED_STATES,
-    ConstrainedLogitsProcessor,
-    FactGeneration,
-    CountBranchesGeneration,
+    get_constrained_logits_processor,
 )
 import json
 import importlib
@@ -293,31 +291,17 @@ def main(config_path):
                     # Match the v3 notebook: create fresh state and pattern
                     # registrations for every generate() call. This is important
                     # because state is mutable and batch sizes may vary.
-                    num_beams = cfg.get('num_beams', 1)
-                    num_batches = len(questions)
-                    CONSTRAINED_STATES.__init__(
-                        'auto', num_beams=num_beams, num_batches=num_batches,
-                        debug_tokenizer=tokenizer,
-                    )
-                    constrained_processor = ConstrainedLogitsProcessor(
-                        states=CONSTRAINED_STATES, tokenizer=tokenizer,
-                    )
-                    constrained_processor.add_pattern(
-                        cfg.get('fact_pattern', '<fact>'), FactGeneration,
-                        index=index,
+                    logits_processor_list = get_constrained_logits_processor(
+                        tokenizer,
+                        index,
+                        num_beams=cfg.get('num_beams', 1),
+                        num_batches=len(questions),
                         sentinel=cfg.get('sentinel', False),
+                        fact_pattern=cfg.get('fact_pattern', '<fact>'),
+                        count_pattern=cfg.get('count_pattern', '<count>'),
+                        eot=cfg.get('fact_eot', '</fact>\n'),
                         avoid_duplicates=cfg.get('avoid_duplicates', True),
-                        # Once the trie reaches the terminal token (normally
-                        # '.'), keep the following token constrained too.
-                        # Otherwise the model may freely emit punctuation such
-                        # as '!' before resuming normal generation.
-                        eot=cfg.get('fact_eot', '\n'),
                     )
-                    constrained_processor.add_pattern(
-                        cfg.get('count_pattern', '<count>'),
-                        CountBranchesGeneration, kb_index=index,
-                    )
-                    logits_processor_list = LogitsProcessorList([constrained_processor])
 
                 if first_inputs is None:
                     first_inputs = batch_inputs

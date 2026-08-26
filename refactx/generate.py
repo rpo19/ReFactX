@@ -79,14 +79,17 @@ class FactGeneration(PatternConstrainedGeneration):
         self.sentinel_text = sentinel_text
         self.avoid_duplicates = avoid_duplicates
 
-        self.eot_token = None
+        self.eot_tokens = []
         if eot is not None:
-            if isinstance(tokenizer, ProcessorMixin):
-                encoded = tokenizer.tokenizer.encode(eot, add_special_tokens=False)
+            if isinstance(eot, str):
+                if isinstance(tokenizer, ProcessorMixin):
+                    encoded = tokenizer.tokenizer.encode(eot, add_special_tokens=False)
+                else:
+                    encoded = tokenizer.encode(eot, add_special_tokens=False)
             else:
-                encoded = tokenizer.encode(eot, add_special_tokens=False)
-            if encoded:
-                self.eot_token = encoded[0]
+                encoded = list(eot)
+            self.eot_tokens = encoded
+        self.eot_remaining = []
 
         self._sentinel_ids_cache = None
         self.completed_with_sentinel = False
@@ -150,6 +153,14 @@ class FactGeneration(PatternConstrainedGeneration):
                 self._finish()
             return
 
+        if self.eot_remaining:
+            nxt = self.eot_remaining.pop(0)
+            mask[mask_idx, :] = -math.inf
+            mask[mask_idx, nxt] = 0
+            if not self.eot_remaining:
+                self._finish()
+            return
+
         possible_tokens, _ = self.index.next_tokens(sequence, state=state)
 
         if not self.sentinel:
@@ -167,8 +178,13 @@ class FactGeneration(PatternConstrainedGeneration):
 
             if len(possible_tokens) == 0:
                 state.cache_add(sequence, self.start_idx)
-                if self.eot_token is not None:
-                    possible_tokens = [self.eot_token]
+                if self.eot_tokens:
+                    mask[mask_idx, :] = -math.inf
+                    mask[mask_idx, self.eot_tokens[0]] = 0
+                    self.eot_remaining = list(self.eot_tokens[1:])
+                    if not self.eot_remaining:
+                        self._finish()
+                    return
                 self._finish()
             else:
                 vocab_size = mask.shape[-1]
@@ -734,7 +750,9 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 # ---------------------------------------------------------------------------
 
 def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1,
-                                     return_list=True, sentinel=False, **kwargs):
+                                     return_list=True, sentinel=False,
+                                     fact_pattern='<fact>', count_pattern='<count>',
+                                     eot='</fact>\n', **kwargs):
     CONSTRAINED_STATES.__init__('auto',
                 num_beams=num_beams,
                 num_batches=num_batches,
@@ -745,13 +763,13 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
         states=CONSTRAINED_STATES, tokenizer=tokenizer)
 
     fact_config = dict(kwargs)
-    fact_config.setdefault('eot', None)
+    fact_config['eot'] = eot
     constrained_processor.add_pattern(
-        '<fact>', FactGeneration,
+        fact_pattern, FactGeneration,
         index=index, sentinel=sentinel, **fact_config)
 
     constrained_processor.add_pattern(
-        '<count>', CountBranchesGeneration,
+        count_pattern, CountBranchesGeneration,
         kb_index=index)
 
     if return_list:
