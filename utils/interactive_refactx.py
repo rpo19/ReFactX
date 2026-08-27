@@ -21,9 +21,10 @@ import os
 @click.option("--thinking", is_flag=True, required=False, default=False, help="Enable model thinking mode.")
 @click.option("--ignore-case", is_flag=True, default=True, help="Whether to ignore case when matching patterns.")
 @click.option("--pattern", default='<fact>', help="Pattern that triggers constrained generation of KB facts.")
+@click.option("--torch-dtype", "torch_dtype", default='bfloat16', help="Torch dtype")
 @click.option("--prompt", "prompt_path", default="prompts/prompt_qwen36_angular2.json", show_default=True,
               help="Prompt file (.json message list or .txt system prompt).")
-def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinking, ignore_case, pattern, prompt_path):
+def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinking, ignore_case, pattern, torch_dtype, prompt_path):
     """
     An interactive script to ask questions to the ReFactX model.
     """
@@ -48,10 +49,10 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
         eos_token_id = tokenizer.tokenizer.eos_token_id
     if device == "auto":
         try:
-            model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto")
+            model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto", dtype=torch_dtype)
         except Exception as e:
             print('exc loading model. maybe a vlm', e)
-            model = AutoModelForImageTextToText.from_pretrained(model_path, device_map="auto")
+            model = AutoModelForImageTextToText.from_pretrained(model_path, device_map="auto", dtype=torch_dtype)
     else:
         try:
             model = AutoModelForCausalLM.from_pretrained(model_path).to(device)
