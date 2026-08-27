@@ -195,7 +195,6 @@ class FactGeneration(PatternConstrainedGeneration):
             possible_tokens = list(possible_tokens.keys())
 
             if len(possible_tokens) == 0:
-                print('No possible tokens')
                 state.cache_add(sequence, self.start_idx)
                 if self.eot_tokens:
                     self._start_eot(mask, mask_idx)
