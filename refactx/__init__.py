@@ -1,6 +1,7 @@
 from refactx.index import load_index, populate_postgres_index
 from refactx.prompt_base import PROMPT_TEMPLATE
 import json
+import yaml
 
 def apply_prompt_template(tokenizer, prompt_template=PROMPT_TEMPLATE, question=None, **kwargs):
     if question is None:
@@ -59,16 +60,23 @@ def get_answer(full_answer):
     return answer
 
 def load_prompt(path):
-    with open(path) as f:
-        system_prompt = f.read()
-    full_prompt = [
-        {
-                "role": "system",
-                    "content": system_prompt
-        }
-    ]
-    return full_prompt
+    """Load a JSON/YAML chat-message list or a plain-text system prompt."""
+    with open(path, encoding="utf-8") as f:
+        content = f.read()
+
+    path_lower = str(path).lower()
+    if path_lower.endswith(".json"):
+        prompt = json.loads(content)
+        if not isinstance(prompt, list):
+            raise ValueError("JSON prompt must be a list of chat messages")
+        return prompt
+    if path_lower.endswith((".yml", ".yaml")):
+        prompt = yaml.safe_load(content)
+        if not isinstance(prompt, list):
+            raise ValueError("YAML prompt must be a list of chat messages")
+        return prompt
+    return [{"role": "system", "content": content}]
 
 __version__ = _read_version_from_pyproject()
 
-__all__ = [load_index, populate_postgres_index, apply_prompt_template, get_constrained_logits_processor, get_count_branches_logits_processor, patch_model, get_constrained_states]
+__all__ = [load_index, populate_postgres_index, apply_prompt_template, load_prompt, get_constrained_logits_processor, get_count_branches_logits_processor, patch_model, get_constrained_states]

@@ -9,7 +9,6 @@ from refactx.generate import (
 )
 from refactx import patch_model
 import json
-import yaml
 from dotenv import load_dotenv
 import os
 
@@ -29,23 +28,6 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
     """
     An interactive script to ask questions to the ReFactX model.
     """
-    def load_prompt_file(path):
-        """Load a JSON/YAML chat-message list or a TXT system prompt."""
-        with open(path, encoding="utf-8") as fd:
-            content = fd.read()
-        path_lower = path.lower()
-        if path_lower.endswith(".json"):
-            prompt = json.loads(content)
-            if not isinstance(prompt, list):
-                raise ValueError("JSON prompt must be a list of chat messages")
-            return prompt
-        if path_lower.endswith((".yml", ".yaml")):
-            prompt = yaml.safe_load(content)
-            if not isinstance(prompt, list):
-                raise ValueError("YAML prompt must be a list of chat messages")
-            return prompt
-        return [{"role": "system", "content": content}]
-
     print("Loading tokenizer and model...")
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -85,7 +67,7 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
     streamer = TextStreamer(streamer_tokenizer, skip_prompt=True)
 
     current_prompt_path = prompt_path
-    current_prompt_template = load_prompt_file(current_prompt_path)
+    current_prompt_template = refactx.load_prompt(current_prompt_path)
     print(f"Loaded prompt from {current_prompt_path}")
 
     num_beams = 1
@@ -120,7 +102,7 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
                 if cmd == "!exit":
                     break
                 elif cmd == "!reloadprompt":
-                    current_prompt_template = load_prompt_file(current_prompt_path)
+                    current_prompt_template = refactx.load_prompt(current_prompt_path)
                     print(f"Reloaded prompt from {current_prompt_path}")
                     continue
                 elif cmd == "!get":
@@ -155,7 +137,7 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
                     key = parts[1]
                     val = parts[2]
                     if key == "prompt_template":
-                        current_prompt_template = load_prompt_file(val)
+                        current_prompt_template = refactx.load_prompt(val)
                         current_prompt_path = val
                         print(f"Updated {key} to {val}")
                     elif key in gen_config or key in ["avoid_duplicates", "ignore_case", "thinking", "pattern"]:

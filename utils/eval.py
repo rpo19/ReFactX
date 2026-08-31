@@ -60,17 +60,6 @@ def import_module(path):
     return importlib.import_module(path)
 
 
-def load_prompt_file(path):
-    """Load a JSON chat-message list or a TXT system prompt."""
-    with open(path, encoding="utf-8") as fd:
-        content = fd.read()
-    if path.lower().endswith(".json"):
-        prompt = json.loads(content)
-        if not isinstance(prompt, list):
-            raise ValueError("JSON prompt must be a list of chat messages")
-        return prompt
-    return [{"role": "system", "content": content}]
-
 def get_field(sample, key):
     value = sample
     for part in key.split('.'):
@@ -145,7 +134,7 @@ def main(config_path):
     model.eval()
 
     prompt_path = cfg.get("prompt", "prompts/prompt_qwen36_angular2.json")
-    PROMPT_TEMPLATE = load_prompt_file(prompt_path)
+    PROMPT_TEMPLATE = refactx.load_prompt(prompt_path)
     print(f"Loaded prompt from {prompt_path}")
 
     experiment_name = cfg.get("experiment_name")
