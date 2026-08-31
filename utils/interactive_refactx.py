@@ -80,14 +80,17 @@ def main(model_path, index_path, device, http_rootcert, avoid_duplicates, thinki
 
     print("Ready to chat!")
 
+    # hf suggested for non thinking https://huggingface.co/Qwen/Qwen3.8-27B
     gen_config = {
-        "max_new_tokens": 800,
-        "do_sample": False,
-        "temperature": None,
-        "top_k": None,
+        "max_new_tokens": 1024,
+        "do_sample": True,
+        "temperature": 0.7,
+        "top_k": 20,
         "num_beams": 1,
-        "top_p": None,
-        "min_p": None,
+        "top_p": 0.8,
+        "min_p": 0.0,
+        #"presence_penalty": 1.5,
+        "repetition_penalty": 1.0
     }
 
     while True:
