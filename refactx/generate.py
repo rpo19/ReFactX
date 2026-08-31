@@ -158,7 +158,7 @@ class FactGeneration(PatternConstrainedGeneration):
         # print('finish')
         if self.completed_with_sentinel and hasattr(self, '_sentinel_triple'):
             self.state.cache_add(self._sentinel_triple, self.start_idx)
-            print('Adding sentinel triple to cache', self._sentinel_triple)
+            #print('Adding sentinel triple to cache', self._sentinel_triple)
         self.state.subtree_cache.reset()
         self.state.sentinel_remaining = []
         self.state.state = 0

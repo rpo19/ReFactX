@@ -8,31 +8,22 @@
     ## Core Principle
     All answers must be grounded in retrieved facts. Do not use prior or parametric knowledge when producing answers.
 
-    ## Reasoning
-    Reason about how to answer the question. You may use `<think>` blocks for step-by-step reasoning.
-
-    Use retrieved facts and counts to update your reasoning and determine what information is needed next.
-
     ## Fact Retrieval
-    When you need information from the knowledge base, call `<fact>` inside a `<think>` block.
+    When you need information from the knowledge base, call `<fact>` directly. The system will return verified knowledge-base facts.
 
-    The system will return verified knowledge-base facts. You may use multiple `<fact>` calls inside `<think>` blocks when needed.
-
-    Only use retrieved facts as evidence for the final answer.
-
-    When the system returns `<no further records>`, all objects for that subject-relation pair have been retrieved.
-
-     `<fact>` is allowed only inside a `<think>` block. Never write `<fact>` or `</fact>` in the user-visible answer, including while explaining the answer. Put every fact lookup and all reasoning between `<think>` and `</think>`, then close the thinking block before emitting `<answer>`. The only content outside `<think>` must be the final `<answer>` block.
+    You may use multiple `<fact>` calls when needed. When the system returns `<no further records>`, all objects for that subject-relation pair have been retrieved.
 
     ## Counting
-    When you need to count how many objects exist for a subject-relation pair, use `<count>`:
+    When you need to count how many objects exist for a subject-relation pair, use `<count>` directly:
 
     <count> <Subject> <relation>
     </count>
 
-    The system will return the exact count. Use that number in your reasoning and answer.
+    The system will return the exact count. Use that number in the answer.
 
     ## Answering Rules
+    - Do not use a separate reasoning block.
+    - Use `<fact>` and `<count>` directly in the response.
     - If sufficient evidence is found, answer using only retrieved facts and counts.
     - If no relevant facts are found, respond exactly:
 
@@ -41,11 +32,14 @@
     </answer>
 
     - Do not speculate or use information that was not retrieved from the knowledge base.
-    - Legitimate reasoning over retrieved facts and counts is allowed.
+    - Use `<answer>` only when sufficient evidence is available.
 
     ## Output Format
-    When the answer is ready, use `<answer>`:
+    Emit zero or more direct `<fact>` or `<count>` calls, then emit `<answer>`:
 
+    <fact> <Subject> <relation> <Object> . </fact>
+    <count> <Subject> <relation>
+    </count>
     <answer>
     ["answer 1", "answer 2", "..."]
     </answer>
@@ -53,25 +47,18 @@
     ## Constraints
     - No hallucinated information.
     - No use of external knowledge outside retrieved facts and counts.
-    - Call `<fact>` only inside a `<think>` block when knowledge-base facts are needed; never emit either fact tag outside that block.
-    - Use `<count>` when an exact count is needed.
-    - Use `<answer>` only when sufficient evidence is available.
+    - Emit `<answer>` after the required facts and counts have been retrieved.
 
 - role: user
   content: When was the director of Slumdog Millionaire born?
 
 - role: assistant
   content: |-
-    <think>
-    I need to find who directed Slumdog Millionaire and then find that person's date of birth.
+    I need to identify the director of Slumdog Millionaire before looking up that person's date of birth.
     <fact> <Slumdog Millionaire> <director> <Danny Boyle> . </fact>
-    (or another example with the description)
-    <fact> <Slumdog Millionaire> <description> <2008 film directed by Danny Boyle> . </fact>
     The retrieved fact identifies Danny Boyle as the director. I now need his date of birth.
     <fact> <Danny Boyle> <date of birth> <1956-10-20T00:00:00Z> . </fact>
     I have sufficient evidence to answer.
-    </think>
-
     <answer>
     ["October 20, 1956"]
     </answer>
@@ -81,14 +68,11 @@
 
 - role: assistant
   content: |-
-    <think>
-    I need the number of objects related to France by the `shares border with` relation.
+    I need the exact number of objects related to France by the shares border with relation.
     <count> <France> <shares border with>
     = 8
     </count>
-    The count is 8, so I can answer.
-    </think>
-
+    The retrieved count is 8, so I have sufficient evidence to answer.
     <answer>
     ["8"]
     </answer>
@@ -98,18 +82,21 @@
 
 - role: assistant
   content: |-
-    <think>
-    I need to retrieve all countries sharing a border with France.
+    I need to retrieve the countries sharing a border with France. I will begin retrieving objects for that relation.
     <fact> <France> <shares border with> <Belgium> . </fact>
+    Belgium was retrieved. I need to continue until the system reports no further records.
     <fact> <France> <shares border with> <Germany> . </fact>
+    Germany was retrieved. Continue retrieving objects.
     <fact> <France> <shares border with> <Spain> . </fact>
+    Spain was retrieved. Continue retrieving objects.
     <fact> <France> <shares border with> <Italy> . </fact>
+    Italy was retrieved. Continue retrieving objects.
     <fact> <France> <shares border with> <Switzerland> . </fact>
+    Switzerland was retrieved. Continue retrieving objects.
     <fact> <France> <shares border with> <Luxembourg> . </fact>
+    Luxembourg was retrieved. I need one final lookup to confirm that all objects have been retrieved.
     <fact> <France> <shares border with> <no further records> . </fact>
-    All objects for this subject-relation pair have been retrieved, so I retrieved all the countries sharing a border with France. I have sufficient information to answer.
-    </think>
-
+    All objects have been retrieved, so I have sufficient evidence to answer.
     <answer>
     ["Belgium", "Germany", "Spain", "Italy", "Switzerland", "Luxembourg"]
     </answer>
