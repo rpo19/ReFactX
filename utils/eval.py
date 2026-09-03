@@ -92,7 +92,8 @@ def calculate_metrics(prediction, input_sample, answer_key='answer', lowercase=T
 
 @click.command()
 @click.option("--config", "config_path", required=True, type=click.Path(exists=True), help="Path to JSON config file.")
-def main(config_path):
+@click.option("--flush", "flush_output", is_flag=True, help="Flush the output log after each batch.")
+def main(config_path, flush_output):
     with open(config_path) as f:
         cfg = json.load(f)
 
@@ -371,6 +372,9 @@ def main(config_path):
 
                     if cfg.get("wandb", False):
                         wandb.log(sample)
+
+                if flush_output:
+                    output_fd.flush()
 
             macro_precision = sum(macro_evaluation["precision"]) / len(macro_evaluation["precision"]) if macro_evaluation["precision"] else 0
             macro_recall = sum(macro_evaluation["recall"]) / len(macro_evaluation["recall"]) if macro_evaluation["recall"] else 0
