@@ -48,10 +48,11 @@ def _read_version_from_pyproject():
 
 def get_answer(full_answer):
 
-    answer_pattern = "Answer:"
+    answer_pattern = "<answer>\n"
     answer = None
     if answer_pattern in full_answer:
         answer_raw = full_answer.split(answer_pattern)[1]
+        answer_raw = answer_raw.split('\n')[0]
         try:
             answer = json.loads(answer_raw.strip())
         except json.decoder.JSONDecodeError:

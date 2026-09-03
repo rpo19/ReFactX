@@ -328,7 +328,10 @@ def main(config_path, flush_output):
                         if token == eos_token_id and end_idx == start_idx:
                             # for removing imend, eos and padding tokens
                             end_idx = start_idx + new_tokens_generated
+                            break
                         new_tokens_generated += 1
+                    if end_idx == start_idx:
+                        end_idx = start_idx + new_tokens_generated
                     reached_max_tokens = bool(
                         output_i[start_idx:].shape[0] == generation_config.get('max_new_tokens')
                         and output_i[-1] != pad_token_id
