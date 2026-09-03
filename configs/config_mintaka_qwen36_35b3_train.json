@@ -10,7 +10,7 @@
     "dataset_split": "train",
     "answer_key": "answerText",
     "prompt": "prompts/prompt_qwen36_mini2.txt",
-    "wandb": true,
+    "wandb": false,
     "unconstrained_generation": false,
     "debug": false,
     "debug_states": false,
@@ -19,6 +19,6 @@
     "device": "auto",
     "thinking": false,
     "num_beams": 1,
-    "batch_size": 16,
-    "generation_config": {"max_length": 1024, "do_sample": false}
+    "batch_size": 2,
+    "generation_config": {"max_new_tokens": 1024, "do_sample": true, "temperature": 0.7, "top_p": 0.80, "top_k": 20, "min_p": 0.0, "repetition_penalty": 1.0}
 }

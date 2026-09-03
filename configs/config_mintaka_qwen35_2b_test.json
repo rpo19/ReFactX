@@ -19,7 +19,7 @@
     "device": "auto",
     "thinking": false,
     "num_beams": 1,
-    "batch_size": 1,
+    "batch_size": 2,
     "n": 10,
-    "generation_config": {"max_length": 4096, "do_sample": false}
+    "generation_config": {"max_new_tokens": 1024, "do_sample": true, "temperature": 0.7, "top_p": 0.80, "top_k": 20, "min_p": 0.0, "repetition_penalty": 1.0}
 }

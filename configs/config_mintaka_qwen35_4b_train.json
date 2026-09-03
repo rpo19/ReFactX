@@ -9,7 +9,7 @@
     "dataset_config": "default",
     "dataset_split": "train",
     "answer_key": "answerText",
-    "prompt": "prompts/prompt_qwen36_angular2.json",
+    "prompt": "prompts/prompt_qwen36_angular2_nothink.yaml",
     "wandb": false,
     "unconstrained_generation": false,
     "debug": false,
@@ -17,10 +17,18 @@
     "continue": true,
     "http_rootcert": null,
     "device": "auto",
-    "thinking": true,
+    "thinking": false,
     "num_beams": 1,
     "batch_size": 2,
-    "n": 2,
+    "n": 10,
     "sentinel": true,
-    "generation_config": {"max_new_tokens": 1024, "do_sample": false}
+    "generation_config": {
+        "max_new_tokens": 1024,
+        "do_sample": true,
+        "temperature": 0.7,
+        "top_p": 0.80,
+        "top_k": 20,
+        "min_p": 0.0,
+        "repetition_penalty": 1.0
+    }
 }
