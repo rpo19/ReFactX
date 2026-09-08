@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --output=logs/eval_mintaka_train_%j.out
-#SBATCH --job-name=refactx_mintaka_train
+#SBATCH --output=logs/eval_mintaka_train_resample_%j.out
+#SBATCH --job-name=refactx_mintaka_train_resample
 #SBATCH -N 1
-#SBATCH --error=logs/eval_mintaka_train_%j.err
+#SBATCH --error=logs/eval_mintaka_train_resample_%j.err
 #SBATCH --time=96:00:00
 #SBATCH --mem=100G
 #SBATCH --cpus-per-task=1
@@ -25,6 +25,6 @@ if [ -f "$SHARED_POSTGRES" ]; then
     export POSTGRES_CONNECTION="$INDEX_PATH"
 fi
 
-python -m utils.eval --config configs/config_mintaka_qwen38_27b_train.json
+python -m utils.eval --config configs/config_mintaka_qwen38_27b_train_resample.json
 
-teleclinotify "refactx_mintaka_train done | SLURM_JOB_ID=$SLURM_JOB_ID"
+teleclinotify "refactx_mintaka_train_resample done | SLURM_JOB_ID=$SLURM_JOB_ID"

@@ -36,6 +36,10 @@ def logrotate(file_name, dataset_length=None, metadata=None):
         if dataset_length is not None:
             with open(path) as fd:
                 prev_output = fd.readlines()
+                if not prev_output:
+                    print(f'Found empty file: {path}. Skipping.')
+                    idx += 1
+                    continue
                 header = json.loads(prev_output[0])
                 prev_output = prev_output[1:]
                 prev_dataset_length = len(prev_output)
