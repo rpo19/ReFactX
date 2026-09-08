@@ -188,6 +188,21 @@ def main(config_path, flush_output):
         split=cfg.get("dataset_split", "train"),
     )
 
+    sample_index_file = cfg.get("sample_index_file", None)
+    if sample_index_file is not None:
+        with open(sample_index_file) as fd:
+            sample_ids = json.load(fd)
+        assert isinstance(sample_ids, list), 'sample_index_file must contain a JSON list of ids.'
+        id_key = cfg.get("id_key", "id")
+        id_to_indices = {}
+        for i, sample in enumerate(dataset):
+            id_to_indices.setdefault(str(get_field(sample, id_key)), []).append(i)
+        missing = [sid for sid in sample_ids if str(sid) not in id_to_indices]
+        assert not missing, f'ids from sample_index_file not found in dataset: {missing[:10]}'
+        selected_indices = [idx for sid in sample_ids for idx in id_to_indices[str(sid)]]
+        dataset = dataset.select(selected_indices)
+        print(f'Selected {len(dataset)} samples from sample_index_file ({sample_index_file}).')
+
     n = cfg.get("n", None)
     if n is not None:
         dataset = dataset.select(range(min(n, len(dataset))))
