@@ -1,4 +1,5 @@
 from refactx.index import load_index, populate_postgres_index
+from refactx.generate import KnowledgeGraphGeneration
 from refactx.prompt_base import PROMPT_TEMPLATE
 import json
 import yaml
@@ -80,4 +81,9 @@ def load_prompt(path):
 
 __version__ = _read_version_from_pyproject()
 
-__all__ = [load_index, populate_postgres_index, apply_prompt_template, load_prompt, get_constrained_logits_processor, get_count_branches_logits_processor, patch_model, get_constrained_states]
+__all__ = [
+    'load_index', 'populate_postgres_index', 'apply_prompt_template',
+    'load_prompt', 'get_constrained_logits_processor',
+    'get_count_branches_logits_processor', 'patch_model',
+    'get_constrained_states',
+]

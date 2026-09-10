@@ -291,6 +291,220 @@ class FactGeneration(PatternConstrainedGeneration):
 
 
 # ---------------------------------------------------------------------------
+# KnowledgeGraphGeneration — callback-backed graph traversal
+# ---------------------------------------------------------------------------
+
+class KnowledgeGraphGeneration(PatternConstrainedGeneration):
+    """Generate a graph path as ``<entity> <relation> <object> ...``.
+
+    ``index`` contains the initial entity names.  After an entity is selected,
+    ``get_relations(entity)`` is called and its result is converted to a
+    temporary :class:`DictIndex`.  The same happens for objects through
+    ``get_objects(subject, relation)``.  Callback results may be mappings from
+    names to opaque metadata, or iterables of names.
+
+    By default generation stops after the first object.  With ``long_chains``
+    enabled, that object becomes the subject of the next hop.  Metadata is
+    retained on ``generated_path_metadata`` and is deliberately not given a
+    prescribed schema; ``metadata_filter`` is the optional place to enforce a
+    schema-specific policy.
+    """
+
+    ENTITY = 'entity'
+    RELATION = 'relation'
+    OBJECT = 'object'
+
+    def __init__(self, state, tokenizer, start_idx, index,
+                 get_relations, get_objects, long_chains=False,
+                 relation_metadata=None, object_metadata=None,
+                 metadata_filter=None, eot='\\n', avoid_duplicates=True):
+        super().__init__(state, tokenizer, start_idx)
+        if not callable(get_relations) or not callable(get_objects):
+            raise TypeError('get_relations and get_objects must be callable')
+        self.index = index
+        self.get_relations = get_relations
+        self.get_objects = get_objects
+        self.long_chains = long_chains
+        self.relation_metadata = relation_metadata
+        self.object_metadata = object_metadata
+        self.metadata_filter = metadata_filter
+        self.avoid_duplicates = avoid_duplicates
+        self.phase = self.ENTITY
+        self.phase_index = index
+        self.phase_start = 0
+        self.phase_names = {}
+        self.path = []
+        self.generated_path_metadata = []
+        self._terminal = []
+        self._encode_cache = {}
+        self.eot_tokens = self._encode(eot) if eot is not None else []
+
+    def _encode(self, value):
+        if value is None:
+            return []
+        if not isinstance(value, str):
+            return list(value)
+        tokenizer = self.tokenizer.tokenizer if isinstance(self.tokenizer, ProcessorMixin) else self.tokenizer
+        return list(tokenizer.encode(value, add_special_tokens=False))
+
+    def _decode(self, ids):
+        tokenizer = self.tokenizer.tokenizer if isinstance(self.tokenizer, ProcessorMixin) else self.tokenizer
+        return tokenizer.decode(ids)
+
+    @staticmethod
+    def _name(value):
+        text = str(value).strip()
+        if text.startswith('<') and text.endswith('>'):
+            return text[1:-1]
+        return text
+
+    def _result_items(self, result):
+        if isinstance(result, dict):
+            return result.items()
+        return ((item, {}) for item in result)
+
+    def _metadata_for(self, kind, name, metadata):
+        source = self.relation_metadata if kind == self.RELATION else self.object_metadata
+        if isinstance(source, dict) and name in source:
+            # Callback metadata takes precedence when supplied explicitly.
+            return source[name] if metadata in (None, {}) else metadata
+        return metadata
+
+    def _accept(self, kind, name, metadata, subject=None, relation=None):
+        if self.metadata_filter is None:
+            return True
+        return bool(self.metadata_filter(
+            kind=kind, name=name, metadata=metadata,
+            subject=subject, relation=relation,
+        ))
+
+    def _make_index(self, result, kind, subject=None, relation=None):
+        dynamic = DictIndex()
+        self.phase_names = {}
+        for raw_name, metadata in self._result_items(result):
+            name = self._name(raw_name)
+            metadata = self._metadata_for(kind, name, metadata)
+            if not self._accept(kind, name, metadata, subject, relation):
+                continue
+            # A leading space preserves the conventional ``<S> <R> <O>``
+            # serialization while keeping each phase independently indexed.
+            text = '<' + name + '>' if kind == self.ENTITY else ' <' + name + '>'
+            ids = tuple(self._encode(text))
+            if not ids:
+                continue
+            dynamic.add(list(ids))
+            self.phase_names[ids] = (name, metadata)
+        return dynamic
+
+    def _begin_relations(self, entity, sequence):
+        result = self.get_relations(entity)
+        self.phase_index = self._make_index(result, self.RELATION, subject=entity)
+        self.phase = self.RELATION
+        self.phase_start = len(sequence)
+        self.phase_names = self.phase_names
+        return len(self.phase_index) > 0
+
+    def _begin_objects(self, subject, relation, sequence):
+        result = self.get_objects(subject, relation)
+        self.phase_index = self._make_index(result, self.OBJECT, subject, relation)
+        self.phase = self.OBJECT
+        self.phase_start = len(sequence)
+        return len(self.phase_index) > 0
+
+    def _queue_terminal(self, sequence):
+        self._terminal = self._encode(' .' + self._decode(self.eot_tokens))
+        if not self._terminal:
+            self._complete(sequence)
+
+    def _complete(self, sequence):
+        self.state.cache_add(sequence, self.start_idx)
+        self.state.subtree_cache.reset()
+        self.state.sentinel_remaining = []
+        self.state.state = 0
+        self.done = True
+
+    def _emit_terminal(self, mask, mask_idx, sequence):
+        if self._terminal:
+            token = self._terminal.pop(0)
+            mask[mask_idx, :] = -math.inf
+            if 0 <= token < mask.shape[-1]:
+                mask[mask_idx, token] = 0
+            if not self._terminal:
+                self._complete(sequence)
+            return True
+        return False
+
+    def _advance(self, sequence):
+        component = sequence[self.phase_start:]
+        value = self.phase_names.get(tuple(component))
+        if value is None:
+            value = (self._name(self._decode(component)), {})
+        name, metadata = value
+        if self.phase == self.ENTITY:
+            self.path.append({'entity': name, 'metadata': metadata})
+            return self._begin_relations(name, sequence)
+        if self.phase == self.RELATION:
+            self.path[-1]['relation'] = name
+            self.path[-1]['relation_metadata'] = metadata
+            return self._begin_objects(self.path[-1]['entity'], name, sequence)
+        self.path[-1]['object'] = name
+        self.path[-1]['object_metadata'] = metadata
+        if self.long_chains and self._begin_relations(name, sequence):
+            # The object is also the next subject; do not emit it twice.
+            self.path.append({'entity': name, 'metadata': metadata})
+            return True
+        self.generated_path_metadata.append(deepcopy(self.path))
+        self._queue_terminal(sequence)
+        return False
+
+    def constrain(self, sequence, mask, mask_idx):
+        if self._emit_terminal(mask, mask_idx, sequence):
+            return
+        while True:
+            component = sequence[self.phase_start:]
+            try:
+                possible, _ = self.phase_index.next_tokens(component, state=self.state)
+            except (EmptyIndexException, TripleNotFoundException):
+                possible = {}
+            raw_possible = bool(possible)
+            if possible and self.avoid_duplicates:
+                try:
+                    visited, _ = self.state.cache_index.next_tokens(sequence)
+                    possible = {
+                        token: count - visited.get(token, 0)
+                        for token, count in possible.items()
+                        if count - visited.get(token, 0) > 0
+                    }
+                except (EmptyIndexException, TripleNotFoundException):
+                    pass
+            if possible:
+                tokens = [token for token in possible if 0 <= token < mask.shape[-1]]
+                mask[mask_idx, tokens] = 0
+                return
+            if raw_possible and self.avoid_duplicates:
+                self.generated_path_metadata.append(deepcopy(self.path))
+                self._queue_terminal(sequence)
+                self._emit_terminal(mask, mask_idx, sequence)
+                return
+
+            advanced = self._advance(sequence)
+            if self.done:
+                mask[mask_idx, :] = 0
+                return
+            if self._terminal:
+                self._emit_terminal(mask, mask_idx, sequence)
+                return
+            if not advanced:
+                # A callback with no results terminates the current path.
+                self.generated_path_metadata.append(deepcopy(self.path))
+                self._queue_terminal(sequence)
+                self._emit_terminal(mask, mask_idx, sequence)
+                return
+            # ``_advance`` moved to the next component.  Query its index in
+            # this same call so the next token is constrained immediately.
+
+
+# ---------------------------------------------------------------------------
 # CountBranchesGeneration — count_branches: <S> <R> tool call
 # ---------------------------------------------------------------------------
 
