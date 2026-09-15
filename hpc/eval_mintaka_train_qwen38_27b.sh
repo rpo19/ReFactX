@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --output=logs/eval_mintaka_train_%j.out
-#SBATCH --job-name=refactx_mintaka_train
+#SBATCH --output=logs/test_mintaka_qwen38_27b_%j.out
+#SBATCH --job-name=refactx_mintaka_qwen38
 #SBATCH -N 1
-#SBATCH --error=logs/eval_mintaka_train_%j.err
-#SBATCH --time=96:00:00
-#SBATCH --mem=100G
+#SBATCH --error=logs/test_mintaka_qwen38_27b_%j.err
+#SBATCH --time=02:00:00
+#SBATCH --mem=64G
 #SBATCH --cpus-per-task=1
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:1
 
 set -euo pipefail
 
@@ -28,4 +28,4 @@ fi
 
 python -m utils.eval --config configs/config_mintaka_qwen38_27b_train.json
 
-teleclinotify "refactx_mintaka_train done | SLURM_JOB_ID=$SLURM_JOB_ID"
+teleclinotify "test_mintaka_qwen38_27b done | SLURM_JOB_ID=$SLURM_JOB_ID"

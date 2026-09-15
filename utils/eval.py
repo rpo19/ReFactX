@@ -135,7 +135,17 @@ def main(config_path, flush_output):
         else:
             model = AutoModelForImageTextToText.from_pretrained(cfg["model_name"], dtype=torch_dtype).to(device)
 
-    patch_model(model)
+    adapter_path = cfg.get("adapter_path")
+    if adapter_path:
+        from peft import PeftModel
+        print(f"Loading LoRA adapter: {adapter_path}")
+        model = PeftModel.from_pretrained(model, adapter_path)
+        print("Adapter loaded.")
+
+    try:
+        patch_model(model)
+    except Exception as e:
+        print(f"Skipping patch_model: {type(e).__name__}: {e}")
     model.eval()
 
     prompt_path = cfg.get("prompt", "prompts/prompt_qwen36_angular2.json")

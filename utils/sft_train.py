@@ -184,8 +184,7 @@ def main():
     print(f"Loading model: {args.model_name}")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
+        dtype=torch.bfloat16,
         trust_remote_code=True,
     )
 
@@ -214,6 +213,7 @@ def main():
     kwargs = dict(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=1,
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.lr,
         num_train_epochs=args.epochs if args.max_steps is None else 1e10,)

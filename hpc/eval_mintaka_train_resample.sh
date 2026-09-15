@@ -23,6 +23,7 @@ if [ -f "$SHARED_POSTGRES" ]; then
     source "$SHARED_POSTGRES"
     export INDEX_PATH="postgres://postgres:${PGPASSWORD:-postgres}@${PG_IP:-127.0.0.1}:${PG_PORT:-5432}/postgres"
     export POSTGRES_CONNECTION="$INDEX_PATH"
+    export BASE_INDEX_PATH="$INDEX_PATH"
 fi
 
 python -m utils.eval --config configs/config_mintaka_qwen38_27b_train_resample.json
