@@ -84,7 +84,7 @@ Actual values:
 @click.command()
 # db
 @click.argument("postgres_url")
-@click.option("--cache", required=False, default='simple', help="Cache: None or default)")
+@click.option("--cache", required=False, default='simple', help="Cache: None or simple)")
 @click.option("--configkey", type=int, default=-200, required=False, help="Config key")
 @click.option("--flush-cache", is_flag=True, required=False, help="Flush cache db at program start")
 #

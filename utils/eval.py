@@ -1,6 +1,13 @@
 from dotenv import load_dotenv
 import torch
+import ctypes
+from pathlib import Path
 from tqdm import tqdm
+
+# bitsandbytes may not find CUDA libraries bundled in this environment.
+_cuda_lib = Path(torch.__file__).resolve().parent.parent / "nvidia" / "cu13" / "lib"
+if _cuda_lib.is_dir():
+    ctypes.CDLL(str(_cuda_lib / "libnvJitLink.so.13"), mode=ctypes.RTLD_GLOBAL)
 from transformers import LogitsProcessorList
 from refactx import patch_model
 import refactx
@@ -119,9 +126,16 @@ def main(config_path, flush_output):
     }
 
     torch_dtype = dtype_map.get(
-        cfg.get("model_dtype", "bfloat16"),
-        torch.bfloat16,
+        cfg.get("model_dtype", "float16"),
+        torch.float16,
     )
+    if (
+        torch_dtype == torch.bfloat16
+        and torch.cuda.is_available()
+        and torch.cuda.get_device_capability()[0] < 8
+    ):
+        print("bfloat16 is unsupported on this GPU; using float16 instead.")
+        torch_dtype = torch.float16
 
     try:
         if device == "auto":
@@ -139,8 +153,9 @@ def main(config_path, flush_output):
     if adapter_path:
         from peft import PeftModel
         print(f"Loading LoRA adapter: {adapter_path}")
-        model = PeftModel.from_pretrained(model, adapter_path)
-        print("Adapter loaded.")
+        model = PeftModel.from_pretrained(model, adapter_path, is_trainable=False)
+        model = model.merge_and_unload(safe_merge=True)
+        print("Adapter loaded and merged into the base model.")
 
     try:
         patch_model(model)
