@@ -1,0 +1,39 @@
+#!/bin/bash
+#SBATCH --job-name=trl_qwen35_4b_sft
+#SBATCH -N 1
+#SBATCH --output=logs/trl_qwen35_4b_sft_%j.out
+#SBATCH --error=logs/trl_qwen35_4b_sft_%j.err
+#SBATCH --time=48:00:00
+#SBATCH --mem=100G
+#SBATCH --cpus-per-task=4
+#SBATCH --gres=gpu:2
+
+set -euo pipefail
+
+source "$SLURM_SUBMIT_DIR/hpc/env.sh"
+
+# Use the dedicated TRL environment explicitly. Do not use the login-node
+# Python environment, which may not contain compatible TRL/PEFT versions.
+PYTHON=/opt/conda/envs/trl/bin/python
+
+# Reduce allocator fragmentation during long generation/training jobs.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+cd "$SLURM_SUBMIT_DIR"
+
+if [ ! -d "/data/horse/ws/ripo631h-quokka/sft_output_qwen35_4b" ]; then
+    echo "SFT adapter directory is missing" >&2
+    exit 1
+fi
+
+mkdir -p logs
+
+echo "Starting GRPO from the Qwen3.5-4B SFT adapter at $(date)"
+echo "SLURM_JOB_ID=$SLURM_JOB_ID"
+echo "Node: $(hostname)"
+echo "GPUs: ${CUDA_VISIBLE_DEVICES:-not set}"
+
+"$PYTHON" utils/run_trl.py \
+    --config configs/trl_qwen35_4b_sft_grpo.json
+
+echo "GRPO training finished at $(date)"

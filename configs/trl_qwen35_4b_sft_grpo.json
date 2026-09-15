@@ -1,0 +1,23 @@
+{
+  "experiment_name": "trl_qwen35_4b_sft_grpo",
+  "model": "Qwen/Qwen3.5-4B",
+  "adapter": "/data/horse/ws/ripo631h-quokka/sft_output_qwen35_4b",
+  "dataset": "rpozzi/mintaka",
+  "question_key": "question",
+  "answer_key": "answerText",
+  "train_split": "train",
+  "eval_split": "test",
+  "index": null,
+  "judge_model": null,
+  "gspo": false,
+  "output_dir": "/data/horse/ws/ripo631h-quokka/grpo_output_qwen35_4b",
+  "epochs": 1,
+  "max_steps": null,
+  "batch_size": 1,
+  "gradient_accumulation_steps": 8,
+  "num_generations": 2,
+  "max_completion_length": 256,
+  "learning_rate": 0.000001,
+  "report_to": "none",
+  "seed": 42
+}

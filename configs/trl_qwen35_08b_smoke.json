@@ -1,0 +1,21 @@
+{
+  "experiment_name": "trl_qwen35_08b_smoke",
+  "model": "Qwen/Qwen3.5-0.8B",
+  "adapter": null,
+  "dataset": "rmanluo/RoG-cwq",
+  "train_split": "train",
+  "eval_split": "validation",
+  "index": null,
+  "judge_model": null,
+  "gspo": false,
+  "output_dir": "./grpo-qwen35-08b",
+  "epochs": 1,
+  "max_steps": 1,
+  "batch_size": 1,
+  "gradient_accumulation_steps": 8,
+  "num_generations": 2,
+  "max_completion_length": 128,
+  "learning_rate": 0.000005,
+  "report_to": "none",
+  "seed": 42
+}
