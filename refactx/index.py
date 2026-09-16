@@ -5,6 +5,7 @@ import requests
 from requests.adapters import HTTPAdapter, Retry
 import os
 import gzip
+import time
 from tqdm import trange
 from urllib.parse import urlparse, parse_qs
 from transformers import ProcessorMixin
@@ -119,11 +120,12 @@ def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple'
     cache = _load_cache(cache)
 
     index = PostgresTrieIndex(
-        postgresql_connection = postgresql_connection,
-        table_name = table_name,
-        cache = cache,
-        configkey=configkey
-        )
+        postgresql_connection=postgresql_connection,
+        table_name=table_name,
+        cache=cache,
+        configkey=configkey,
+        postgres_url=url_without_query,
+    )
 
     return index
 
@@ -579,11 +581,18 @@ class Cache():
         return next_tokens, subtree_cache
 
 class PostgresTrieIndex(Index):
-    def __init__(self, postgresql_connection, table_name, switch_parameter : int = DEFAULT_SWITCH_PARAMETER, rootkey : int = DEFAULT_ROOTKEY, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False, tokenizer=None):
+    def __init__(self, postgresql_connection, table_name, switch_parameter : int = DEFAULT_SWITCH_PARAMETER, rootkey : int = DEFAULT_ROOTKEY, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False, tokenizer=None, postgres_url=None):
         super().__init__()
         self.rootkey = rootkey
         self.configkey = configkey
         self.postgresql_connection = postgresql_connection
+        self.postgres_url = postgres_url
+        self.address_file = (
+            os.environ.get("POSTGRES_ADDR_FILE")
+            or os.environ.get("SHARED_POSTGRES")
+        )
+        self.reconnect_attempts = int(os.environ.get("POSTGRES_RECONNECT_ATTEMPTS", "30"))
+        self.reconnect_delay = float(os.environ.get("POSTGRES_RECONNECT_DELAY", "2"))
         self.switch_parameter = switch_parameter
         self.table_name = table_name
         self.cache = cache
@@ -596,6 +605,57 @@ class PostgresTrieIndex(Index):
 
         if self.postgresql_connection:
             self.get_config()
+
+    def _current_postgres_url(self):
+        if not self.address_file or not os.path.isfile(self.address_file) or not self.postgres_url:
+            return self.postgres_url
+        values = {}
+        with open(self.address_file, encoding="utf-8") as address:
+            for line in address:
+                if "=" in line and not line.lstrip().startswith("#"):
+                    key, value = line.strip().split("=", 1)
+                    values[key] = value
+        host = values.get("PG_IP") or values.get("PG_HOST")
+        port = values.get("PG_PORT")
+        if not host or not port:
+            return self.postgres_url
+        parsed = urlparse(self.postgres_url)
+        userinfo = parsed.netloc.rsplit("@", 1)[0] if "@" in parsed.netloc else ""
+        netloc = f"{userinfo}@{host}:{port}" if userinfo else f"{host}:{port}"
+        return parsed._replace(netloc=netloc).geturl()
+
+    def _reconnect(self):
+        import psycopg
+
+        last_error = None
+        for attempt in range(1, self.reconnect_attempts + 1):
+            try:
+                if self.postgresql_connection is not None:
+                    try:
+                        self.postgresql_connection.close()
+                    except Exception:
+                        pass
+                self.postgresql_connection = psycopg.connect(self._current_postgres_url())
+                print(f"PostgreSQL reconnected on attempt {attempt}")
+                return
+            except (psycopg.OperationalError, psycopg.InterfaceError) as exc:
+                last_error = exc
+                time.sleep(self.reconnect_delay)
+        raise last_error
+
+    def _query_postgresql(self, sequence):
+        import psycopg
+
+        for attempt in range(2):
+            try:
+                with self.postgresql_connection.cursor() as cursor:
+                    cursor.execute(self.select_query, (sequence,))
+                    return cursor.fetchall()
+            except (psycopg.OperationalError, psycopg.InterfaceError) as exc:
+                if attempt:
+                    raise
+                print(f"PostgreSQL connection lost; reconnecting: {exc}")
+                self._reconnect()
 
     def get_config(self):
         with self.postgresql_connection.cursor() as cursor:
@@ -674,9 +734,7 @@ class PostgresTrieIndex(Index):
                     state.subtree_cache = new_subtree_cache
 
         if not found_in_cache:
-            with self.postgresql_connection.cursor() as cursor:
-                cursor.execute(self.select_query, (sequence,))
-                query_result = cursor.fetchall()
+            query_result = self._query_postgresql(sequence)
 
             _next_tokens = {}
             if len(query_result) > 0:

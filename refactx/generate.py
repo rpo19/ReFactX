@@ -7,7 +7,7 @@ from copy import deepcopy
 import math
 import types
 from dataclasses import dataclass, field
-from typing import Type
+from typing import Callable, Type
 
 from refactx.index import EmptyIndexException, TripleNotFoundException
 
@@ -419,6 +419,7 @@ class PatternConstrainedState():
         self.cursor = 0
 
         self.cache_index = cache_index
+        self.on_triple_generated: Callable[[list[int]], None] | None = None
         self.generated_triples = []
         self.generated_triples_idx = []
         self.generated_triples_str = []
@@ -454,6 +455,8 @@ class PatternConstrainedState():
         self.generated_triples_idx.append([list(range(start_idx, len(sequence)))])
         if self.tokenizer is not None:
             self.generated_triples_str.append(self.tokenizer.decode(sequence))
+        if self.on_triple_generated is not None:
+            self.on_triple_generated(list(sequence))
 
     def is_constrained(self):
         return self.active_generation is not None
@@ -699,11 +702,19 @@ class ConstrainedStateList():
 # ---------------------------------------------------------------------------
 
 class ConstrainedLogitsProcessor(LogitsProcessor):
-    def __init__(self, states, tokenizer, reinit_states=False):
+    def __init__(self, states, tokenizer, reinit_states=False,
+                 on_triple_generated=None):
         self.states = states
         self.reinit_states = reinit_states
+        self.on_triple_generated = on_triple_generated
         self.tokenizer = tokenizer
         self.pattern_configs = []
+        self._attach_triple_callback()
+
+    def _attach_triple_callback(self):
+        for batch in self.states.states:
+            for state in batch:
+                state.on_triple_generated = self.on_triple_generated
 
     def add_pattern(self, pattern, generation_class, **config):
         cfg = PatternConfig(pattern=pattern, generation_class=generation_class, config=config)
@@ -727,6 +738,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                 for batch in self.states.states:
                     for state in batch:
                         state.patterns.append(cfg)
+            self._attach_triple_callback()
         else:
             self.states.reset(clear_patterns=False)
 
@@ -736,6 +748,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                 num_batches=num_batches,
                 debug_tokenizer=self.tokenizer
         )
+        self._attach_triple_callback()
 
     def _reinit_states_to_input_ids(self, input_ids):
         for i in range(input_ids.shape[0]):
@@ -800,7 +813,8 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1,
                                      return_list=True, sentinel=False,
                                      fact_pattern='<fact>', count_pattern='<count>',
-                                     eot=' </fact>\n', **kwargs):
+                                     eot=' </fact>\n', reinit_states=False,
+                                     on_triple_generated=None, **kwargs):
     CONSTRAINED_STATES.__init__('auto',
                 num_beams=num_beams,
                 num_batches=num_batches,
@@ -808,7 +822,11 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
         )
 
     constrained_processor = ConstrainedLogitsProcessor(
-        states=CONSTRAINED_STATES, tokenizer=tokenizer)
+        states=CONSTRAINED_STATES,
+        tokenizer=tokenizer,
+        reinit_states=reinit_states,
+        on_triple_generated=on_triple_generated,
+    )
 
     fact_config = dict(kwargs)
     fact_config['eot'] = eot

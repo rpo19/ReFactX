@@ -17,10 +17,40 @@ source "$SLURM_SUBMIT_DIR/hpc/postgres_utils.sh"
 
 # Reuse the shared PostgreSQL service, or start one and publish its address.
 ensure_postgres
+export POSTGRES_ADDR_FILE="$SHARED_POSTGRES"
 
-# Use the Python from PATH (base Miniconda). A dedicated /opt/conda/envs/trl
-# conda environment does not exist on this cluster.
-PYTHON=python
+postgres_watchdog() {
+    while true; do
+        if [ -f "$SHARED_POSTGRES" ]; then
+            # shellcheck disable=SC1090
+            source "$SHARED_POSTGRES"
+        fi
+        if [ -n "${PG_IP:-}" ] && [ -n "${PG_PORT:-}" ] \
+            && timeout 2 bash -c "echo >/dev/tcp/$PG_IP/$PG_PORT" 2>/dev/null; then
+            sleep 10
+            continue
+        fi
+        echo "Postgres is unavailable; attempting recovery at $(date)" >&2
+        ensure_postgres || echo "Postgres recovery attempt failed" >&2
+    done
+}
+
+postgres_watchdog &
+POSTGRES_WATCHDOG_PID=$!
+cleanup_postgres_watchdog() {
+    kill "$POSTGRES_WATCHDOG_PID" 2>/dev/null || true
+    wait "$POSTGRES_WATCHDOG_PID" 2>/dev/null || true
+}
+trap cleanup_postgres_watchdog EXIT INT TERM
+
+# Pin the base Miniconda interpreter. `python` resolves differently across
+# compute nodes and may not contain the installed training dependencies.
+PYTHON=/software/rome/r24.04/Miniconda3/24.7.1-0/bin/python
+
+if ! "$PYTHON" -c "import datasets, peft, trl"; then
+    echo "The pinned training Python is missing datasets/peft/trl" >&2
+    exit 1
+fi
 
 # Reduce allocator fragmentation during long generation/training jobs.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True

@@ -50,10 +50,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Number of eval examples generated together",
     )
+    parser.add_argument(
+        "--custom-eval-steps",
+        type=int,
+        default=None,
+        help="Run and log custom validation metrics every N optimizer steps; 0 disables periodic evaluation",
+    )
     parser.add_argument("--index", default=None, help="Optional ReFactX prefix-tree index URL (defaults to INDEX in .env)")
     parser.add_argument("--tablename", default=None, help="PostgreSQL index table name")
     parser.add_argument("--no-cuda", action="store_true", help="Allow running without CUDA (default: require CUDA)")
     parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--generation-output", default=None, help="Append validation generations as JSONL")
     parser.add_argument("--save-steps", type=int, default=None, help="Save a training checkpoint every N steps")
     parser.add_argument("--save-total-limit", type=int, default=None, help="Maximum number of checkpoints to keep")
     parser.add_argument("--resume-from-checkpoint", default=None, help="Checkpoint path to resume training from")
@@ -99,6 +106,8 @@ def parse_args() -> argparse.Namespace:
         "eval_split": config.get("eval_split", "validation"),
         "max_eval_samples": config.get("max_eval_samples", 100),
         "eval_batch_size": config.get("eval_batch_size", 1),
+        "generation_output": config.get("generation_output"),
+        "custom_eval_steps": config.get("custom_eval_steps", 100),
         "index": config.get("index") or os.getenv("INDEX") or os.getenv("BASE_INDEX_PATH"),
         "tablename": config.get("tablename"),
         "output_dir": config.get("output_dir", "./grpo-output"),
@@ -247,6 +256,8 @@ def evaluate_policy(
     fact_pattern: str,
     answer_pattern: str,
     eval_batch_size: int = 1,
+    generation_output: str | None = None,
+    evaluation_label: str = "evaluation",
 ) -> dict[str, float]:
     """Evaluate deterministic completions against the dataset answer column.
 
@@ -267,6 +278,11 @@ def evaluate_policy(
     valid_answers = 0
     formatted = 0
     total = 0
+
+    if generation_output:
+        output_parent = os.path.dirname(generation_output)
+        if output_parent:
+            os.makedirs(output_parent, exist_ok=True)
 
     for start in range(0, len(dataset), eval_batch_size):
         examples = [
@@ -303,13 +319,27 @@ def evaluate_policy(
                 and _marker_count(normalized_completion, answer_pattern) == 1
             ):
                 formatted += 1
-            rewards.extend(
-                exact_reward(
-                    [completion], [reference],
-                    fact_pattern=fact_pattern,
-                    answer_pattern=answer_pattern,
-                )
-            )
+            sample_reward = exact_reward(
+                [completion], [reference],
+                fact_pattern=fact_pattern,
+                answer_pattern=answer_pattern,
+            )[0]
+            rewards.append(sample_reward)
+            if generation_output:
+                with open(generation_output, "a", encoding="utf-8") as output_file:
+                    output_file.write(json.dumps({
+                        "evaluation": evaluation_label,
+                        "question": example.get("question"),
+                        "reference_answer": reference,
+                        "prompt": example.get("prompt"),
+                        "completion": completion,
+                        "parsed_answer": parsed,
+                        "reward": sample_reward,
+                        "formatted": bool(
+                            _marker_count(normalized_completion, fact_pattern) > 0
+                            and _marker_count(normalized_completion, answer_pattern) == 1
+                        ),
+                    }, ensure_ascii=False) + "\n")
             total += 1
 
     return {
@@ -318,6 +348,52 @@ def evaluate_policy(
         "eval_format_accuracy": formatted / total,
         "eval_mean_reward": sum(rewards) / total,
     }
+
+
+class CustomMetricsCallback:
+    """Log deterministic validation metrics during long GRPO runs."""
+
+    def __init__(self, tokenizer, dataset, max_completion_length, fact_pattern,
+                 answer_pattern, eval_batch_size, every_steps, triple_counter,
+                 generation_output):
+        self.tokenizer = tokenizer
+        self.dataset = dataset
+        self.max_completion_length = max_completion_length
+        self.fact_pattern = fact_pattern
+        self.answer_pattern = answer_pattern
+        self.eval_batch_size = eval_batch_size
+        self.every_steps = every_steps
+        self.triple_counter = triple_counter
+        self.generation_output = generation_output
+        self.pending_metrics = None
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        if (
+            self.every_steps <= 0
+            or state.global_step == 0
+            or state.global_step % self.every_steps != 0
+            or model is None
+        ):
+            return control
+        was_training = model.training
+        self.pending_metrics = evaluate_policy(
+            model, self.tokenizer, self.dataset, self.max_completion_length,
+            self.fact_pattern, self.answer_pattern, self.eval_batch_size,
+            generation_output=self.generation_output,
+            evaluation_label=f"step_{state.global_step}",
+        )
+        self.pending_metrics["constrained_triples_generated"] = self.triple_counter["count"]
+        if was_training:
+            model.train()
+        return control
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is not None:
+            logs["constrained_triples_generated"] = self.triple_counter["count"]
+        if logs is not None and self.pending_metrics:
+            logs.update(self.pending_metrics)
+            self.pending_metrics = None
+        return control
 
 
 class JudgeReward:
@@ -452,6 +528,11 @@ def main() -> None:
         answer_pattern=args.answer_pattern,
     )
 
+    triple_counter = {"count": 0}
+
+    def on_triple_generated(_sequence):
+        triple_counter["count"] += 1
+
     if args.index:
         index = refactx.load_index(
             args.index, tokenizer=tokenizer, tablename=args.tablename
@@ -462,6 +543,8 @@ def main() -> None:
             fact_pattern=args.fact_pattern,
             return_list=True,
             avoid_duplicates=True,
+            reinit_states=True,
+            on_triple_generated=on_triple_generated,
         )
         original_generate = model.generate
 
@@ -480,6 +563,8 @@ def main() -> None:
                     fact_pattern=args.fact_pattern,
                     return_list=True,
                     avoid_duplicates=True,
+                    reinit_states=True,
+                    on_triple_generated=on_triple_generated,
                 )
             call_kwargs.setdefault("logits_processor", active_processor)
             return original_generate(*call_args, **call_kwargs)
@@ -522,13 +607,40 @@ def main() -> None:
         processing_class=tokenizer,
         reward_funcs=reward,
     )
+
+    trainer.log({
+        "constrained_triples_generated": triple_counter["count"],
+        "custom_metrics_ready": 0,
+    })
+
+    if evaluation is not None:
+        metrics_callback = CustomMetricsCallback(
+            tokenizer, evaluation, args.max_completion_length,
+            args.fact_pattern, args.answer_pattern, args.eval_batch_size,
+            args.custom_eval_steps, triple_counter, args.generation_output,
+        )
+        trainer.add_callback(metrics_callback)
+        initial_metrics = evaluate_policy(
+            model, tokenizer, evaluation, args.max_completion_length,
+            args.fact_pattern, args.answer_pattern, args.eval_batch_size,
+            generation_output=args.generation_output,
+            evaluation_label="initial",
+        )
+        initial_metrics["constrained_triples_generated"] = triple_counter["count"]
+        initial_metrics["custom_metrics_ready"] = 1
+        trainer.log(initial_metrics)
+        print("Initial validation metrics:", json.dumps(initial_metrics, sort_keys=True))
+
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     if evaluation is not None:
         eval_metrics = evaluate_policy(
             model, tokenizer, evaluation, args.max_completion_length,
             args.fact_pattern, args.answer_pattern, args.eval_batch_size,
+            generation_output=args.generation_output,
+            evaluation_label="final",
         )
+        eval_metrics["constrained_triples_generated"] = triple_counter["count"]
         trainer.log(eval_metrics)
         print("Validation metrics:", json.dumps(eval_metrics, sort_keys=True))
 
