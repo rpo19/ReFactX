@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=sft_train_qwen35_4b
 #SBATCH -N 1
-#SBATCH --output=logs/sft_train_qwen35_4b_%j.out
-#SBATCH --error=logs/sft_train_qwen35_4b_%j.err
+#SBATCH --output=logs/sft_train_qwen35_4b_nomask_%j.out
+#SBATCH --error=logs/sft_train_qwen35_4b_nomask_%j.err
 #SBATCH --time=24:00:00
 #SBATCH --mem=100G
 #SBATCH --cpus-per-task=1
@@ -20,6 +20,6 @@ echo "Starting SFT training at $(date)"
 echo "SLURM_JOB_ID=$SLURM_JOB_ID"
 echo "Node: $(hostname)"
 
-python -m utils.sft_train --config sft_config_qwen35_4b_nomask.json --output-dir "$WS_PATH/sft_output_qwen35_4b_nomask"
+python -m utils.sft_train --config config/sft_config_qwen35_4b_nomask.json --output-dir "$WS_PATH/sft_output_qwen35_4b_nomask"
 
 echo "SFT training finished at $(date)"
