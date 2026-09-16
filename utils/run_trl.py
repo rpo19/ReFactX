@@ -367,6 +367,14 @@ class CustomMetricsCallback:
         self.generation_output = generation_output
         self.pending_metrics = None
 
+    def __getattr__(self, name):
+        # TrainerCallbackHandler invokes every lifecycle event directly.
+        # This callback only needs on_step_end and on_log; all other events
+        # leave the trainer control object unchanged.
+        if name.startswith("on_"):
+            return lambda args, state, control, **kwargs: control
+        raise AttributeError(name)
+
     def on_step_end(self, args, state, control, model=None, **kwargs):
         if (
             self.every_steps <= 0
