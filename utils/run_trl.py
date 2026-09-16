@@ -42,6 +42,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-accumulation-steps", type=int, default=None)
     parser.add_argument("--num-generations", type=int, default=None)
     parser.add_argument("--max-completion-length", type=int, default=None)
+    parser.add_argument("--temperature", type=float, default=None)
+    parser.add_argument("--top-p", type=float, default=None)
+    parser.add_argument("--top-k", type=int, default=None)
+    parser.add_argument("--min-p", type=float, default=None)
+    parser.add_argument("--repetition-penalty", type=float, default=None)
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--report-to", default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -51,6 +56,10 @@ def parse_args() -> argparse.Namespace:
     if args.config:
         with open(args.config, encoding="utf-8") as config_file:
             config = json.load(config_file)
+
+    # Accept either flat generation keys or the nested format used by the
+    # Mintaka generation config.
+    generation = config.get("generation_config", {})
 
     # Config files use the same names as the CLI, except that model_name is
     # also accepted for consistency with the other repository configs.
@@ -70,8 +79,17 @@ def parse_args() -> argparse.Namespace:
         "max_steps": config.get("max_steps"),
         "batch_size": config.get("batch_size", 1),
         "gradient_accumulation_steps": config.get("gradient_accumulation_steps", 4),
-        "num_generations": config.get("num_generations", 4),
-        "max_completion_length": config.get("max_completion_length", 256),
+        "num_generations": config.get("num_generations", config.get("n", 4)),
+        "max_completion_length": config.get(
+            "max_completion_length", generation.get("max_new_tokens", 256)
+        ),
+        "temperature": config.get("temperature", generation.get("temperature", 0.7)),
+        "top_p": config.get("top_p", generation.get("top_p", 0.8)),
+        "top_k": config.get("top_k", generation.get("top_k", 20)),
+        "min_p": config.get("min_p", generation.get("min_p", 0.0)),
+        "repetition_penalty": config.get(
+            "repetition_penalty", generation.get("repetition_penalty", 1.0)
+        ),
         "learning_rate": config.get("learning_rate", 5e-6),
         "report_to": config.get("report_to", "none"),
         "seed": config.get("seed", 42),
@@ -298,6 +316,11 @@ def main() -> None:
         learning_rate=args.learning_rate,
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        min_p=args.min_p,
+        repetition_penalty=args.repetition_penalty,
         beta=0.1,
         # GSPO is exposed by recent TRL through GRPOConfig rather than a
         # separate trainer: sequence-level importance ratios are the key change.
