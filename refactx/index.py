@@ -104,12 +104,14 @@ def _parse_postgresql_url(url):
 
     return url_without_query, parsed_query_flattened
 
-def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple', **kwargs):
+def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple', tablename=None, **kwargs):
     # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000
     # Parse the URL
     url_without_query, parsed_query = _parse_postgresql_url(url)
 
-    table_name = parsed_query['tablename']
+    table_name = parsed_query.get('tablename', tablename)
+    if table_name is None:
+        raise ValueError("PostgreSQL index requires a 'tablename' URL parameter or argument")
 
     import psycopg
     postgresql_connection = psycopg.connect(url_without_query)

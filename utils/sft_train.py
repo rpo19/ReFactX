@@ -147,6 +147,7 @@ def main():
     parser.add_argument("--val-split", type=float, default=0.1, help="Validation split ratio")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducible split")
     parser.add_argument("--report-to", default="wandb", help="Reporting destination (wandb, none)")
+    parser.add_argument("--no-cuda", action="store_true", help="Allow running without CUDA (default: require CUDA)")
     parser.add_argument("--wandb-project", default="sft_training", help="Wandb project name")
     parser.add_argument("--wandb-run-name", default=None, help="Wandb run name")
     args = parser.parse_args()
@@ -157,6 +158,13 @@ def main():
         for k, v in cfg.items():
             if hasattr(args, k) and v is not None:
                 setattr(args, k, v)
+
+    if not args.no_cuda and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is required by default but is not available. "
+            "Use --no-cuda only when a CPU run is intentional."
+        )
+    use_cuda = torch.cuda.is_available() and not args.no_cuda
 
     if args.output_dir is None:
         ws_path = os.environ.get("WS_PATH")
@@ -184,7 +192,7 @@ def main():
     print(f"Loading model: {args.model_name}")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
-        dtype=torch.bfloat16,
+        dtype=torch.bfloat16 if use_cuda else torch.float32,
         trust_remote_code=True,
     )
 
@@ -226,7 +234,7 @@ def main():
         eval_strategy="steps",
         eval_steps=args.eval_steps,
         logging_steps=args.logging_steps,
-        bf16=True,
+        bf16=use_cuda,
         gradient_checkpointing=True,
         report_to=report_to,
         remove_unused_columns=False,

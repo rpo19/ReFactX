@@ -104,7 +104,14 @@ def calculate_metrics(prediction, input_sample, answer_key='answer', lowercase=T
 @click.command()
 @click.option("--config", "config_path", required=True, type=click.Path(exists=True), help="Path to JSON config file.")
 @click.option("--flush", "flush_output", is_flag=True, help="Flush the output log after each batch.")
-def main(config_path, flush_output):
+@click.option("--no-cuda", is_flag=True, help="Allow running without CUDA (default: require CUDA).")
+def main(config_path, flush_output, no_cuda):
+    if not no_cuda and not torch.cuda.is_available():
+        raise click.ClickException(
+            "CUDA is required by default but is not available. "
+            "Use --no-cuda only when a CPU run is intentional."
+        )
+
     with open(config_path) as f:
         cfg = json.load(f)
 

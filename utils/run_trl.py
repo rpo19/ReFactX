@@ -19,8 +19,11 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import re
 from typing import Any, Iterable
+
+from dotenv import load_dotenv
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,7 +50,9 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Number of eval examples generated together",
     )
-    parser.add_argument("--index", default=None, help="Optional ReFactX prefix-tree index")
+    parser.add_argument("--index", default=None, help="Optional ReFactX prefix-tree index URL (defaults to INDEX in .env)")
+    parser.add_argument("--tablename", default=None, help="PostgreSQL index table name")
+    parser.add_argument("--no-cuda", action="store_true", help="Allow running without CUDA (default: require CUDA)")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--max-steps", type=int, default=None, help="Stop after this many optimizer steps")
@@ -66,6 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report-to", default=None)
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
+    load_dotenv()
 
     config = {}
     if args.config:
@@ -90,7 +96,8 @@ def parse_args() -> argparse.Namespace:
         "eval_split": config.get("eval_split", "validation"),
         "max_eval_samples": config.get("max_eval_samples", 100),
         "eval_batch_size": config.get("eval_batch_size", 1),
-        "index": config.get("index"),
+        "index": config.get("index") or os.getenv("INDEX") or os.getenv("BASE_INDEX_PATH"),
+        "tablename": config.get("tablename"),
         "output_dir": config.get("output_dir", "./grpo-output"),
         "epochs": config.get("epochs", 1),
         "max_steps": config.get("max_steps"),
@@ -310,7 +317,7 @@ def evaluate_policy(
 class JudgeReward:
     """Callable reward function backed by a frozen causal language model."""
 
-    def __init__(self, model_name: str, torch_module: Any, transformers_module: Any):
+    def __init__(self, model_name: str, torch_module: Any, transformers_module: Any, use_cuda: bool = True):
         torch = torch_module
         AutoModelForCausalLM = transformers_module.AutoModelForCausalLM
         AutoTokenizer = transformers_module.AutoTokenizer
@@ -320,7 +327,7 @@ class JudgeReward:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            dtype=torch.bfloat16,
+            dtype=torch.bfloat16 if use_cuda else torch.float32,
             device_map="auto",
         )
         self.model.eval()
@@ -376,6 +383,13 @@ def main() -> None:
     args = parse_args()
 
     import torch
+    if not args.no_cuda and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is required by default but is not available. "
+            "Use --no-cuda only when a CPU run is intentional."
+        )
+    use_cuda = torch.cuda.is_available() and not args.no_cuda
+
     from datasets import load_dataset
     from peft import LoraConfig, PeftModel, get_peft_model
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -388,7 +402,7 @@ def main() -> None:
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        dtype=torch.bfloat16,
+        dtype=torch.bfloat16 if use_cuda else torch.float32,
         device_map="auto",
     )
     model.config.use_cache = False
@@ -425,7 +439,7 @@ def main() -> None:
 
     judge = JudgeReward(args.judge_model, torch, type("Transformers", (), {
         "AutoTokenizer": AutoTokenizer, "AutoModelForCausalLM": AutoModelForCausalLM,
-    })) if args.judge_model else None
+    }), use_cuda=use_cuda) if args.judge_model else None
     reward = judge if judge is not None else functools.partial(
         exact_reward,
         fact_pattern=args.fact_pattern,
@@ -433,7 +447,9 @@ def main() -> None:
     )
 
     if args.index:
-        index = refactx.load_index(args.index, tokenizer=tokenizer)
+        index = refactx.load_index(
+            args.index, tokenizer=tokenizer, tablename=args.tablename
+        )
         processor = refactx.get_constrained_logits_processor(
             tokenizer, index, num_beams=1,
             num_batches=args.batch_size * args.num_generations,
@@ -486,7 +502,7 @@ def main() -> None:
         logging_steps=10,
         save_total_limit=2,
         gradient_checkpointing=True,
-        bf16=torch.cuda.is_available(),
+        bf16=use_cuda,
         report_to=args.report_to,
         seed=args.seed,
     )
