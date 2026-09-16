@@ -17,6 +17,7 @@ The script intentionally does not initialise wandb.  Select it with
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 from typing import Any, Iterable
@@ -47,6 +48,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=None)
     parser.add_argument("--min-p", type=float, default=None)
     parser.add_argument("--repetition-penalty", type=float, default=None)
+    parser.add_argument("--fact-pattern", default=None)
+    parser.add_argument("--answer-pattern", default=None)
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--report-to", default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -90,6 +93,8 @@ def parse_args() -> argparse.Namespace:
         "repetition_penalty": config.get(
             "repetition_penalty", generation.get("repetition_penalty", 1.0)
         ),
+        "fact_pattern": config.get("fact_pattern", "<fact>"),
+        "answer_pattern": config.get("answer_pattern", "<answer>"),
         "learning_rate": config.get("learning_rate", 5e-6),
         "report_to": config.get("report_to", "none"),
         "seed": config.get("seed", 42),
@@ -115,9 +120,25 @@ def _text(completion: Any) -> str:
     return str(completion)
 
 
-def _answer(text: str) -> str:
+def _marker_count(text: str, pattern: str) -> int:
+    if pattern.startswith("<") and pattern.endswith(">"):
+        name = pattern[1:-1].split()[0]
+        return len(re.findall(rf"<{re.escape(name)}\b[^>]*>", text, flags=re.IGNORECASE))
+    return len(re.findall(re.escape(pattern), text, flags=re.IGNORECASE))
+
+
+def _answer(text: str, answer_pattern: str = "<answer>") -> str:
     text = re.split(r"<\|im_end\|>|<\|end_of_text\|>", text, maxsplit=1)[0]
-    match = re.search(r"answer:\s*(.*)", text, flags=re.IGNORECASE | re.DOTALL)
+    if answer_pattern.startswith("<") and answer_pattern.endswith(">"):
+        name = answer_pattern[1:-1].split()[0]
+        tagged = re.search(
+            rf"<{re.escape(name)}\b[^>]*>\s*(.*?)\s*</{re.escape(name)}\s*>",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if tagged:
+            return tagged.group(1).strip()
+    match = re.search(re.escape(answer_pattern) + r"\s*(.*)", text, flags=re.IGNORECASE | re.DOTALL)
     return match.group(1).strip() if match else text.strip()
 
 
@@ -127,13 +148,26 @@ def _as_list(value: Any) -> list[str]:
     return [str(value).strip().lower()]
 
 
-def exact_reward(completions: Iterable[Any], answer: Iterable[Any], **_: Any) -> list[float]:
+def _parsed_answer(text: str, answer_pattern: str = "<answer>") -> list[str] | None:
+    try:
+        return _as_list(json.loads(_answer(text, answer_pattern)))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def exact_reward(
+    completions: Iterable[Any],
+    answer: Iterable[Any],
+    fact_pattern: str = "<fact>",
+    answer_pattern: str = "<answer>",
+    **_: Any,
+) -> list[float]:
     """Score structure and answer overlap without loading a second model.
 
     The reward is deliberately made up of small, interpretable terms:
 
-    * ``0.3`` for using at least one ``Fact:`` section;
-    * ``0.3`` for having exactly one ``Answer:`` section;
+    * ``0.3`` for using at least one configured fact section;
+    * ``0.3`` for having exactly one configured answer section;
     * ``0.5`` for producing a JSON answer;
     * ``0..1`` for answer-set intersection-over-union (IoU).
 
@@ -147,17 +181,17 @@ def exact_reward(completions: Iterable[Any], answer: Iterable[Any], **_: Any) ->
         normalized = text.lower()
         score = 0.0
 
-        # Encourage the ReFactX answer format. These are soft incentives:
-        # they do not require the model to produce a complete proof yet.
-        if "fact:" in normalized:
+        # Encourage the configured output markers. These are soft incentives
+        # and do not require a complete proof.
+        if _marker_count(normalized, fact_pattern) > 0:
             score += 0.3
-        if normalized.count("answer:") == 1:
+        if _marker_count(normalized, answer_pattern) == 1:
             score += 0.3
 
         try:
-            # Only the text after Answer: is evaluated. This prevents facts
-            # or reasoning from accidentally counting as predicted answers.
-            predicted = json.loads(_answer(text))
+            # Only the text inside the configured answer section is evaluated.
+            # This prevents facts or reasoning from counting as answers.
+            predicted = json.loads(_answer(text, answer_pattern))
             predicted_values = _as_list(predicted)
             reference_values = _as_list(reference)
 
@@ -174,6 +208,7 @@ def exact_reward(completions: Iterable[Any], answer: Iterable[Any], **_: Any) ->
 
         rewards.append(score)
     return rewards
+
 
 
 class JudgeReward:
@@ -291,13 +326,20 @@ def main() -> None:
     judge = JudgeReward(args.judge_model, torch, type("Transformers", (), {
         "AutoTokenizer": AutoTokenizer, "AutoModelForCausalLM": AutoModelForCausalLM,
     })) if args.judge_model else None
-    reward = judge if judge is not None else exact_reward
+    reward = judge if judge is not None else functools.partial(
+        exact_reward,
+        fact_pattern=args.fact_pattern,
+        answer_pattern=args.answer_pattern,
+    )
 
     if args.index:
         index = refactx.load_index(args.index, tokenizer=tokenizer)
         processor = refactx.get_constrained_logits_processor(
-            tokenizer, index, num_beams=1, num_batches=args.batch_size * args.num_generations,
-            return_list=True, avoid_duplicates=True,
+            tokenizer, index, num_beams=1,
+            num_batches=args.batch_size * args.num_generations,
+            fact_pattern=args.fact_pattern,
+            return_list=True,
+            avoid_duplicates=True,
         )
         original_generate = model.generate
 
@@ -341,6 +383,7 @@ def main() -> None:
         reward_funcs=reward,
     )
     trainer.train()
+
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
 
