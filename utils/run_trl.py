@@ -96,7 +96,9 @@ def parse_args() -> argparse.Namespace:
         "fact_pattern": config.get("fact_pattern", "<fact>"),
         "answer_pattern": config.get("answer_pattern", "<answer>"),
         "learning_rate": config.get("learning_rate", 5e-6),
-        "report_to": config.get("report_to", "none"),
+        "report_to": config.get(
+            "report_to", "wandb" if config.get("wandb", False) else "none"
+        ),
         "seed": config.get("seed", 42),
     }
     for name, default in defaults.items():
@@ -209,6 +211,76 @@ def exact_reward(
         rewards.append(score)
     return rewards
 
+
+def evaluate_policy(
+    model: Any,
+    tokenizer: Any,
+    dataset: Any,
+    max_completion_length: int,
+    fact_pattern: str,
+    answer_pattern: str,
+) -> dict[str, float]:
+    """Evaluate deterministic completions against the dataset answer column.
+
+    Accuracy is exact set match, while the reward remains useful for tracking
+    partial answer overlap and formatting progress. Validation deliberately
+    uses greedy decoding so the metric is not affected by sampling noise.
+    """
+    if dataset is None or len(dataset) == 0:
+        return {}
+
+    import torch
+
+    model.eval()
+    rewards = []
+    exact_matches = 0
+    valid_answers = 0
+    formatted = 0
+    total = 0
+
+    for example in dataset:
+        prompt = example["prompt"]
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        with torch.no_grad():
+            output = model.generate(
+                **inputs,
+                max_new_tokens=max_completion_length,
+                do_sample=False,
+                num_beams=1,
+                num_return_sequences=1,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+        completion = tokenizer.decode(
+            output[0, inputs["input_ids"].shape[-1]:], skip_special_tokens=True
+        )
+        reference = example["answer"]
+        parsed = _parsed_answer(completion, answer_pattern)
+        reference_values = set(_as_list(reference))
+        if parsed is not None:
+            valid_answers += 1
+            if set(parsed) == reference_values:
+                exact_matches += 1
+        normalized_completion = completion.lower()
+        if (
+            _marker_count(normalized_completion, fact_pattern) > 0
+            and _marker_count(normalized_completion, answer_pattern) == 1
+        ):
+            formatted += 1
+        rewards.extend(
+            exact_reward(
+                [completion], [reference],
+                fact_pattern=fact_pattern,
+                answer_pattern=answer_pattern,
+            )
+        )
+        total += 1
+
+    return {
+        "eval_answer_accuracy": exact_matches / total,
+        "eval_valid_answer_rate": valid_answers / total,
+        "eval_format_accuracy": formatted / total,
+        "eval_mean_reward": sum(rewards) / total,
+    }
 
 
 class JudgeReward:
@@ -344,7 +416,22 @@ def main() -> None:
         original_generate = model.generate
 
         def constrained_generate(*call_args, **call_kwargs):
-            call_kwargs.setdefault("logits_processor", processor)
+            # GRPO generation uses the expanded training batch, while the
+            # validation pass generates one prompt at a time. The constrained
+            # processor must be initialized for the actual generation batch.
+            input_ids = call_kwargs.get("input_ids")
+            if input_ids is None and call_args:
+                input_ids = call_args[0]
+            batch_size = input_ids.shape[0] if input_ids is not None else None
+            active_processor = processor
+            if batch_size == 1:
+                active_processor = refactx.get_constrained_logits_processor(
+                    tokenizer, index, num_beams=1, num_batches=1,
+                    fact_pattern=args.fact_pattern,
+                    return_list=True,
+                    avoid_duplicates=True,
+                )
+            call_kwargs.setdefault("logits_processor", active_processor)
             return original_generate(*call_args, **call_kwargs)
 
         model.generate = constrained_generate
@@ -383,6 +470,14 @@ def main() -> None:
         reward_funcs=reward,
     )
     trainer.train()
+
+    if evaluation is not None:
+        eval_metrics = evaluate_policy(
+            model, tokenizer, evaluation, args.max_completion_length,
+            args.fact_pattern, args.answer_pattern,
+        )
+        trainer.log(eval_metrics)
+        print("Validation metrics:", json.dumps(eval_metrics, sort_keys=True))
 
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
