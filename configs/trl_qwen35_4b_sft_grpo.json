@@ -8,6 +8,7 @@
   "train_split": "train",
   "eval_split": "test",
   "max_eval_samples": 100,
+  "eval_batch_size": 1,
   "index": null,
   "judge_model": null,
   "gspo": true,

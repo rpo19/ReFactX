@@ -41,6 +41,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Maximum number of eval examples; omit or use null in config for all examples",
     )
+    parser.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=None,
+        help="Number of eval examples generated together",
+    )
     parser.add_argument("--index", default=None, help="Optional ReFactX prefix-tree index")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--epochs", type=int, default=None)
@@ -83,6 +89,7 @@ def parse_args() -> argparse.Namespace:
         "train_split": config.get("train_split", "train"),
         "eval_split": config.get("eval_split", "validation"),
         "max_eval_samples": config.get("max_eval_samples", 100),
+        "eval_batch_size": config.get("eval_batch_size", 1),
         "index": config.get("index"),
         "output_dir": config.get("output_dir", "./grpo-output"),
         "epochs": config.get("epochs", 1),
@@ -226,6 +233,7 @@ def evaluate_policy(
     max_completion_length: int,
     fact_pattern: str,
     answer_pattern: str,
+    eval_batch_size: int = 1,
 ) -> dict[str, float]:
     """Evaluate deterministic completions against the dataset answer column.
 
@@ -235,6 +243,8 @@ def evaluate_policy(
     """
     if dataset is None or len(dataset) == 0:
         return {}
+    if eval_batch_size < 1:
+        raise ValueError("eval_batch_size must be at least 1")
 
     import torch
 
@@ -245,11 +255,15 @@ def evaluate_policy(
     formatted = 0
     total = 0
 
-    for example in dataset:
-        prompt = example["prompt"]
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    for start in range(0, len(dataset), eval_batch_size):
+        examples = [
+            dataset[index]
+            for index in range(start, min(start + eval_batch_size, len(dataset)))
+        ]
+        prompts = [example["prompt"] for example in examples]
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(model.device)
         with torch.no_grad():
-            output = model.generate(
+            outputs = model.generate(
                 **inputs,
                 max_new_tokens=max_completion_length,
                 do_sample=False,
@@ -257,30 +271,33 @@ def evaluate_policy(
                 num_return_sequences=1,
                 pad_token_id=tokenizer.eos_token_id,
             )
-        completion = tokenizer.decode(
-            output[0, inputs["input_ids"].shape[-1]:], skip_special_tokens=True
-        )
-        reference = example["answer"]
-        parsed = _parsed_answer(completion, answer_pattern)
-        reference_values = set(_as_list(reference))
-        if parsed is not None:
-            valid_answers += 1
-            if set(parsed) == reference_values:
-                exact_matches += 1
-        normalized_completion = completion.lower()
-        if (
-            _marker_count(normalized_completion, fact_pattern) > 0
-            and _marker_count(normalized_completion, answer_pattern) == 1
-        ):
-            formatted += 1
-        rewards.extend(
-            exact_reward(
-                [completion], [reference],
-                fact_pattern=fact_pattern,
-                answer_pattern=answer_pattern,
+
+        input_length = inputs["input_ids"].shape[-1]
+        for index, example in enumerate(examples):
+            completion = tokenizer.decode(
+                outputs[index, input_length:], skip_special_tokens=True
             )
-        )
-        total += 1
+            reference = example["answer"]
+            parsed = _parsed_answer(completion, answer_pattern)
+            reference_values = set(_as_list(reference))
+            if parsed is not None:
+                valid_answers += 1
+                if set(parsed) == reference_values:
+                    exact_matches += 1
+            normalized_completion = completion.lower()
+            if (
+                _marker_count(normalized_completion, fact_pattern) > 0
+                and _marker_count(normalized_completion, answer_pattern) == 1
+            ):
+                formatted += 1
+            rewards.extend(
+                exact_reward(
+                    [completion], [reference],
+                    fact_pattern=fact_pattern,
+                    answer_pattern=answer_pattern,
+                )
+            )
+            total += 1
 
     return {
         "eval_answer_accuracy": exact_matches / total,
@@ -435,9 +452,9 @@ def main() -> None:
                 input_ids = call_args[0]
             batch_size = input_ids.shape[0] if input_ids is not None else None
             active_processor = processor
-            if batch_size == 1:
+            if batch_size is not None and batch_size != args.batch_size * args.num_generations:
                 active_processor = refactx.get_constrained_logits_processor(
-                    tokenizer, index, num_beams=1, num_batches=1,
+                    tokenizer, index, num_beams=1, num_batches=batch_size,
                     fact_pattern=args.fact_pattern,
                     return_list=True,
                     avoid_duplicates=True,
@@ -450,6 +467,7 @@ def main() -> None:
     config = GRPOConfig(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_train_epochs=args.epochs,
         max_steps=args.max_steps if args.max_steps is not None else -1,
@@ -485,7 +503,7 @@ def main() -> None:
     if evaluation is not None:
         eval_metrics = evaluate_policy(
             model, tokenizer, evaluation, args.max_completion_length,
-            args.fact_pattern, args.answer_pattern,
+            args.fact_pattern, args.answer_pattern, args.eval_batch_size,
         )
         trainer.log(eval_metrics)
         print("Validation metrics:", json.dumps(eval_metrics, sort_keys=True))
