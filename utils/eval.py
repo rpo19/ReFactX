@@ -155,6 +155,7 @@ def main(config_path, flush_output):
         print(f"Loading LoRA adapter: {adapter_path}")
         model = PeftModel.from_pretrained(model, adapter_path, is_trainable=False)
         model = model.merge_and_unload(safe_merge=True)
+        model = model.to(torch_dtype)
         print("Adapter loaded and merged into the base model.")
 
     try:
