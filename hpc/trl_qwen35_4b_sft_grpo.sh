@@ -12,9 +12,9 @@ set -euo pipefail
 
 source "$SLURM_SUBMIT_DIR/hpc/env.sh"
 
-# Use the dedicated TRL environment explicitly. Do not use the login-node
-# Python environment, which may not contain compatible TRL/PEFT versions.
-PYTHON=/opt/conda/envs/trl/bin/python
+# Use the Python from PATH (base Miniconda). A dedicated /opt/conda/envs/trl
+# conda environment does not exist on this cluster.
+PYTHON=python
 
 # Reduce allocator fragmentation during long generation/training jobs.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True

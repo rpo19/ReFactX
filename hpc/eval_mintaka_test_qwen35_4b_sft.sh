@@ -3,7 +3,7 @@
 #SBATCH --job-name=mtk_test_dora4b
 #SBATCH -N 1
 #SBATCH --error=logs/test_mintaka_qwen35_4b_sft_%j.err
-#SBATCH --time=04:00:00
+#SBATCH --time=36:00:00
 #SBATCH --mem=24G
 #SBATCH --cpus-per-task=1
 #SBATCH --gres=gpu:1
