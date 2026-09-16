@@ -35,6 +35,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--answer-key", default=None)
     parser.add_argument("--train-split", default=None)
     parser.add_argument("--eval-split", default=None)
+    parser.add_argument(
+        "--max-eval-samples",
+        type=int,
+        default=None,
+        help="Maximum number of eval examples; omit or use null in config for all examples",
+    )
     parser.add_argument("--index", default=None, help="Optional ReFactX prefix-tree index")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--epochs", type=int, default=None)
@@ -76,6 +82,7 @@ def parse_args() -> argparse.Namespace:
         "answer_key": config.get("answer_key", "answer"),
         "train_split": config.get("train_split", "train"),
         "eval_split": config.get("eval_split", "validation"),
+        "max_eval_samples": config.get("max_eval_samples", 100),
         "index": config.get("index"),
         "output_dir": config.get("output_dir", "./grpo-output"),
         "epochs": config.get("epochs", 1),
@@ -382,6 +389,10 @@ def main() -> None:
     raw = load_dataset(args.dataset)
     train = raw[args.train_split]
     evaluation = raw.get(args.eval_split, None)
+    if evaluation is not None and args.max_eval_samples is not None:
+        evaluation = evaluation.select(
+            range(min(args.max_eval_samples, len(evaluation)))
+        )
 
     def format_example(example):
         question = example[args.question_key]

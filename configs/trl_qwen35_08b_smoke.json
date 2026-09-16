@@ -5,6 +5,7 @@
   "dataset": "rmanluo/RoG-cwq",
   "train_split": "train",
   "eval_split": "validation",
+  "max_eval_samples": 100,
   "index": null,
   "judge_model": null,
   "gspo": false,
