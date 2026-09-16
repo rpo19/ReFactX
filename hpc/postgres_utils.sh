@@ -121,7 +121,8 @@ EOF
         if [ "$REUSE" = true ]; then
           echo "Reusing Postgres (PID $PG_PID) started by another job."
           export PG_HOST PG_IP PG_PORT PGPASSWORD PG_SLURM_JOB_ID PG_PID
-          export INDEX_PATH="postgres://postgres:${PGPASSWORD:-postgres}@${PG_IP:-127.0.0.1}:${PG_PORT:-5432}/postgres"
+          export POSTGRES_CONNECTION="postgres://postgres:${PGPASSWORD:-postgres}@${PG_IP:-127.0.0.1}:${PG_PORT:-5432}/postgres"
+          export INDEX_PATH="$POSTGRES_CONNECTION"
           return 0
         fi
       fi

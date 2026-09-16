@@ -54,6 +54,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tablename", default=None, help="PostgreSQL index table name")
     parser.add_argument("--no-cuda", action="store_true", help="Allow running without CUDA (default: require CUDA)")
     parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--save-steps", type=int, default=None, help="Save a training checkpoint every N steps")
+    parser.add_argument("--save-total-limit", type=int, default=None, help="Maximum number of checkpoints to keep")
+    parser.add_argument("--resume-from-checkpoint", default=None, help="Checkpoint path to resume training from")
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--max-steps", type=int, default=None, help="Stop after this many optimizer steps")
     parser.add_argument("--batch-size", type=int, default=None)
@@ -99,6 +102,9 @@ def parse_args() -> argparse.Namespace:
         "index": config.get("index") or os.getenv("INDEX") or os.getenv("BASE_INDEX_PATH"),
         "tablename": config.get("tablename"),
         "output_dir": config.get("output_dir", "./grpo-output"),
+        "save_steps": config.get("save_steps", 100),
+        "save_total_limit": config.get("save_total_limit", 2),
+        "resume_from_checkpoint": config.get("resume_from_checkpoint"),
         "epochs": config.get("epochs", 1),
         "max_steps": config.get("max_steps"),
         "batch_size": config.get("batch_size", 1),
@@ -500,7 +506,9 @@ def main() -> None:
         # separate trainer: sequence-level importance ratios are the key change.
         **({"importance_sampling_level": "sequence"} if args.gspo else {}),
         logging_steps=10,
-        save_total_limit=2,
+        save_strategy="steps",
+        save_steps=args.save_steps,
+        save_total_limit=args.save_total_limit,
         gradient_checkpointing=True,
         bf16=use_cuda,
         report_to=args.report_to,
@@ -514,7 +522,7 @@ def main() -> None:
         processing_class=tokenizer,
         reward_funcs=reward,
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     if evaluation is not None:
         eval_metrics = evaluate_policy(

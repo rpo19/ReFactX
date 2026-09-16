@@ -11,6 +11,12 @@
 set -euo pipefail
 
 source "$SLURM_SUBMIT_DIR/hpc/env.sh"
+export PGDATA="$WS_PATH/pgdata"
+export SHARED_POSTGRES="$WS_PATH/postgres.addr"
+source "$SLURM_SUBMIT_DIR/hpc/postgres_utils.sh"
+
+# Reuse the shared PostgreSQL service, or start one and publish its address.
+ensure_postgres
 
 # Use the Python from PATH (base Miniconda). A dedicated /opt/conda/envs/trl
 # conda environment does not exist on this cluster.
@@ -20,6 +26,12 @@ PYTHON=python
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 cd "$SLURM_SUBMIT_DIR"
+
+# run_trl reads INDEX from .env by default. Override it with the live service
+# discovered by ensure_postgres so localhost is not used on another node.
+export INDEX="$POSTGRES_CONNECTION"
+
+echo "Postgres index: $INDEX"
 
 if [ ! -d "/data/horse/ws/ripo631h-quokka/sft_output_qwen35_4b" ]; then
     echo "SFT adapter directory is missing" >&2
