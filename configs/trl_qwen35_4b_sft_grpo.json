@@ -3,6 +3,7 @@
   "model": "Qwen/Qwen3.5-4B",
   "adapter": "/data/horse/ws/ripo631h-quokka/sft_output_qwen35_4b",
   "dataset": "rpozzi/mintaka",
+  "prompt": "prompts/prompt_qwen36_angular2_nothink.yaml",
   "question_key": "question",
   "answer_key": "answerText",
   "train_split": "train",

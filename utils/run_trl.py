@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--judge-model", default=None, help="Optional model used as an LLM judge")
     parser.add_argument("--gspo", action="store_true", default=None, help="Use GSPO sequence-level importance sampling")
     parser.add_argument("--dataset", default=None)
+    parser.add_argument("--prompt", default=None, help="Prompt template JSON/YAML file")
     parser.add_argument("--question-key", default=None)
     parser.add_argument("--answer-key", default=None)
     parser.add_argument("--train-split", default=None)
@@ -100,6 +101,7 @@ def parse_args() -> argparse.Namespace:
         "judge_model": config.get("judge_model"),
         "gspo": config.get("gspo", False),
         "dataset": config.get("dataset", "rmanluo/RoG-cwq"),
+        "prompt": config.get("prompt", "prompts/prompt_qwen36_angular2_nothink.yaml"),
         "question_key": config.get("question_key", "question"),
         "answer_key": config.get("answer_key", "answer"),
         "train_split": config.get("train_split", "train"),
@@ -355,7 +357,7 @@ class CustomMetricsCallback:
 
     def __init__(self, tokenizer, dataset, max_completion_length, fact_pattern,
                  answer_pattern, eval_batch_size, every_steps, triple_counter,
-                 generation_output):
+                 generation_output, model):
         self.tokenizer = tokenizer
         self.dataset = dataset
         self.max_completion_length = max_completion_length
@@ -365,6 +367,8 @@ class CustomMetricsCallback:
         self.every_steps = every_steps
         self.triple_counter = triple_counter
         self.generation_output = generation_output
+        self.model = model
+        self.trainer = None
         self.pending_metrics = None
 
     def __getattr__(self, name):
@@ -376,6 +380,7 @@ class CustomMetricsCallback:
         raise AttributeError(name)
 
     def on_step_end(self, args, state, control, model=None, **kwargs):
+        model = self.model if self.model is not None else model
         if (
             self.every_steps <= 0
             or state.global_step == 0
@@ -391,6 +396,9 @@ class CustomMetricsCallback:
             evaluation_label=f"step_{state.global_step}",
         )
         self.pending_metrics["constrained_triples_generated"] = self.triple_counter["count"]
+        if self.trainer is not None:
+            self.trainer.log(self.pending_metrics)
+            self.pending_metrics = None
         if was_training:
             model.train()
         return control
@@ -486,7 +494,10 @@ def main() -> None:
     from trl import GRPOConfig, GRPOTrainer
     import refactx
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model, padding_side="right")
+    prompt_template = refactx.load_prompt(args.prompt)
+    print(f"Loaded prompt from {args.prompt}")
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model, padding_side="left")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -518,7 +529,9 @@ def main() -> None:
     def format_example(example):
         question = example[args.question_key]
         return {
-            "prompt": refactx.apply_prompt_template(tokenizer, question=question),
+            "prompt": refactx.apply_prompt_template(
+                tokenizer, prompt_template=prompt_template, question=question
+            ),
             "question": question,
             "answer": example[args.answer_key],
         }
@@ -625,9 +638,10 @@ def main() -> None:
         metrics_callback = CustomMetricsCallback(
             tokenizer, evaluation, args.max_completion_length,
             args.fact_pattern, args.answer_pattern, args.eval_batch_size,
-            args.custom_eval_steps, triple_counter, args.generation_output,
+            args.custom_eval_steps, triple_counter, args.generation_output, model,
         )
         trainer.add_callback(metrics_callback)
+        metrics_callback.trainer = trainer
         initial_metrics = evaluate_policy(
             model, tokenizer, evaluation, args.max_completion_length,
             args.fact_pattern, args.answer_pattern, args.eval_batch_size,
