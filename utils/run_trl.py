@@ -17,7 +17,6 @@ The script intentionally does not initialise wandb.  Select it with
 from __future__ import annotations
 
 import argparse
-import functools
 import json
 import os
 import re
@@ -272,6 +271,7 @@ def evaluate_policy(
     if eval_batch_size < 1:
         raise ValueError("eval_batch_size must be at least 1")
 
+    import refactx
     import torch
 
     model.eval()
@@ -303,23 +303,57 @@ def evaluate_policy(
                 pad_token_id=tokenizer.eos_token_id,
             )
 
+        # ReFactX stores the constrained facts on generation state. Preserve
+        # the same per-sample triple information as utils/eval.py when the
+        # active model has a constrained logits processor.
+        constrained_states = None
+        try:
+            constrained_states = refactx.get_constrained_states()
+            constrained_states.beam_permutation()
+        except (AttributeError, IndexError, RuntimeError):
+            constrained_states = None
+
         input_length = inputs["input_ids"].shape[-1]
         for index, example in enumerate(examples):
-            completion = tokenizer.decode(
-                outputs[index, input_length:], skip_special_tokens=True
-            )
+            output_ids = outputs[index]
+            completion_ids = output_ids[input_length:]
+            new_tokens_generated = 0
+            end_offset = len(completion_ids)
+            for token in completion_ids:
+                token_id = int(token)
+                if token_id == tokenizer.pad_token_id:
+                    end_offset = new_tokens_generated
+                    break
+                if token_id == tokenizer.eos_token_id:
+                    end_offset = new_tokens_generated
+                    break
+                new_tokens_generated += 1
+            completion_ids = completion_ids[:end_offset]
+            completion = tokenizer.decode(completion_ids, skip_special_tokens=True)
             reference = example["answer"]
             parsed = _parsed_answer(completion, answer_pattern)
+            prediction = parsed if parsed is not None else []
             reference_values = set(_as_list(reference))
+            precision = (
+                len(set(prediction) & reference_values) / len(set(prediction))
+                if prediction else 0.0
+            )
+            recall = (
+                len(set(prediction) & reference_values) / len(reference_values)
+                if reference_values else 0.0
+            )
+            f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+            correct = int(set(prediction) == reference_values) if prediction else 0
+            dont_know = int(bool(prediction) and "i don't know" in prediction[0])
             if parsed is not None:
                 valid_answers += 1
-                if set(parsed) == reference_values:
-                    exact_matches += 1
+                exact_matches += correct
             normalized_completion = completion.lower()
-            if (
+            is_formatted = (
                 _marker_count(normalized_completion, fact_pattern) > 0
                 and _marker_count(normalized_completion, answer_pattern) == 1
-            ):
+            )
+            if is_formatted:
                 formatted += 1
             sample_reward = exact_reward(
                 [completion], [reference],
@@ -327,21 +361,49 @@ def evaluate_policy(
                 answer_pattern=answer_pattern,
             )[0]
             rewards.append(sample_reward)
+
+            triples = []
+            if constrained_states is not None:
+                try:
+                    state = constrained_states[index, 0]
+                    triples = [
+                        tokenizer.decode(triple)
+                        for triple in getattr(state, "generated_triples", [])
+                    ]
+                except (AttributeError, IndexError, TypeError, RuntimeError):
+                    triples = []
+
             if generation_output:
+                sample = {
+                    "input_sample": dict(example),
+                    "gt_answer": reference,
+                    "question": example.get("question"),
+                    "answer_complete": bool(prediction),
+                    "prediction": prediction,
+                    "full_prediction": completion,
+                    "prompt": tokenizer.decode(inputs["input_ids"][index]),
+                    "full_sample": tokenizer.decode(output_ids),
+                    "triples": triples,
+                    "new_tokens_generated": new_tokens_generated,
+                    "reached_max_tokens": len(completion_ids) >= max_completion_length,
+                    "evaluation": {
+                        "precision": precision,
+                        "recall": recall,
+                        "f1": f1,
+                        "correct": correct,
+                        "dont_know": dont_know,
+                    },
+                    # Keep the existing fields for consumers of the previous
+                    # TRL JSONL format.
+                    "evaluation_label": evaluation_label,
+                    "reference_answer": reference,
+                    "completion": completion,
+                    "parsed_answer": parsed,
+                    "reward": sample_reward,
+                    "formatted": is_formatted,
+                }
                 with open(generation_output, "a", encoding="utf-8") as output_file:
-                    output_file.write(json.dumps({
-                        "evaluation": evaluation_label,
-                        "question": example.get("question"),
-                        "reference_answer": reference,
-                        "prompt": example.get("prompt"),
-                        "completion": completion,
-                        "parsed_answer": parsed,
-                        "reward": sample_reward,
-                        "formatted": bool(
-                            _marker_count(normalized_completion, fact_pattern) > 0
-                            and _marker_count(normalized_completion, answer_pattern) == 1
-                        ),
-                    }, ensure_ascii=False) + "\n")
+                    output_file.write(json.dumps(sample, ensure_ascii=False) + "\n")
             total += 1
 
     return {
@@ -488,11 +550,11 @@ def main() -> None:
         )
     use_cuda = torch.cuda.is_available() and not args.no_cuda
 
+    import refactx
     from datasets import load_dataset
     from peft import LoraConfig, PeftModel, get_peft_model
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from trl import GRPOConfig, GRPOTrainer
-    import refactx
 
     prompt_template = refactx.load_prompt(args.prompt)
     print(f"Loaded prompt from {args.prompt}")
@@ -543,11 +605,18 @@ def main() -> None:
     judge = JudgeReward(args.judge_model, torch, type("Transformers", (), {
         "AutoTokenizer": AutoTokenizer, "AutoModelForCausalLM": AutoModelForCausalLM,
     }), use_cuda=use_cuda) if args.judge_model else None
-    reward = judge if judge is not None else functools.partial(
-        exact_reward,
-        fact_pattern=args.fact_pattern,
-        answer_pattern=args.answer_pattern,
-    )
+    # Keep a named function here: TRL 1.0 records reward names from
+    # ``__name__`` and does not handle callable objects or partials.
+    def reward(completions, answer, question=None, **kwargs):
+        if judge is not None:
+            return judge(completions, question=question, **kwargs)
+        return exact_reward(
+            completions,
+            answer,
+            fact_pattern=args.fact_pattern,
+            answer_pattern=args.answer_pattern,
+            **kwargs,
+        )
 
     triple_counter = {"count": 0}
 
@@ -601,6 +670,14 @@ def main() -> None:
         max_steps=args.max_steps if args.max_steps is not None else -1,
         learning_rate=args.learning_rate,
         num_generations=args.num_generations,
+        # TRL 1.0 defaults to one generation batch, which is invalid when
+        # more than one completion is requested per prompt. Deriving this
+        # from the generation count also scales with the global batch size
+        # on multi-process runs.
+        steps_per_generation=args.num_generations,
+        # Custom validation below controls the detailed evaluation; keep the
+        # trainer's own eval batch valid for small smoke-test batches.
+        num_generations_eval=1,
         max_completion_length=args.max_completion_length,
         temperature=args.temperature,
         top_p=args.top_p,
