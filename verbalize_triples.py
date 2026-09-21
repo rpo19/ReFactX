@@ -17,12 +17,10 @@ from tqdm import tqdm
 import bz2
 import re
 import click
-import nltk
 
 wikidata_template = '<{v_sub}> <{v_prop}> <{v_obj}> .\n'
 freebase_template = '<{v_sub}> <{v_prop}> <{v_obj}> .\n'
 
-freebase_desc_max_len = 100 # max length of description in Freebase to be included in verbalization
 
 wikidata_triple_regex = re.compile(r'<http:\/\/www\.wikidata\.org\/entity\/Q([0-9]+)>\s+'
     r'<http:\/\/www\.wikidata\.org\/prop\/direct\/P([0-9]+)>\s+'
@@ -57,15 +55,12 @@ def wikidata_verbalize_entity(entity_id: int, ent_labels_wikidata, ent_labels_wi
 
 def freebase_verbalize_entity(entity_id: str, ent_labels_freebase):
     label = ent_labels_freebase.get(entity_id, [None])[0]
-    description = ent_labels_freebase.get(entity_id, [None, None, ''])[2]
-    if description and len(description) > freebase_desc_max_len:
-        description = nltk.sent_tokenize(description)[0] # take first sentence if too long
-        if len(description) > freebase_desc_max_len:
-            description = description[:freebase_desc_max_len]
-    if label and description:
-        return f'{label} ({description})'
-    else:
-        return label
+    # Freebase mids use a dot in the dump (for example, m.dghkuw). Use
+    # the conventional slash form in the displayed unique name.
+    display_id = entity_id.replace('.', '/', 1)
+    if label:
+        return f'{label} ({display_id})'
+    return display_id
 
 @click.command()
 @click.option("--wikidata-props-mapping", required=False, help="Path to the filtered properties pickle file.")
@@ -83,12 +78,6 @@ def main(wikidata_props_mapping, wikidata_labels, freebase_labels, wikipedia_ent
         mode = 'freebase'
         template = freebase_template
 
-        # nltk sent_tokenizer test
-        try:
-            nltk.sent_tokenize("This is a sentence. This is another one.")
-        except LookupError:
-            print("Downloading punkt_tab for nltk")
-            nltk.download('punkt_tab')
 
         with open(freebase_labels, 'rb') as fd:
             ent_labels_freebase = pickle.load(fd)

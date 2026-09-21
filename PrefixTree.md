@@ -57,7 +57,7 @@ wget https://download.microsoft.com/download/A/E/4/AE428B7A-9EF9-446C-85CF-D8ED0
 
 ### Filter labels
 ```
-grep -a -P 'type\.object\.name|common\.topic\.description' fb_en.txt > fb_labels.txt
+grep -a -P 'type\.object\.name' fb_en.txt > fb_labels.txt
 ```
 
 ### Load labels into python dict
@@ -67,7 +67,7 @@ python load_labels.py fb_labels.txt ents_freebase.pickle --freebase
 
 ## Verbalize the triples using the labels
 ```
-python verbalize_triples.py --freebase-labels freebase_labels fb_en.txt verbalized_triples.bz2 [--total-number-of-triples number]
+python verbalize_triples.py --freebase-labels ents_freebase.pickle fb_en.txt verbalized_triples.bz2 [--total-number-of-triples number]
 ```
 
 ## Tokenize and Populate
