@@ -1,45 +1,44 @@
-# Wikidata Prefix Tree
-This file contains instruction on how to prepare the prefix tree from Wikidata dumps.
-
-For using the 800 million facts from the paper:
-- download the facts from [HuggingFace](https://huggingface.co/datasets/rpozzi/ReFactX_data)
-- continue from [Tokenize and Populate](#tokenize-and-populate)
-
-## Download dumps
-- Go to https://dumps.wikimedia.org/wikidatawiki/entities/ and download `latest-truthy.nt.bz2`.
-- Go to https://dumps.wikimedia.org/enwiki/20241220/ and download `enwiki-20241220-page.sql.gz` and `enwiki-20241220-page_props.sql.gz`
-
-## Filter Labels from the wikidata dump
-The output file only has triples with label, altLabel, and description as predicate.
-```
-bzgrep -P '(http://www\\.w3\\.org/2000/01/rdf-schema#label|http://www\\.w3\\.org/2004/02/skos/core#altLabel|http://schema\\.org/description).*\\@en\s+.' latest-truthy.nt.bz2 | gzip -c > latest-truthy-labels-descriptions.nt.gz
-```
-
-## Create a virtualenv
+# Prefix Tree
+### Create a virtualenv
 ```
 python -m venv venv
 pip install -r requirements.txt
 ```
-
 ## Install flash attention
 If you have compatible GPUs.
 ```
 pip install flash-attn --no-build-isolation
 ```
+## Wikidata Preprocessing
+This file contains instruction on how to prepare the prefix tree from Wikidata dumps.
 
-## Load labels and description into a pickle file
+For using the 800 million facts from the paper:
+- download the verbalized facts from [here](https://drive.google.com/file/d/1jbDHR3VYVEPjUZ4wdIOzl39rhZweVru9/view?usp=sharing)
+- continue from [Tokenize and Populate](#tokenize-and-populate)
+
+### Download dumps
+- Go to https://dumps.wikimedia.org/wikidatawiki/entities/ and download `latest-truthy.nt.bz2`.
+- Go to https://dumps.wikimedia.org/enwiki/20241220/ and download `enwiki-20241220-page.sql.gz` and `enwiki-20241220-page_props.sql.gz`
+
+### Filter Labels from the wikidata dump
+The output file only has triples with label, altLabel, and description as predicate.
 ```
-python utils/load_labels.py latest-truthy-labels-descriptions.nt.gz wikidata-labels.pickle
+bzgrep -P '(http://www\\.w3\\.org/2000/01/rdf-schema#label|http://www\\.w3\\.org/2004/02/skos/core#altLabel|http://schema\\.org/description).*\\@en\s+.' latest-truthy.nt.bz2 | gzip -c > latest-truthy-labels-descriptions.nt.gz
 ```
 
-## Create Label mappings for Wikipedia Entities
+### Load labels and description into a pickle file
+```
+python utils/load_labels.py latest-truthy-labels-descriptions.nt.gz wikidata-labels.pickle wikidata-properties.pickle
+```
+
+### Create Label mappings for Wikipedia Entities
 
 Refer to the readme in services/mariadb: [Readme.md](services/mariadb/Readme.md)
 
-## Download property labels
+### Download property labels
 Go to https://hay.toolforge.org/propbrowse/ and Download all properties as JSON.
 
-## Filter the properties
+### Filter the properties
 Replace `input_props.json` with the file you just downloaded and run:
 ```
 python utils/filter_props.py input_props.json filtered_props.pickle
@@ -47,7 +46,28 @@ python utils/filter_props.py input_props.json filtered_props.pickle
 
 ## Verbalize the triples using the labels
 ```
-python verbalize_triples.py --props-mapping props_mapping --wikidata-labels wikidata_labels --wikipedia-entity-mapping wikipedia_entity_mapping wikidump.bz2 verbalized_triples.bz2 [--total-number-of-triples number]
+python utils/verbalize_triples.py --props-mapping props_mapping --wikidata-labels wikidata_labels --wikipedia-entity-mapping wikipedia_entity_mapping wikidump.bz2 verbalized_triples.bz2 [--total-number-of-triples number]
+```
+
+## Freebase preprocessing
+Download dump with (source doi.org/10.1145/3437963.3441753 see github):
+```
+wget https://download.microsoft.com/download/A/E/4/AE428B7A-9EF9-446C-85CF-D8ED0C9B1F26/FastRDFStore-data.zip --no-check-certificate
+```
+
+### Filter labels
+```
+grep -a -P 'type\.object\.name' fb_en.txt > fb_labels.txt
+```
+
+### Load labels into python dict
+```
+python utils/load_freebase_labels.py fb_labels.txt ents_freebase.pickle
+```
+
+## Verbalize the triples using the labels
+```
+python utils/verbalize_freebase.py --freebase-labels ents_freebase.pickle fb_en.txt verbalized_triples.bz2 [--total-number-of-triples number]
 ```
 
 ## Tokenize and Populate
