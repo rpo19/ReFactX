@@ -16,31 +16,8 @@ export SHARED_POSTGRES=$WS_PATH/postgres.addr
 source "$SLURM_SUBMIT_DIR/hpc/postgres_utils.sh"
 
 ensure_postgres
-export POSTGRES_ADDR_FILE="$SHARED_POSTGRES"
-
-postgres_watchdog() {
-    while true; do
-        if [ -f "$SHARED_POSTGRES" ]; then
-            # shellcheck disable=SC1090
-            source "$SHARED_POSTGRES"
-        fi
-        if [ -n "${PG_IP:-}" ] && [ -n "${PG_PORT:-}" ] \
-            && timeout 2 bash -c "echo >/dev/tcp/$PG_IP/$PG_PORT" 2>/dev/null; then
-            sleep 10
-            continue
-        fi
-        echo "Postgres is unavailable; attempting recovery at $(date)" >&2
-        ensure_postgres || echo "Postgres recovery attempt failed" >&2
-    done
-}
-
-postgres_watchdog &
-POSTGRES_WATCHDOG_PID=$!
-cleanup_postgres_watchdog() {
-    kill "$POSTGRES_WATCHDOG_PID" 2>/dev/null || true
-    wait "$POSTGRES_WATCHDOG_PID" 2>/dev/null || true
-}
-trap cleanup_postgres_watchdog EXIT INT TERM
+start_postgres_watchdog
+trap stop_postgres_watchdog EXIT INT TERM
 
 cd /home/ripo631h/ReFactX
 

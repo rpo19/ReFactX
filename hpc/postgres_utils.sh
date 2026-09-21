@@ -166,3 +166,50 @@ EOF
     echo "SHARED_POSTGRES mode: keeping Postgres alive for other jobs"
   fi
 }
+
+# Keep jobs alive when the shared PostgreSQL starter job exits. A randomized
+# recheck lets concurrent jobs avoid all trying to restart the service at once.
+postgres_watchdog() {
+  while true; do
+    if [ -f "$ADDR_FILE" ]; then
+      # shellcheck disable=SC1090
+      source "$ADDR_FILE"
+    fi
+
+    if [ -n "${PG_IP:-}" ] && [ -n "${PG_PORT:-}" ] \
+        && timeout 2 bash -c "echo >/dev/tcp/$PG_IP/$PG_PORT" 2>/dev/null; then
+      sleep 10
+      continue
+    fi
+
+    local delay=$((RANDOM % 15 + 1))
+    echo "Postgres is unavailable; retrying in ${delay}s before recovery" >&2
+    sleep "$delay"
+
+    # Another job may have restored the service during the stagger.
+    if [ -f "$ADDR_FILE" ]; then
+      # shellcheck disable=SC1090
+      source "$ADDR_FILE"
+    fi
+    if [ -n "${PG_IP:-}" ] && [ -n "${PG_PORT:-}" ] \
+        && timeout 2 bash -c "echo >/dev/tcp/$PG_IP/$PG_PORT" 2>/dev/null; then
+      continue
+    fi
+
+    echo "Postgres is still unavailable; attempting recovery at $(date)" >&2
+    if ! ensure_postgres; then
+      echo "Postgres recovery attempt failed" >&2
+      sleep $((RANDOM % 15 + 1))
+    fi
+  done
+}
+
+start_postgres_watchdog() {
+  postgres_watchdog &
+  POSTGRES_WATCHDOG_PID=$!
+}
+
+stop_postgres_watchdog() {
+  kill "${POSTGRES_WATCHDOG_PID:-}" 2>/dev/null || true
+  wait "${POSTGRES_WATCHDOG_PID:-}" 2>/dev/null || true
+}

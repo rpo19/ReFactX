@@ -16,6 +16,8 @@ export SHARED_POSTGRES=$WS_PATH/postgres.addr
 source "$SLURM_SUBMIT_DIR/hpc/postgres_utils.sh"
 
 ensure_postgres
+start_postgres_watchdog
+trap stop_postgres_watchdog EXIT INT TERM
 
 cd /home/ripo631h/ReFactX
 
