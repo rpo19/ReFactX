@@ -55,6 +55,12 @@ The final metrics record contains keys such as `macro_precision`, `macro_recall`
 
 Run these commands from the repository root. They parse the JSONL but do not print the large prompts or full generations.
 
+For generated summary tables, `utils/make_latex_tables.py` can produce Markdown tables as well as LaTeX tables. Markdown is the default; use `--output tables.md` to save Markdown, or add `--latex` (and use a `.tex` output path) for LaTeX. For example:
+
+```bash
+python utils/make_latex_tables.py logs/*.out --output tables.md
+```
+
 ### 1. Show metadata and final metrics
 
 ```bash
