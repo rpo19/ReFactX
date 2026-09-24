@@ -77,6 +77,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repetition-penalty", type=float, default=None)
     parser.add_argument("--fact-pattern", default=None)
     parser.add_argument("--answer-pattern", default=None)
+    parser.add_argument(
+        "--sentinel",
+        action="store_true",
+        default=None,
+        help="Enable the exhausted-retrieval '<no further records>' sentinel during generation",
+    )
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--report-to", default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -132,6 +138,8 @@ def parse_args() -> argparse.Namespace:
         ),
         "fact_pattern": config.get("fact_pattern", "<fact>"),
         "answer_pattern": config.get("answer_pattern", "<answer>"),
+        "sentinel": config.get("sentinel", False),
+        "count_pattern": config.get("count_pattern", "<count>"),
         "learning_rate": config.get("learning_rate", 5e-6),
         "report_to": config.get(
             "report_to", "wandb" if config.get("wandb", False) else "none"
@@ -631,6 +639,8 @@ def main() -> None:
             tokenizer, index, num_beams=1,
             num_batches=args.batch_size * args.num_generations,
             fact_pattern=args.fact_pattern,
+            count_pattern=args.count_pattern,
+            sentinel=args.sentinel,
             return_list=True,
             avoid_duplicates=True,
             reinit_states=True,
@@ -651,6 +661,8 @@ def main() -> None:
                 active_processor = refactx.get_constrained_logits_processor(
                     tokenizer, index, num_beams=1, num_batches=batch_size,
                     fact_pattern=args.fact_pattern,
+                    count_pattern=args.count_pattern,
+                    sentinel=args.sentinel,
                     return_list=True,
                     avoid_duplicates=True,
                     reinit_states=True,

@@ -11,9 +11,21 @@ def apply_prompt_template(tokenizer, prompt_template=PROMPT_TEMPLATE, question=N
         question_w_role = {'role':'user', 'content': question}
         return tokenizer.apply_chat_template(prompt_template + [question_w_role], tokenize=False, add_generation_prompt=True, **kwargs)
 
-def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True, **kwargs):
+def get_constrained_logits_processor(
+    tokenizer, index, num_beams=1, num_batches=1, return_list=True,
+    sentinel=False, **kwargs
+):
+    """Build constrained fact/count generation with explicit sentinel control."""
     from refactx.generate import get_constrained_logits_processor as _base
-    return _base(tokenizer, index, num_beams=num_beams, num_batches=num_batches, return_list=return_list, **kwargs)
+    return _base(
+        tokenizer,
+        index,
+        num_beams=num_beams,
+        num_batches=num_batches,
+        return_list=return_list,
+        sentinel=sentinel,
+        **kwargs,
+    )
 
 def get_count_branches_logits_processor(tokenizer, kb_index, **kwargs):
     import warnings
