@@ -127,6 +127,8 @@ class FactGeneration(PatternConstrainedGeneration):
         mask[mask_idx, :] = -math.inf
         mask[mask_idx, ids[0]] = 0
         self.state.sentinel_remaining = list(ids[1:])
+        if not self.completed_with_sentinel and self.state.on_sentinel_generated is not None:
+            self.state.on_sentinel_generated()
         self.completed_with_sentinel = True
         if sequence is not None:
             self._sentinel_triple = sequence[:]
@@ -361,6 +363,8 @@ class CountBranchesGeneration(PatternConstrainedGeneration):
                 count = self._count_at_prefix(self.prefix_tokens)
                 prefix_text = self._decode(self.prefix_tokens).strip()
                 self.calls.append((prefix_text, count))
+                if self.state.on_count_generated is not None:
+                    self.state.on_count_generated(prefix_text, count)
                 count_str = f"= {count}\n{self.eot}"
                 self.count_tokens = self._encode(count_str)
                 self.mode = self.MODE_EMITTING
@@ -420,6 +424,10 @@ class PatternConstrainedState():
 
         self.cache_index = cache_index
         self.on_triple_generated: Callable[[list[int]], None] | None = None
+        # Exact decoder-side tool callbacks: fire when the constrained decoder
+        # actually computes a count or emits an exhausted-retrieval sentinel.
+        self.on_count_generated: Callable[[str, int], None] | None = None
+        self.on_sentinel_generated: Callable[[], None] | None = None
         self.generated_triples = []
         self.generated_triples_idx = []
         self.generated_triples_str = []
@@ -499,6 +507,9 @@ class PatternConstrainedState():
         self.generation_history = deepcopy(other.generation_history) if copy else other.generation_history
 
         self.generated_triples = other.generated_triples.copy() if copy else other.generated_triples
+        self.on_triple_generated = other.on_triple_generated
+        self.on_count_generated = other.on_count_generated
+        self.on_sentinel_generated = other.on_sentinel_generated
         self.cache_index = deepcopy(other.cache_index) if copy else other.cache_index
         self.subtree_cache = deepcopy(other.subtree_cache) if copy else other.subtree_cache
         self.thinking_end_pattern = other.thinking_end_pattern
@@ -703,18 +714,24 @@ class ConstrainedStateList():
 
 class ConstrainedLogitsProcessor(LogitsProcessor):
     def __init__(self, states, tokenizer, reinit_states=False,
-                 on_triple_generated=None):
+                 on_triple_generated=None, on_count_generated=None,
+                 on_sentinel_generated=None):
         self.states = states
         self.reinit_states = reinit_states
         self.on_triple_generated = on_triple_generated
+        self.on_count_generated = on_count_generated
+        self.on_sentinel_generated = on_sentinel_generated
         self.tokenizer = tokenizer
         self.pattern_configs = []
-        self._attach_triple_callback()
+        self._attach_callbacks()
 
-    def _attach_triple_callback(self):
+    def _attach_callbacks(self):
+        """Install the shared tool callbacks on every per-beam state."""
         for batch in self.states.states:
             for state in batch:
                 state.on_triple_generated = self.on_triple_generated
+                state.on_count_generated = self.on_count_generated
+                state.on_sentinel_generated = self.on_sentinel_generated
 
     def add_pattern(self, pattern, generation_class, **config):
         cfg = PatternConfig(pattern=pattern, generation_class=generation_class, config=config)
@@ -738,7 +755,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                 for batch in self.states.states:
                     for state in batch:
                         state.patterns.append(cfg)
-            self._attach_triple_callback()
+            self._attach_callbacks()
         else:
             self.states.reset(clear_patterns=False)
 
@@ -748,7 +765,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                 num_batches=num_batches,
                 debug_tokenizer=self.tokenizer
         )
-        self._attach_triple_callback()
+        self._attach_callbacks()
 
     def _reinit_states_to_input_ids(self, input_ids):
         for i in range(input_ids.shape[0]):
@@ -814,7 +831,9 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
                                      return_list=True, sentinel=True,
                                      fact_pattern='<fact>', count_pattern='<count>',
                                      eot=' </fact>\n', reinit_states=False,
-                                     on_triple_generated=None, **kwargs):
+                                     on_triple_generated=None,
+                                     on_count_generated=None,
+                                     on_sentinel_generated=None, **kwargs):
     """Build the constrained processor.
 
     Sentinel (exhausted-retrieval ``<no further records>``) is enabled by
@@ -832,6 +851,8 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
         tokenizer=tokenizer,
         reinit_states=reinit_states,
         on_triple_generated=on_triple_generated,
+        on_count_generated=on_count_generated,
+        on_sentinel_generated=on_sentinel_generated,
     )
 
     fact_config = dict(kwargs)

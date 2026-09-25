@@ -10,8 +10,8 @@ Examples (run from the repository root)::
     python utils/run_trl.py --config configs/trl_qwen35_08b_smoke.json --judge-model Qwen/Qwen2.5-3B-Instruct
     python utils/run_trl.py --config configs/trl_qwen35_08b_smoke.json --adapter ./grpo-qwen35-08b
 
-The script intentionally does not initialise wandb.  Select it with
-``--report-to wandb`` when desired.
+Metrics are reported to Weights & Biases by default.  Set ``report_to`` in the
+config (or pass ``--report-to none``) to disable reporting.
 """
 
 from __future__ import annotations
@@ -141,8 +141,10 @@ def parse_args() -> argparse.Namespace:
         "sentinel": config.get("sentinel", True),
         "count_pattern": config.get("count_pattern", "<count>"),
         "learning_rate": config.get("learning_rate", 5e-6),
+        # Default to wandb; an explicit "report_to" still wins, and an
+        # explicit "wandb": false opts out.
         "report_to": config.get(
-            "report_to", "wandb" if config.get("wandb", False) else "none"
+            "report_to", "none" if config.get("wandb", None) is False else "wandb"
         ),
         "seed": config.get("seed", 42),
     }
@@ -200,6 +202,43 @@ def _parsed_answer(text: str, answer_pattern: str = "<answer>") -> list[str] | N
         return _as_list(json.loads(_answer(text, answer_pattern)))
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
+
+
+COUNT_MARKER = "<count>"
+SENTINEL_MARKER = "no further records"
+
+
+def _tool_usage_stats(completions: Iterable[Any]) -> dict[str, int]:
+    """Count constrained-tool usage in generated completions.
+
+    Only the generated text is inspected (never the prompt), so a marker that
+    appears in the system prompt cannot inflate the counters.
+
+    Returns total occurrences and the number of completions containing each
+    marker, for both the ``<count>`` tool and the exhausted-retrieval sentinel.
+    """
+    stats = {
+        "count_uses": 0,
+        "count_examples": 0,
+        "sentinel_uses": 0,
+        "sentinel_examples": 0,
+    }
+    for completion in completions:
+        text = _text(completion)
+        n_count = text.count(COUNT_MARKER)
+        n_sentinel = text.lower().count(SENTINEL_MARKER)
+        stats["count_uses"] += n_count
+        stats["sentinel_uses"] += n_sentinel
+        if n_count:
+            stats["count_examples"] += 1
+        if n_sentinel:
+            stats["sentinel_examples"] += 1
+    return stats
+
+
+def _accumulate_tool_usage(counter: dict[str, int], completions: Iterable[Any]) -> None:
+    for key, value in _tool_usage_stats(completions).items():
+        counter[key] = counter.get(key, 0) + value
 
 
 def exact_reward(
@@ -267,6 +306,7 @@ def evaluate_policy(
     eval_batch_size: int = 1,
     generation_output: str | None = None,
     evaluation_label: str = "evaluation",
+    decoder_counter: dict[str, int] | None = None,
 ) -> dict[str, float]:
     """Evaluate deterministic completions against the dataset answer column.
 
@@ -282,12 +322,20 @@ def evaluate_policy(
     import refactx
     import torch
 
+    # Snapshot the exact decoder counters so this validation pass can report its
+    # own tool-call totals rather than only the cumulative training totals.
+    decoder_before = dict(decoder_counter) if decoder_counter is not None else None
+
     model.eval()
     rewards = []
     exact_matches = 0
     valid_answers = 0
     formatted = 0
     total = 0
+    count_tool_uses = 0
+    count_tool_examples = 0
+    sentinel_uses = 0
+    sentinel_examples = 0
 
     if generation_output:
         output_parent = os.path.dirname(generation_output)
@@ -363,6 +411,11 @@ def evaluate_policy(
             )
             if is_formatted:
                 formatted += 1
+            usage = _tool_usage_stats([completion])
+            count_tool_uses += usage["count_uses"]
+            count_tool_examples += usage["count_examples"]
+            sentinel_uses += usage["sentinel_uses"]
+            sentinel_examples += usage["sentinel_examples"]
             sample_reward = exact_reward(
                 [completion], [reference],
                 fact_pattern=fact_pattern,
@@ -419,6 +472,16 @@ def evaluate_policy(
         "eval_valid_answer_rate": valid_answers / total,
         "eval_format_accuracy": formatted / total,
         "eval_mean_reward": sum(rewards) / total,
+        "eval_count_tool_uses": count_tool_uses,
+        "eval_count_tool_rate": count_tool_examples / total,
+        "eval_count_tool_mean": count_tool_uses / total,
+        "eval_sentinel_uses": sentinel_uses,
+        "eval_sentinel_rate": sentinel_examples / total,
+        "eval_sentinel_mean": sentinel_uses / total,
+        **({
+            "eval_count_tool_calls": decoder_counter["count_calls"] - decoder_before["count_calls"],
+            "eval_sentinel_calls": decoder_counter["sentinel_calls"] - decoder_before["sentinel_calls"],
+        } if decoder_before is not None and decoder_counter is not None else {}),
     }
 
 
@@ -427,7 +490,7 @@ class CustomMetricsCallback:
 
     def __init__(self, tokenizer, dataset, max_completion_length, fact_pattern,
                  answer_pattern, eval_batch_size, every_steps, triple_counter,
-                 generation_output, model):
+                 generation_output, model, tool_counter=None, decoder_counter=None):
         self.tokenizer = tokenizer
         self.dataset = dataset
         self.max_completion_length = max_completion_length
@@ -436,6 +499,8 @@ class CustomMetricsCallback:
         self.eval_batch_size = eval_batch_size
         self.every_steps = every_steps
         self.triple_counter = triple_counter
+        self.tool_counter = tool_counter or {}
+        self.decoder_counter = decoder_counter or {}
         self.generation_output = generation_output
         self.model = model
         self.trainer = None
@@ -451,8 +516,12 @@ class CustomMetricsCallback:
 
     def on_step_end(self, args, state, control, model=None, **kwargs):
         model = self.model if self.model is not None else model
+        # Without a validation dataset there is nothing to evaluate; the
+        # cumulative tool counters are still reported from on_log.
         if (
-            self.every_steps <= 0
+            self.dataset is None
+            or len(self.dataset) == 0
+            or self.every_steps <= 0
             or state.global_step == 0
             or state.global_step % self.every_steps != 0
             or model is None
@@ -464,8 +533,10 @@ class CustomMetricsCallback:
             self.fact_pattern, self.answer_pattern, self.eval_batch_size,
             generation_output=self.generation_output,
             evaluation_label=f"step_{state.global_step}",
+            decoder_counter=self.decoder_counter,
         )
         self.pending_metrics["constrained_triples_generated"] = self.triple_counter["count"]
+        self._add_tool_counters(self.pending_metrics)
         if self.trainer is not None:
             self.trainer.log(self.pending_metrics)
             self.pending_metrics = None
@@ -473,9 +544,19 @@ class CustomMetricsCallback:
             model.train()
         return control
 
+    def _add_tool_counters(self, metrics):
+        """Attach cumulative constrained-tool usage counters to a metrics dict."""
+        metrics["count_tool_uses"] = self.tool_counter.get("count_uses", 0)
+        metrics["count_tool_examples"] = self.tool_counter.get("count_examples", 0)
+        metrics["sentinel_uses"] = self.tool_counter.get("sentinel_uses", 0)
+        metrics["sentinel_examples"] = self.tool_counter.get("sentinel_examples", 0)
+        metrics["count_tool_calls"] = self.decoder_counter.get("count_calls", 0)
+        metrics["sentinel_calls"] = self.decoder_counter.get("sentinel_calls", 0)
+
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs is not None:
             logs["constrained_triples_generated"] = self.triple_counter["count"]
+            self._add_tool_counters(logs)
         if logs is not None and self.pending_metrics:
             logs.update(self.pending_metrics)
             self.pending_metrics = None
@@ -615,7 +696,31 @@ def main() -> None:
     }), use_cuda=use_cuda) if args.judge_model else None
     # Keep a named function here: TRL 1.0 records reward names from
     # ``__name__`` and does not handle callable objects or partials.
+    triple_counter = {"count": 0}
+    tool_counter = {
+        "count_uses": 0,
+        "count_examples": 0,
+        "sentinel_uses": 0,
+        "sentinel_examples": 0,
+    }
+    # Exact decoder-side counts: incremented by the constrained processor when it
+    # computes a count or emits the exhausted-retrieval sentinel. Unlike the
+    # text-based counters these reflect real tool invocations, not marker text.
+    decoder_counter = {
+        "count_calls": 0,
+        "sentinel_calls": 0,
+    }
+
+    def on_count_generated(_prefix_text, _count):
+        decoder_counter["count_calls"] += 1
+
+    def on_sentinel_generated():
+        decoder_counter["sentinel_calls"] += 1
+
     def reward(completions, answer, question=None, **kwargs):
+        # Track which constrained tools the policy actually used on this rollout
+        # batch. This runs on generated text only, never on the prompt.
+        _accumulate_tool_usage(tool_counter, completions)
         if judge is not None:
             return judge(completions, question=question, **kwargs)
         return exact_reward(
@@ -625,8 +730,6 @@ def main() -> None:
             answer_pattern=args.answer_pattern,
             **kwargs,
         )
-
-    triple_counter = {"count": 0}
 
     def on_triple_generated(_sequence):
         triple_counter["count"] += 1
@@ -645,6 +748,8 @@ def main() -> None:
             avoid_duplicates=True,
             reinit_states=True,
             on_triple_generated=on_triple_generated,
+            on_count_generated=on_count_generated,
+            on_sentinel_generated=on_sentinel_generated,
         )
         original_generate = model.generate
 
@@ -667,6 +772,8 @@ def main() -> None:
                     avoid_duplicates=True,
                     reinit_states=True,
                     on_triple_generated=on_triple_generated,
+                    on_count_generated=on_count_generated,
+                    on_sentinel_generated=on_sentinel_generated,
                 )
             call_kwargs.setdefault("logits_processor", active_processor)
             return original_generate(*call_args, **call_kwargs)
@@ -720,24 +827,38 @@ def main() -> None:
 
     trainer.log({
         "constrained_triples_generated": triple_counter["count"],
+        "count_tool_uses": tool_counter["count_uses"],
+        "sentinel_uses": tool_counter["sentinel_uses"],
+        "count_tool_calls": decoder_counter["count_calls"],
+        "sentinel_calls": decoder_counter["sentinel_calls"],
         "custom_metrics_ready": 0,
     })
 
+    # Registered unconditionally: the callback also reports the cumulative tool
+    # counters from on_log, which must work even without a validation split.
+    metrics_callback = CustomMetricsCallback(
+        tokenizer, evaluation, args.max_completion_length,
+        args.fact_pattern, args.answer_pattern, args.eval_batch_size,
+        args.custom_eval_steps, triple_counter, args.generation_output, model,
+        tool_counter=tool_counter,
+        decoder_counter=decoder_counter,
+    )
+    trainer.add_callback(metrics_callback)
+    metrics_callback.trainer = trainer
+
     if evaluation is not None:
-        metrics_callback = CustomMetricsCallback(
-            tokenizer, evaluation, args.max_completion_length,
-            args.fact_pattern, args.answer_pattern, args.eval_batch_size,
-            args.custom_eval_steps, triple_counter, args.generation_output, model,
-        )
-        trainer.add_callback(metrics_callback)
-        metrics_callback.trainer = trainer
         initial_metrics = evaluate_policy(
             model, tokenizer, evaluation, args.max_completion_length,
             args.fact_pattern, args.answer_pattern, args.eval_batch_size,
             generation_output=args.generation_output,
             evaluation_label="initial",
+            decoder_counter=decoder_counter,
         )
         initial_metrics["constrained_triples_generated"] = triple_counter["count"]
+        initial_metrics["count_tool_uses"] = tool_counter["count_uses"]
+        initial_metrics["sentinel_uses"] = tool_counter["sentinel_uses"]
+        initial_metrics["count_tool_calls"] = decoder_counter["count_calls"]
+        initial_metrics["sentinel_calls"] = decoder_counter["sentinel_calls"]
         initial_metrics["custom_metrics_ready"] = 1
         trainer.log(initial_metrics)
         print("Initial validation metrics:", json.dumps(initial_metrics, sort_keys=True))
@@ -750,8 +871,13 @@ def main() -> None:
             args.fact_pattern, args.answer_pattern, args.eval_batch_size,
             generation_output=args.generation_output,
             evaluation_label="final",
+            decoder_counter=decoder_counter,
         )
         eval_metrics["constrained_triples_generated"] = triple_counter["count"]
+        eval_metrics["count_tool_uses"] = tool_counter["count_uses"]
+        eval_metrics["sentinel_uses"] = tool_counter["sentinel_uses"]
+        eval_metrics["count_tool_calls"] = decoder_counter["count_calls"]
+        eval_metrics["sentinel_calls"] = decoder_counter["sentinel_calls"]
         trainer.log(eval_metrics)
         print("Validation metrics:", json.dumps(eval_metrics, sort_keys=True))
 
