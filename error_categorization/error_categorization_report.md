@@ -161,6 +161,19 @@ Mintaka examples include structured entity information in `input_sample`:
 
 This provides a useful route to aliases: use the stable Wikidata `Q`-ID as the internal identity, and treat the dataset answer text, `answerEntity.label`, question mention, and approved external labels as surface forms. For example, `Monsters Inc` and `Monsters, Inc.` can resolve to the same entity. However, the local records do not contain a complete alias list. If broader aliases are needed, retrieve Wikidata aliases for the `Q`-IDs offline and cache them; do not perform an uncontrolled network lookup during evaluation. Alias matches should be applied only to entity-valued answers, not to arbitrary strings or numeric counts.
 
+### Provenance of the hand-written alias table
+
+The implementation in `utils/answer_normalization.py` contains a small `_ENTITY_ALIASES` map (`USA`/`US`/`U.S.A.`/`United States of America` -> `United States`, `UK`/`U.K.` -> `United Kingdom`) and a `_TRANSLIT` map for digraph spellings (`å` -> `aa`, `æ` -> `ae`, `ø` -> `o`, `ß` -> `ss`).
+
+Provenance, stated plainly:
+
+- These tables are **hand-curated, not derived from the data and not extracted from Wikidata**. They were seeded from observed log failures (for example `gt="USA."` vs `prediction="United States"`, and `Aarhus` vs `Århus`) plus general knowledge. There is no generation step and no exhaustive validation behind them.
+- The principled source remains the `answerEntity` `Q`-IDs described above; these tables are a fallback for records without linked entities.
+- **Empirical status:** the `alias` rule fired **0 times** across the five September logs (~4,400 scored answers). Whenever a record supplies `answerEntity`, the `mintaka_answer_entity_label` rule is evaluated first and covers those cases, so the alias table is currently unexercised on real data (it still fires in unit tests where `answerEntity` is absent).
+- **Risk note:** `"us"` is also an ordinary English word, which is safe only because the map is applied to the entire normalized answer string rather than per token. The table should stay small and explicit; it is a fallback, not the main mechanism.
+
+Where the gains actually come from, measured across the four Mintaka logs: `mintaka_answer_entity_label` (106 total), `date` (109), `quantity` (9), `text`/punctuation (10), and `entity_fold` (1). No gain came from the hand-written alias table.
+
 ### Recommended evaluator changes
 
 Keep the current strict score, but add a second semantic score rather than silently replacing the benchmark metric:
