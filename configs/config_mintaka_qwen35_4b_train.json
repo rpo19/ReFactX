@@ -12,6 +12,7 @@
     "prompt": "prompts/prompt_qwen36_angular2_nothink.yaml",
     "wandb": false,
     "unconstrained_generation": false,
+    "count_pattern": "<count>",
     "debug": false,
     "debug_states": false,
     "continue": true,
@@ -23,7 +24,7 @@
     "n": 10,
     "sentinel": true,
     "generation_config": {
-        "max_new_tokens": 1024,
+        "max_new_tokens": 2048,
         "do_sample": true,
         "temperature": 0.7,
         "top_p": 0.80,

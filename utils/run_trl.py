@@ -138,7 +138,7 @@ def parse_args() -> argparse.Namespace:
         ),
         "fact_pattern": config.get("fact_pattern", "<fact>"),
         "answer_pattern": config.get("answer_pattern", "<answer>"),
-        "sentinel": config.get("sentinel", False),
+        "sentinel": config.get("sentinel", True),
         "count_pattern": config.get("count_pattern", "<count>"),
         "learning_rate": config.get("learning_rate", 5e-6),
         "report_to": config.get(

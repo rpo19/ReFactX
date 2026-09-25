@@ -288,7 +288,7 @@ def main(config_path, flush_output, no_cuda):
                 index,
                 num_beams=cfg.get('num_beams', 1),
                 num_batches=cfg.get('batch_size', 1),
-                sentinel=cfg.get('sentinel', False),
+                sentinel=cfg.get('sentinel', True),
                 fact_pattern=cfg.get('fact_pattern', '<fact>'),
                 count_pattern=cfg.get('count_pattern', '<count>'),
                 eot=cfg.get('fact_eot', '</fact>\n'),

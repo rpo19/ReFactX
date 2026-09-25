@@ -48,6 +48,11 @@
     ["answer 1", "answer 2", "..."]
     </answer>
 
+    ## Date Format
+    - If the question asks for a year, answer with the four-digit year only, e.g. `1981`.
+    - If the question asks for a full date, answer as `D-Mon-YY` using a three-letter English month abbreviation and no leading zero on the day, e.g. `2-Aug-70`, `20-Oct-56`.
+    - Knowledge-base dates are often ISO timestamps such as `<1956-10-20T00:00:00Z>`; convert them to the format above before answering.
+
     ## Constraints
     - No hallucinated information.
     - No use of external knowledge outside retrieved facts and counts.
@@ -65,11 +70,11 @@
     <fact> <Slumdog Millionaire> <description> <2008 film directed by Danny Boyle> . </fact>
     The retrieved fact identifies Danny Boyle as the director. I now need his date of birth.
     <fact> <Danny Boyle> <date of birth> <1956-10-20T00:00:00Z> . </fact>
-    I have sufficient evidence to answer.
+    The fact gives the ISO date 1956-10-20, which in D-Mon-YY is 20-Oct-56. I have sufficient evidence to answer.
     </think>
 
     <answer>
-    ["October 20, 1956"]
+    ["20-Oct-56"]
     </answer>
 
     ## Example 2 - Counting

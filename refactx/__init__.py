@@ -13,9 +13,13 @@ def apply_prompt_template(tokenizer, prompt_template=PROMPT_TEMPLATE, question=N
 
 def get_constrained_logits_processor(
     tokenizer, index, num_beams=1, num_batches=1, return_list=True,
-    sentinel=False, **kwargs
+    sentinel=True, **kwargs
 ):
-    """Build constrained fact/count generation with explicit sentinel control."""
+    """Build constrained fact/count generation.
+
+    The exhausted-retrieval sentinel (``<no further records>``) is on by
+    default; pass ``sentinel=False`` to disable it.
+    """
     from refactx.generate import get_constrained_logits_processor as _base
     return _base(
         tokenizer,

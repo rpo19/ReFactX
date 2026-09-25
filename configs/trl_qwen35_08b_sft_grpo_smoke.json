@@ -3,6 +3,8 @@
   "model": "Qwen/Qwen3.5-0.8B",
   "adapter": null,
   "dataset": "rpozzi/mintaka",
+  "sentinel": true,
+  "count_pattern": "<count>",
   "prompt": "prompts/prompt_qwen36_angular2_nothink.yaml",
   "question_key": "question",
   "answer_key": "answerText",
@@ -25,7 +27,7 @@
   "batch_size": 1,
   "gradient_accumulation_steps": 1,
   "num_generations": 2,
-  "max_completion_length": 128,
+  "max_completion_length": 2048,
   "learning_rate": 0.000005,
   "report_to": "wandb",
   "seed": 42

@@ -11,6 +11,8 @@
     "prompt": "prompts/prompt_qwen36_angular2.json",
     "wandb": false,
     "unconstrained_generation": false,
+    "sentinel": true,
+    "count_pattern": "<count>",
     "debug": false,
     "debug_states": false,
     "continue": true,
@@ -20,5 +22,5 @@
     "num_beams": 1,
     "batch_size": 2,
     "n": 10,
-    "generation_config": {"max_new_tokens": 1024, "do_sample": true, "temperature": 0.7, "top_p": 0.80, "top_k": 20, "min_p": 0.0, "repetition_penalty": 1.0}
+    "generation_config": {"max_new_tokens": 2048, "do_sample": true, "temperature": 0.7, "top_p": 0.80, "top_k": 20, "min_p": 0.0, "repetition_penalty": 1.0}
 }

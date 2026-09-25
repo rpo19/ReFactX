@@ -71,7 +71,7 @@ class FactGeneration(PatternConstrainedGeneration):
     """Generates ``<Subject> <Relation> <Object> .`` triples guided by a KB trie."""
 
     def __init__(self, state, tokenizer, start_idx,
-                 index, sentinel=False, sentinel_text='no further records>',
+                 index, sentinel=True, sentinel_text='no further records>',
                  avoid_duplicates=True, eot='\n'):
         super().__init__(state, tokenizer, start_idx)
         self.index = index
@@ -811,10 +811,16 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 # ---------------------------------------------------------------------------
 
 def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1,
-                                     return_list=True, sentinel=False,
+                                     return_list=True, sentinel=True,
                                      fact_pattern='<fact>', count_pattern='<count>',
                                      eot=' </fact>\n', reinit_states=False,
                                      on_triple_generated=None, **kwargs):
+    """Build the constrained processor.
+
+    Sentinel (exhausted-retrieval ``<no further records>``) is enabled by
+    default, so exhausted subject-relation branches report completion instead of
+    being silently pruned. Pass ``sentinel=False`` to restore the old behaviour.
+    """
     CONSTRAINED_STATES.__init__('auto',
                 num_beams=num_beams,
                 num_batches=num_batches,

@@ -11,6 +11,8 @@
     "prompt": "prompts/prompt_qwen36_mini2.txt",
     "wandb": false,
     "unconstrained_generation": false,
+    "sentinel": true,
+    "count_pattern": "<count>",
     "debug": false,
     "debug_states": false,
     "continue": true,
@@ -20,5 +22,5 @@
     "num_beams": 1,
     "batch_size": 8,
     "n": 100,
-    "generation_config": {"max_length": 1024, "do_sample": false}
+    "generation_config": {"max_new_tokens": 2048, "do_sample": false}
 }

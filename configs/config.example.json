@@ -10,10 +10,13 @@
     "prompt": "prompts/prompt_qwen36_mini2.json",
     "wandb": false,
     "unconstrained_generation": false,
+    "sentinel": true,
+    "count_pattern": "<count>",
     "debug": false,
     "debug_states": false,
     "continue": false,
     "http_rootcert": null,
     "device": "auto",
-    "thinking": false
+    "thinking": false,
+    "generation_config": {"max_new_tokens": 2048}
 }
