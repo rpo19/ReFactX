@@ -293,7 +293,7 @@ class FactGeneration(PatternConstrainedGeneration):
 # ---------------------------------------------------------------------------
 # KnowledgeGraphGeneration — callback-backed graph traversal
 # ---------------------------------------------------------------------------
-
+# TODO forbid the model from visiting the same entity twice or to follow an already-visited property in the opposite direction
 class KnowledgeGraphGeneration(PatternConstrainedGeneration):
     """Generate a graph path as ``<entity> <relation> <object> ...``.
 
@@ -338,6 +338,14 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
         self._terminal = []
         self._encode_cache = {}
         self.eot_tokens = self._encode(eot) if eot is not None else []
+        # `long_chains` turns each object into the next subject.  Since a path
+        # can always be extended while the current entity has relations, that
+        # would otherwise force the model to keep going.  We therefore offer
+        # the terminal sequence as an extra leaf in the relation index so the
+        # model may stop at any hop boundary (see `_begin_relations`).
+        self._hops = 0
+        self._stop_text = ' .' + self._decode(self.eot_tokens)
+        self._stop_ids = None
 
     def _encode(self, value):
         if value is None:
@@ -398,11 +406,21 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
 
     def _begin_relations(self, entity, sequence):
         result = self.get_relations(entity)
-        self.phase_index = self._make_index(result, self.RELATION, subject=entity)
+        dynamic = self._make_index(result, self.RELATION, subject=entity)
+        has_relations = len(dynamic) > 0
+        # At a hop boundary (at least one triple already emitted) allow the
+        # model to stop instead of forcing it to continue, because the graph
+        # could always provide another relation.  The terminal sequence is
+        # added as an extra leaf next to the relations so `next_tokens`
+        # naturally offers both choices.
+        self._stop_ids = None
+        if self.long_chains and self._hops >= 1 and has_relations:
+            self._stop_ids = tuple(self._encode(self._stop_text))
+            dynamic.add(list(self._stop_ids))
+        self.phase_index = dynamic
         self.phase = self.RELATION
         self.phase_start = len(sequence)
-        self.phase_names = self.phase_names
-        return len(self.phase_index) > 0
+        return has_relations
 
     def _begin_objects(self, subject, relation, sequence):
         result = self.get_objects(subject, relation)
@@ -422,6 +440,18 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
         self.state.sentinel_remaining = []
         self.state.state = 0
         self.done = True
+
+    def _record_path(self):
+        """Record the completed path, dropping a trailing unfinished subject.
+
+        With ``long_chains`` the object becomes the next subject before the
+        following relation is known, so the last path entry may still lack a
+        ``relation`` when the model decides to stop.
+        """
+        path = self.path
+        if path and 'relation' not in path[-1]:
+            path = path[:-1]
+        self.generated_path_metadata.append(deepcopy(path))
 
     def _emit_terminal(self, mask, mask_idx, sequence):
         if self._terminal:
@@ -444,11 +474,17 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
             self.path.append({'entity': name, 'metadata': metadata})
             return self._begin_relations(name, sequence)
         if self.phase == self.RELATION:
+            if self._stop_ids is not None and tuple(component) == self._stop_ids:
+                # The model chose to stop at this hop boundary.
+                self._record_path()
+                self._complete(sequence)
+                return False
             self.path[-1]['relation'] = name
             self.path[-1]['relation_metadata'] = metadata
             return self._begin_objects(self.path[-1]['entity'], name, sequence)
         self.path[-1]['object'] = name
         self.path[-1]['object_metadata'] = metadata
+        self._hops += 1
         if self.long_chains and self._begin_relations(name, sequence):
             # The object is also the next subject; do not emit it twice.
             self.path.append({'entity': name, 'metadata': metadata})
@@ -747,7 +783,11 @@ class PatternConstrainedState():
                 self.generation_history.append(self.active_generation)
                 self.active_generation = None
                 self.end_of_triple_reset()
-                self.token_ids = []
+                # Keep the token that arrived right after the constrained span:
+                # it is the first token of the free continuation and may start
+                # the next pattern (e.g. a back-to-back `<kg>`), so dropping it
+                # would hide that pattern from the sliding window.
+                self.token_ids = self.token_ids[-1:]
             else:
                 return
 
