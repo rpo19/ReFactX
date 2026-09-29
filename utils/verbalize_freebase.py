@@ -34,9 +34,9 @@ def type_display_name(type_id: str, labels: dict[str, list]) -> str:
 def entity_type(entity_id: str, labels: dict[str, list]) -> str | None:
     """Return the most specific (first non-generic) type of an entity."""
     record = labels.get(entity_id)
-    if not record or len(record) < 3:
+    if not record or not record[1]:
         return None
-    for type_id in record[2]:
+    for type_id in record[1]:
         if not is_generic_type(type_id):
             return type_display_name(type_id, labels)
     return None
