@@ -57,7 +57,7 @@ wget https://download.microsoft.com/download/A/E/4/AE428B7A-9EF9-446C-85CF-D8ED0
 
 ### Filter labels
 ```
-grep -a -P 'type\.object\.name' fb_en.txt > fb_labels.txt
+grep -a -P 'type\.object\.name|type\.object\.type' fb_en.txt > fb_labels.txt
 ```
 
 ### Load labels into python dict

@@ -1,4 +1,4 @@
-"""Load Freebase English names and descriptions into a pickle file."""
+"""Load Freebase English names and types into a pickle file."""
 
 from __future__ import annotations
 
@@ -10,7 +10,12 @@ from tqdm import tqdm
 
 
 def load_labels(labels_path: Path) -> dict[str, list]:
-    """Return ``{mid: [label, alternative_labels, description]}`` records."""
+    """Return ``{mid: [label, alternative_labels, types]}`` records.
+
+    ``types`` holds the entity's ``type.object.type`` values in encounter order;
+    the type of a type is itself an entity in ``labels``, so a type value can be
+    resolved to its human-readable name through the same dictionary.
+    """
     labels: dict[str, list] = {}
     errors = 0
 
@@ -22,16 +27,14 @@ def load_labels(labels_path: Path) -> dict[str, list]:
                 continue
 
             subject, predicate, value = fields
-            record = labels.setdefault(subject, ["", set(), ""])
+            record = labels.setdefault(subject, ["", set(), []])
             if predicate == "type.object.name":
                 if record[0]:
                     record[1].add(value)
                 else:
                     record[0] = value
-            elif predicate == "common.topic.description":
-                # Freebase may have multiple descriptions; use the shortest.
-                if not record[2] or len(value) < len(record[2]):
-                    record[2] = value
+            elif predicate == "type.object.type" and value not in record[2]:
+                record[2].append(value)
 
     click.echo(f"Skipped {errors} malformed lines")
     return labels

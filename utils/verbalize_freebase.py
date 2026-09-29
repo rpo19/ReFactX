@@ -12,12 +12,47 @@ from tqdm import tqdm
 
 TEMPLATE = "<{subject}> <{predicate}> <{object_}> .\n"
 
+# Types that every entity carries and that therefore say nothing about it.
+GENERIC_TYPE_PREFIXES = ("common.", "type.", "base.", "freebase.")
+
+
+def is_generic_type(type_id: str) -> bool:
+    normalized = type_id.replace("/", ".").lstrip(".")
+    return normalized.startswith(GENERIC_TYPE_PREFIXES)
+
+
+def type_display_name(type_id: str, labels: dict[str, list]) -> str:
+    """Resolve a ``type.object.type`` value to a readable type name."""
+    record = labels.get(type_id)
+    if record and record[0]:
+        return record[0]
+    if type_id.startswith("m."):
+        return type_id.replace(".", "/", 1)
+    return type_id.replace("/", ".").lstrip(".")
+
+
+def entity_type(entity_id: str, labels: dict[str, list]) -> str | None:
+    """Return the most specific (first non-generic) type of an entity."""
+    record = labels.get(entity_id)
+    if not record or len(record) < 3:
+        return None
+    for type_id in record[2]:
+        if not is_generic_type(type_id):
+            return type_display_name(type_id, labels)
+    return None
+
 
 def verbalize_entity(entity_id: str, labels: dict[str, list]) -> str:
-    """Create a unique display name while retaining the Freebase MID."""
-    label = labels.get(entity_id, [None])[0]
+    """Create a unique display name from label, type, and Freebase MID."""
+    record = labels.get(entity_id)
+    label = record[0] if record else None
     display_id = entity_id.replace(".", "/", 1)
-    return f"{label} ({display_id})" if label else display_id
+    type_name = entity_type(entity_id, labels)
+    if label and type_name:
+        return f"{label} ({type_name} {display_id})"
+    if label:
+        return f"{label} ({display_id})"
+    return display_id
 
 
 def verbalize(dump: Path, labels: dict[str, list], output: Path, total: int | None = None) -> int:
