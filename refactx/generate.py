@@ -293,7 +293,6 @@ class FactGeneration(PatternConstrainedGeneration):
 # ---------------------------------------------------------------------------
 # KnowledgeGraphGeneration — callback-backed graph traversal
 # ---------------------------------------------------------------------------
-# TODO forbid the model from visiting the same entity twice or to follow an already-visited property in the opposite direction
 class KnowledgeGraphGeneration(PatternConstrainedGeneration):
     """Generate a graph path as ``<entity> <relation> <object> ...``.
 
@@ -304,10 +303,16 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
     names to opaque metadata, or iterables of names.
 
     By default generation stops after the first object.  With ``long_chains``
-    enabled, that object becomes the subject of the next hop.  Metadata is
-    retained on ``generated_path_metadata`` and is deliberately not given a
-    prescribed schema; ``metadata_filter`` is the optional place to enforce a
-    schema-specific policy.
+    enabled, that object becomes the subject of the next hop.
+
+    With ``forbid_revisits`` (default) the walk is kept acyclic: an object that
+    already appears as an entity on the path is never offered, and neither is
+    the reverse of an already-traversed edge (following the same property back
+    from the object it just reached).  Set it to ``False`` to allow revisits.
+
+    Metadata is retained on ``generated_path_metadata`` and is deliberately not
+    given a prescribed schema; ``metadata_filter`` is the optional place to
+    enforce a schema-specific policy.
     """
 
     ENTITY = 'entity'
@@ -317,7 +322,8 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
     def __init__(self, state, tokenizer, start_idx, index,
                  get_relations, get_objects, long_chains=False,
                  relation_metadata=None, object_metadata=None,
-                 metadata_filter=None, eot='\\n', avoid_duplicates=True):
+                 metadata_filter=None, eot='\\n', avoid_duplicates=True,
+                 forbid_revisits=True):
         super().__init__(state, tokenizer, start_idx)
         if not callable(get_relations) or not callable(get_objects):
             raise TypeError('get_relations and get_objects must be callable')
@@ -329,6 +335,7 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
         self.object_metadata = object_metadata
         self.metadata_filter = metadata_filter
         self.avoid_duplicates = avoid_duplicates
+        self.forbid_revisits = forbid_revisits
         self.phase = self.ENTITY
         self.phase_index = index
         self.phase_start = 0
@@ -386,6 +393,36 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
             subject=subject, relation=relation,
         ))
 
+    def _path_entities(self):
+        return {entry['entity'] for entry in self.path}
+
+    def _traversed_edges(self):
+        return {(e['entity'], e['relation'], e['object'])
+                for e in self.path if 'relation' in e and 'object' in e}
+
+    def _revisit_blocked(self, name, subject, relation, visited, edges):
+        # 1) never visit an entity that is already on the path
+        if name in visited:
+            return True
+        # 2) never traverse the reverse of an edge already used, i.e. walking
+        #    the same property back from the object it just reached
+        if (name, relation, subject) in edges:
+            return True
+        return False
+
+    def _filter_objects(self, result, subject, relation):
+        """Drop objects that would revisit an entity or reverse a used edge."""
+        visited = self._path_entities()
+        edges = self._traversed_edges()
+
+        def _keep(raw_name):
+            return not self._revisit_blocked(
+                self._name(raw_name), subject, relation, visited, edges)
+
+        if isinstance(result, dict):
+            return {name: metadata for name, metadata in result.items() if _keep(name)}
+        return [name for name in result if _keep(name)]
+
     def _make_index(self, result, kind, subject=None, relation=None):
         dynamic = DictIndex()
         self.phase_names = {}
@@ -424,6 +461,8 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
 
     def _begin_objects(self, subject, relation, sequence):
         result = self.get_objects(subject, relation)
+        if self.forbid_revisits:
+            result = self._filter_objects(result, subject, relation)
         self.phase_index = self._make_index(result, self.OBJECT, subject, relation)
         self.phase = self.OBJECT
         self.phase_start = len(sequence)

@@ -22,6 +22,7 @@ from refactx.neo4j_kg import Neo4jKnowledgeGraph
 MODEL = os.environ.get("MODEL", "Qwen/Qwen3.5-0.8B")
 LONG_CHAINS = os.environ.get("LONG_CHAINS", "0").lower() in ("1", "true", "yes")
 AVOID_DUPLICATES = os.environ.get("AVOID_DUPLICATES", "1").lower() in ("1", "true", "yes")
+FORBID_REVISITS = os.environ.get("FORBID_REVISITS", "1").lower() in ("1", "true", "yes")
 NUM_BEAMS = 1
 NUM_BATCHES = 1
 
@@ -63,8 +64,10 @@ logits_processor.add_pattern(
     index=index, get_relations=property_strings, get_objects=get,
     long_chains=LONG_CHAINS, eot=" </kg>\n",
     avoid_duplicates=AVOID_DUPLICATES,
+    forbid_revisits=FORBID_REVISITS,
 )
-print("long_chains =", LONG_CHAINS, "| avoid_duplicates =", AVOID_DUPLICATES)
+print("long_chains =", LONG_CHAINS, "| avoid_duplicates =", AVOID_DUPLICATES,
+      "| forbid_revisits =", FORBID_REVISITS)
 
 def ask(question, max_new_tokens=200):
     logits_processor.reset_states()

@@ -137,5 +137,84 @@ class TestKnowledgeGraphLongChains(unittest.TestCase):
                          [('Paris', 'capital of', 'France')])
 
 
+# A small directed graph with a 2-cycle (b -r-> a) and a chain b -r-> c -r-> d.
+REVISIT_GRAPH = {
+    'a': {'r': ['b']},
+    'b': {'r': ['a', 'c']},
+    'c': {'r': ['d']},
+    'd': {},
+}
+
+
+class TestKnowledgeGraphRevisits(unittest.TestCase):
+
+    def setUp(self):
+        self.tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen2.5-0.5B-Instruct')
+        self.vocab = len(self.tokenizer)
+
+    def _encode(self, text):
+        return self.tokenizer.encode(text, add_special_tokens=False)
+
+    def _make_gen(self, forbid_revisits):
+        state = PatternConstrainedState(
+            tokenizer=self.tokenizer, cache_index=DictIndex(), subtree_cache=DictIndex())
+        index = DictIndex()
+        index.add(self._encode(' <a>'))
+        return KnowledgeGraphGeneration(
+            state=state, tokenizer=self.tokenizer, start_idx=0, index=index,
+            get_relations=lambda e: list(REVISIT_GRAPH.get(e, {}).keys()),
+            get_objects=lambda s, r: REVISIT_GRAPH.get(s, {}).get(r, []),
+            long_chains=True, eot=' </kg>\n', forbid_revisits=forbid_revisits,
+        )
+
+    def _constrain(self, gen, seq):
+        mask = torch.full((1, self.vocab), -math.inf)
+        gen.constrain(seq, mask, 0)
+        return _allowed(mask)
+
+    def _feed(self, gen, seq, ids):
+        for tok in ids:
+            allowed = self._constrain(gen, seq)
+            self.assertIn(tok, allowed,
+                          f'token {tok} not offered while feeding {ids} (seq={seq})')
+            seq.append(tok)
+
+    def _object_names(self, gen):
+        return {value[0] for value in gen.phase_names.values()}
+
+    def _reach_b_objects(self, gen):
+        """Path a -> b, then relation r from b; returns (seq, object names)."""
+        seq = []
+        self._feed(gen, seq, self._encode(' <a>'))
+        self._feed(gen, seq, self._encode(' <r>'))
+        self._feed(gen, seq, self._encode(' <b>'))
+        self._constrain(gen, seq)                       # hop boundary at b
+        self._feed(gen, seq, self._encode(' <r>'))      # b's only relation
+        self._constrain(gen, seq)                       # begin objects for (b, r)
+        return seq, self._object_names(gen)
+
+    def test_revisited_entity_is_not_offered(self):
+        gen = self._make_gen(forbid_revisits=True)
+        _, objects = self._reach_b_objects(gen)
+        # 'a' is already on the path (and closes the 2-cycle) -> excluded.
+        self.assertEqual(objects, {'c'})
+
+    def test_revisits_allowed_when_disabled(self):
+        gen = self._make_gen(forbid_revisits=False)
+        _, objects = self._reach_b_objects(gen)
+        self.assertEqual(objects, {'a', 'c'})
+
+    def test_chain_still_extends_to_new_entities(self):
+        gen = self._make_gen(forbid_revisits=True)
+        seq, objects = self._reach_b_objects(gen)
+        self.assertIn('c', objects)
+        # Continue c -> d (both new, no reversal).
+        self._feed(gen, seq, self._encode(' <c>'))
+        self._constrain(gen, seq)                       # hop boundary at c
+        self._feed(gen, seq, self._encode(' <r>'))
+        self._constrain(gen, seq)                       # objects for (c, r)
+        self.assertEqual(self._object_names(gen), {'d'})
+
+
 if __name__ == '__main__':
     unittest.main()
