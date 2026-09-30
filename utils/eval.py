@@ -17,7 +17,6 @@ import datetime
 import click
 import time
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor, AutoModelForImageTextToText
-from datasets import load_dataset
 
 
 def eq_metadata(m1, m2):
@@ -184,6 +183,10 @@ def main(config_path, flush_output):
     cfg['generation_config'] = generation_config
 
     metadata = {**cfg, 'date': get_utc_date_and_time(), 'prompt_length': prompt_length}
+
+    # Imported lazily so this module can be reused without the optional
+    # `datasets` dependency (e.g. by utils/eval_kg.py on in-memory indexes).
+    from datasets import load_dataset
 
     dataset = load_dataset(
         cfg["dataset"],

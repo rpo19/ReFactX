@@ -1,0 +1,33 @@
+{
+    "experiment_name": "kg_rules_qwen35_4b",
+    "dataset": "rules",
+    "rules_dir": "notebooks/ReFactX-with-Rules",
+    "model_name": "Qwen/Qwen3.5-4B",
+    "model_dtype": "bfloat16",
+    "device": "auto",
+    "prompt": "prompts/prompt_qwen36_angular2_kg_nothink.yaml",
+
+    "question_key": "question",
+    "answer_key": "answer",
+    "answer_type_key": "answer_type",
+    "kind_key": "kind",
+
+    "output": null,
+    "log_dir": "logs",
+    "n": 100,
+
+    "max_new_tokens": 512,
+    "thinking": false,
+    "long_chains": false,
+    "avoid_duplicates": true,
+    "do_sample": false,
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "batch_size": 1,
+    "seed": null,
+
+    "continue_run": true,
+    "no_flush": false,
+    "debug": false
+}
