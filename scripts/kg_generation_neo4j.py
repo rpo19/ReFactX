@@ -35,7 +35,10 @@ tokenizer = processor
 tok = tokenizer.tokenizer if isinstance(tokenizer, ProcessorMixin) else tokenizer
 print("loaded", MODEL, "device:", next(model.parameters()).device)
 
-prompt_messages = refactx.load_prompt(str(REPO / "prompts" / "prompt_qwen36_angular2_kg_nothink.yaml"))
+prompt_path = os.environ.get(
+    "PROMPT", str(REPO / "prompts" / "prompt_qwen36_angular2_kg_longchain.yaml"))
+prompt_messages = refactx.load_prompt(prompt_path)
+print("prompt:", prompt_path)
 
 kg = Neo4jKnowledgeGraph()
 SEEDS = ["Barack Obama", "Paris", "Albert Einstein"]
