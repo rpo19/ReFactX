@@ -67,8 +67,12 @@ python utils/load_freebase_labels.py fb_labels.txt ents_freebase.pickle
 
 ## Verbalize the triples using the labels
 ```
-python utils/verbalize_freebase.py --freebase-labels ents_freebase.pickle fb_en.txt verbalized_triples.bz2 [--total-number-of-triples number]
+python utils/verbalize_freebase.py --freebase-labels ents_freebase.pickle fb_en.txt verbalized_triples.bz2 [--total-number-of-triples number] [--include-types]
 ```
+
+Entities are verbalized as `label (id)` by default, falling back to just the id
+when no label is available. Pass `--include-types` to also add the entity's most
+specific type, producing `label (type id)`.
 
 ## Tokenize and Populate
 
