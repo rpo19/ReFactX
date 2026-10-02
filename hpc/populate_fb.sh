@@ -62,7 +62,7 @@ python -m utils.populate_postgres \
   --prefix " " \
   --end-of-triple ' .' \
   --tokenizer-batch-size 10000 \
-  --table-name qwen36fb \
+  --table-name qwen36fbids \
   --rootkey -100 \
   --batch-size 5000000 \
   --switch-parameter 7 \
