@@ -10,7 +10,7 @@
     "dataset_split": "train",
     "answer_key": "answerText",
     "prompt": "prompts/prompt_qwen36_angular2_nothink.yaml",
-    "wandb": false,
+    "wandb": true,
     "unconstrained_generation": false,
     "sentinel": true,
     "count_pattern": "<count>",
@@ -19,9 +19,18 @@
     "continue": true,
     "http_rootcert": null,
     "device": "auto",
+    "device_map": "balanced",
+    "max_memory": {
+        "0": "24GiB",
+        "1": "24GiB",
+        "2": "24GiB",
+        "3": "24GiB",
+        "cpu": "80GiB"
+    },
     "thinking": false,
     "num_beams": 1,
-    "batch_size": 8,
+    "batch_size": 16,
+    "fact_eot": " </fact>\n",
     "generation_config": {
         "max_new_tokens": 2048,
         "do_sample": true,

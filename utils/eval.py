@@ -125,6 +125,16 @@ def main(config_path, flush_output, no_cuda):
         tokenizer = processor.tokenizer
 
     device = cfg.get("device", "auto")
+    # "auto"/"balanced"/"balanced_low_0"/"sequential" are resolved by accelerate;
+    # an explicit {"layer": "cuda:1", ...} map is passed through untouched. Note that
+    # inputs are moved to model.device (the device holding the first parameter), so
+    # "balanced_low_0" must not be used unless the embedding layer is kept on GPU 0.
+    device_map = cfg.get("device_map", "auto" if device == "auto" else None)
+    max_memory = cfg.get("max_memory", None)
+    if max_memory is not None:
+        # JSON object keys are always strings, but accelerate only accepts integer
+        # device ids (or "cpu"/"disk") as max_memory keys.
+        max_memory = {int(k) if str(k).isdigit() else k: v for k, v in max_memory.items()}
 
     dtype_map = {
         "bfloat16": torch.bfloat16,
@@ -145,16 +155,36 @@ def main(config_path, flush_output, no_cuda):
         torch_dtype = torch.float16
 
     try:
-        if device == "auto":
-            model = AutoModelForCausalLM.from_pretrained(cfg["model_name"], device_map="auto", dtype=torch_dtype)
+        if device_map is not None:
+            model = AutoModelForCausalLM.from_pretrained(
+                cfg["model_name"],
+                device_map=device_map,
+                max_memory=max_memory,
+                dtype=torch_dtype,
+            )
         else:
             model = AutoModelForCausalLM.from_pretrained(cfg["model_name"], dtype=torch_dtype).to(device)
     except Exception as e:
         print('exc loading model, trying VLM path', type(e), e)
-        if device == "auto":
-            model = AutoModelForImageTextToText.from_pretrained(cfg["model_name"], device_map="auto", dtype=torch_dtype)
+        if device_map is not None:
+            model = AutoModelForImageTextToText.from_pretrained(
+                cfg["model_name"],
+                device_map=device_map,
+                max_memory=max_memory,
+                dtype=torch_dtype,
+            )
         else:
             model = AutoModelForImageTextToText.from_pretrained(cfg["model_name"], dtype=torch_dtype).to(device)
+
+    hf_device_map = getattr(model, "hf_device_map", None)
+    if hf_device_map is not None:
+        per_device = {}
+        for module_name, module_device in hf_device_map.items():
+            per_device.setdefault(str(module_device), []).append(module_name)
+        print(f"Resolved device_map ({device_map}):")
+        for module_device in sorted(per_device):
+            names = per_device[module_device]
+            print(f"  {module_device}: {len(names)} modules (e.g. {names[0]})")
 
     adapter_path = cfg.get("adapter_path")
     if adapter_path:

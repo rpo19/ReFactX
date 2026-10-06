@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --output=logs/test_mintaka_qwen38_27b_%j.out
-#SBATCH --job-name=refactx_mintaka_qwen38
+#SBATCH --output=logs/eot_test_mintaka_qwen38_27b_%j.out
+#SBATCH --job-name=refactx_eot_test
 #SBATCH -N 1
-#SBATCH --error=logs/test_mintaka_qwen38_27b_%j.err
-#SBATCH --time=72:00:00
+#SBATCH --error=logs/eot_test_mintaka_qwen38_27b_%j.err
+#SBATCH --time=06:00:00
 #SBATCH --mem=100G
 #SBATCH --cpus-per-task=1
 #SBATCH --gres=gpu:4
@@ -30,6 +30,6 @@ if [ -f "$SHARED_POSTGRES" ]; then
     export BASE_INDEX_PATH="$INDEX_PATH"
 fi
 
-python -m utils.eval --config configs/config_mintaka_qwen38_27b_train.json
+python -m utils.eval --config configs/config_mintaka_qwen38_27b_train_eot_test.json
 
-teleclinotify "test_mintaka_qwen38_27b done | SLURM_JOB_ID=$SLURM_JOB_ID"
+teleclinotify "eot_test_mintaka done | SLURM_JOB_ID=$SLURM_JOB_ID"
