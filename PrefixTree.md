@@ -66,7 +66,7 @@ grep -a -P 'type\.object\.name' fb_en.txt > fb_labels.txt
 python utils/load_freebase_labels.py fb_labels.txt ents_freebase.pickle
 ```
 
-### Optional: Wikipedia titles and types
+### Optional: Wikipedia titles
 To prefer the more likely-unique Wikipedia `en_title` over `type.object.name`,
 extract it from the RDF dump and load it:
 ```
@@ -76,8 +76,7 @@ python utils/load_freebase_labels.py fb_labels.txt ents_freebase.pickle --en-tit
 
 If the same title is shared by several entities the script fails, unless
 `--no-fail-on-duplicates-id` is passed, in which case such titles are flagged so
-the id can be appended during verbalization. To also include the type, add
-`type.object.type` to the filter and pass `--include-types` when verbalizing.
+the id can be appended during verbalization.
 
 ## Verbalize the triples using the labels
 ```
@@ -87,8 +86,7 @@ python utils/verbalize_freebase.py --freebase-labels ents_freebase.pickle fb_en.
 Entities are verbalized as `label (id)`, or just the id when no label is
 available. With `--en-titles` the Wikipedia `en_title` is used instead (e.g.
 `Albert_Einstein`), suffixed with the id when the title is shared (e.g.
-`Clone (m/0123)`). Pass `--include-types` to also add the entity's most specific
-type, producing `name (type id)`.
+`Clone (m/0123)`).
 
 ## Tokenize and Populate
 

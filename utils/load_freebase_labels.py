@@ -1,4 +1,4 @@
-"""Load Freebase English names, Wikipedia titles, and types into a pickle file."""
+"""Load Freebase English names and Wikipedia titles into a pickle file."""
 
 from __future__ import annotations
 
@@ -77,15 +77,11 @@ def load_labels(
     en_titles_path: Path | None = None,
     fail_on_duplicates: bool = True,
 ) -> dict[str, list]:
-    """Return ``{mid: [label, types, en_title, en_title_unique]}`` records.
+    """Return ``{mid: [label, en_title, en_title_unique]}`` records.
 
     ``label`` is the entity's ``type.object.name`` (empty string when unknown),
-    ``types`` is a list of its ``type.object.type`` values in encounter order (or
-    ``None`` while it has none), ``en_title`` is its ``wikipedia.en_title`` (empty
-    string when unknown) and ``en_title_unique`` is ``False`` when another entity
-    shares the same title.  The type of a type is itself an entity in ``labels``,
-    so a type value can be resolved to its human-readable name through the same
-    dictionary.
+    ``en_title`` is its ``wikipedia.en_title`` (empty string when unknown) and
+    ``en_title_unique`` is ``False`` when another entity shares the same title.
 
     Raises ``ValueError`` when two entities share a Wikipedia title, unless
     ``fail_on_duplicates`` is ``False`` (in which case such titles are flagged as
@@ -102,19 +98,13 @@ def load_labels(
                 continue
 
             subject, predicate, value = fields
+            if predicate != "type.object.name":
+                continue
             record = labels.get(subject)
-            if predicate == "type.object.name":
-                if record is None:
-                    labels[subject] = [value, None, "", True]
-                elif not record[0]:
-                    record[0] = value
-            elif predicate == "type.object.type":
-                if record is None:
-                    labels[subject] = ["", [value], "", True]
-                elif record[1] is None:
-                    record[1] = [value]
-                elif value not in record[1]:
-                    record[1].append(value)
+            if record is None:
+                labels[subject] = [value, "", True]
+            elif not record[0]:
+                record[0] = value
 
     click.echo(f"Skipped {errors} malformed lines")
     if en_titles_path is not None:
@@ -140,17 +130,17 @@ def attach_en_titles(labels: dict[str, list], en_titles: dict[str, str]) -> dict
     for mid, title in en_titles.items():
         record = labels.get(mid)
         if record is None:
-            record = ["", None, "", True]
+            record = ["", "", True]
             labels[mid] = record
-        if not record[2]:
-            record[2] = title
+        if not record[1]:
+            record[1] = title
             title_counts[title] = title_counts.get(title, 0) + 1
 
     duplicates = {title: count for title, count in title_counts.items() if count > 1}
     for record in labels.values():
-        title = record[2]
+        title = record[1]
         if title and title in duplicates:
-            record[3] = False
+            record[2] = False
     return duplicates
 
 

@@ -12,60 +12,19 @@ from tqdm import tqdm
 
 TEMPLATE = "<{subject}> <{predicate}> <{object_}> .\n"
 
-# Types that every entity carries and that therefore say nothing about it.
-GENERIC_TYPE_PREFIXES = ("common.", "type.", "base.", "freebase.")
 
-
-def is_generic_type(type_id: str) -> bool:
-    normalized = type_id.replace("/", ".").lstrip(".")
-    return normalized.startswith(GENERIC_TYPE_PREFIXES)
-
-
-def type_display_name(type_id: str, labels: dict[str, list]) -> str:
-    """Resolve a ``type.object.type`` value to a readable type name."""
-    record = labels.get(type_id)
-    if record and record[0]:
-        return record[0]
-    if type_id.startswith("m."):
-        return type_id.replace(".", "/", 1)
-    return type_id.replace("/", ".").lstrip(".")
-
-
-def entity_type(entity_id: str, labels: dict[str, list]) -> str | None:
-    """Return the most specific (first non-generic) type of an entity."""
-    record = labels.get(entity_id)
-    if not record or not record[1]:
-        return None
-    for type_id in record[1]:
-        if not is_generic_type(type_id):
-            return type_display_name(type_id, labels)
-    return None
-
-
-def verbalize_entity(
-    entity_id: str, labels: dict[str, list], include_types: bool = False
-) -> str:
+def verbalize_entity(entity_id: str, labels: dict[str, list]) -> str:
     """Create a unique display name from the Wikipedia title, label, and MID.
 
-    By default the Wikipedia ``en_title`` is used when available and unique;
-    ambiguous titles fall back to ``en_title (id)`` and entities without a title
-    fall back to ``label (id)``, or just the ``id`` when there is no label either.
-    When ``include_types`` is set, the most specific type is inserted before the
-    id as ``name (type id)``.
+    The Wikipedia ``en_title`` is used when available and unique; ambiguous
+    titles fall back to ``en_title (id)`` and entities without a title fall back
+    to ``label (id)``, or just the ``id`` when there is no label either.
     """
     record = labels.get(entity_id)
     label = record[0] if record else ""
-    en_title = record[2] if record and len(record) > 2 else ""
-    en_title_unique = record[3] if record and len(record) > 3 else True
+    en_title = record[1] if record and len(record) > 1 else ""
+    en_title_unique = record[2] if record and len(record) > 2 else True
     display_id = entity_id.replace(".", "/", 1)
-    base = en_title or label
-
-    if include_types:
-        if not base:
-            return display_id
-        type_name = entity_type(entity_id, labels)
-        parts = [type_name, display_id] if type_name else [display_id]
-        return f"{base} ({' '.join(parts)})"
 
     if en_title:
         return en_title if en_title_unique else f"{en_title} ({display_id})"
@@ -79,7 +38,6 @@ def verbalize(
     labels: dict[str, list],
     output: Path,
     total: int | None = None,
-    include_types: bool = False,
 ) -> int:
     written = 0
     with dump.open("r", encoding="utf-8") as source, bz2.open(
@@ -94,9 +52,9 @@ def verbalize(
             if not subject.startswith("m."):
                 continue
 
-            subject = verbalize_entity(subject, labels, include_types)
+            subject = verbalize_entity(subject, labels)
             if object_.startswith("m."):
-                object_ = verbalize_entity(object_, labels, include_types)
+                object_ = verbalize_entity(object_, labels)
             destination.write(
                 TEMPLATE.format(subject=subject, predicate=predicate, object_=object_)
             )
@@ -114,22 +72,16 @@ def verbalize(
 @click.argument("dump", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.argument("output", type=click.Path(dir_okay=False, path_type=Path))
 @click.option("--total-number-of-triples", type=int, default=None)
-@click.option(
-    "--include-types/--no-include-types",
-    default=False,
-    help="Include the entity's most specific type in its display name.",
-)
 def main(
     freebase_labels: Path,
     dump: Path,
     output: Path,
     total_number_of_triples: int | None,
-    include_types: bool,
 ) -> None:
     """Write verbalized Freebase triples to a compressed output file."""
     with freebase_labels.open("rb") as source:
         labels = pickle.load(source)
-    count = verbalize(dump, labels, output, total_number_of_triples, include_types)
+    count = verbalize(dump, labels, output, total_number_of_triples)
     click.echo(f"Wrote {count} triples to {output}")
 
 
