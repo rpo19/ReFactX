@@ -30,12 +30,6 @@
 
     ## Answering Rules
     - If sufficient evidence is found, answer using only retrieved facts and counts.
-    - If no relevant facts are found, respond exactly:
-
-    <answer>
-    ["I don't know."]
-    </answer>
-
     - Do not speculate or use information that was not retrieved from the knowledge base.
     - Legitimate reasoning over retrieved facts and counts is allowed.
 
@@ -60,13 +54,13 @@
     ## Example 1 - Multi-hop reasoning
     User: When was the director of Slumdog Millionaire born?
 
-    I need to find who directed Slumdog Millionaire and then find that person's date of birth.
+    I need to answer when the director of Slumdog Millionaire was born. This is a multi-hop question: first I must identify who directed the film, then I must look up that person's date of birth, and finally I must convert the ISO date to the required D-Mon-YY format. I do not yet know the director from the retrieved facts, so I will start by retrieving the director of the film.
     <fact> <Slumdog Millionaire> <director> <Danny Boyle> . </fact>
     (or another example with the description)
     <fact> <Slumdog Millionaire> <description> <2008 film directed by Danny Boyle> . </fact>
-    The retrieved fact identifies Danny Boyle as the director. I now need his date of birth.
+    The retrieved fact identifies Danny Boyle as the director, so the first hop is solved. I still need the second hop: the date of birth of the director. Because the question asks for a full date and the knowledge base stores dates as ISO timestamps, I will retrieve the `date of birth` relation for Danny Boyle and convert the result afterwards.
     <fact> <Danny Boyle> <date of birth> <1956-10-20T00:00:00Z> . </fact>
-    The fact gives the ISO date 1956-10-20, which in D-Mon-YY is 20-Oct-56. I have sufficient evidence to answer.
+    The fact gives the ISO date 1956-10-20 for Danny Boyle. The question asks for a full date, so I convert it to the required D-Mon-YY format, which yields 20-Oct-56. I now have sufficient evidence to answer and need no further facts.
 
     <answer>
     ["20-Oct-56"]
@@ -75,11 +69,11 @@
     ## Example 2 - Counting
     User: How many countries share a border with France?
 
-    I need the number of objects related to France by the `shares border with` relation.
+    I need to count how many countries share a border with France. This is a counting question, so instead of retrieving each neighbour separately I should use the `<count>` tool directly on the `shares border with` relation for France, which returns the exact number of objects. The question asks only for the total, not the country names, so the count alone is sufficient evidence.
     <count> <France> <shares border with>
     = 8
     </count>
-    The count is 8, so I can answer.
+    The `<count>` tool returned 8, which is the exact number of objects for the `shares border with` relation on France. The question asks only for this number and not for the country names, so this single count is sufficient evidence and I do not need to retrieve any individual facts.
 
     <answer>
     ["8"]
@@ -88,21 +82,21 @@
     ## Example 3 - Exhausted records
     User: Which countries share a border with France?
 
-    I need to retrieve all countries sharing a border with France.
+    I need to list every country that shares a border with France. This is an exhaustive retrieval question, so I must collect all objects for the `shares border with` relation on France. I will retrieve them one at a time and keep going until the system returns `<no further records>`, which signals that the relation has been fully retrieved and no countries are missing.
     <fact> <France> <shares border with> <Belgium> . </fact>
-    I found that France shares a border with Belgium.
+    Belgium shares a border with France. This is only the first result, and the question asks for all of them, so I must keep retrieving more objects for this relation.
     <fact> <France> <shares border with> <Germany> . </fact>
-    I found that France shares a border with Germany.
+    Germany is also a neighbour, giving two so far. The list is still incomplete, so I continue retrieving.
     <fact> <France> <shares border with> <Spain> . </fact>
-    I found that France shares a border with Spain.
+    Spain is a third neighbour. I have not seen the sentinel yet, so more objects may still exist.
     <fact> <France> <shares border with> <Italy> . </fact>
-    I found that France shares a border with Italy.
+    Italy is the fourth neighbour. Retrieval is not complete, so I keep going.
     <fact> <France> <shares border with> <Switzerland> . </fact>
-    I found that France shares a border with Switzerland.
+    Switzerland is the fifth neighbour. I must continue until the system tells me there is nothing left.
     <fact> <France> <shares border with> <Luxembourg> . </fact>
-    I found that France shares a border with Luxembourg.
+    Luxembourg is the sixth neighbour. I still have not seen `<no further records>`, so I retrieve once more to make sure no country is missing.
     <fact> <France> <shares border with> <no further records> . </fact>
-    All objects for this subject-relation pair have been retrieved, so I retrieved all the countries sharing a border with France. I have sufficient information to answer.
+    The system returned `<no further records>`, which confirms that every object for the `shares border with` relation on France has now been retrieved. The complete set is Belgium, Germany, Spain, Italy, Switzerland, and Luxembourg, so I have enough evidence to answer without any further retrieval.
 
     <answer>
     ["Belgium", "Germany", "Spain", "Italy", "Switzerland", "Luxembourg"]

@@ -92,9 +92,7 @@ def compute_score(solution_str, ground_truth, question, triples):
     # check if generates constrained triples: MUST HAVE
     if len(triples) > 0:
         # exact match case insensitive
-        if answer == "i don't know":
-            score += .1 # better than no answer
-        elif answer == ground_truth:
+        if answer == ground_truth:
             score += .8 # need also good reasoning for 1
         else:
             # jaccard index for complex comparison
