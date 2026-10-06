@@ -56,8 +56,9 @@ wget https://download.microsoft.com/download/A/E/4/AE428B7A-9EF9-446C-85CF-D8ED0
 ```
 
 ### Filter labels
+By default entities are verbalized with their `type.object.name`:
 ```
-grep -a -P 'type\.object\.name|type\.object\.type' fb_en.txt > fb_labels.txt
+grep -a -P 'type\.object\.name' fb_en.txt > fb_labels.txt
 ```
 
 ### Load labels into python dict
@@ -65,14 +66,29 @@ grep -a -P 'type\.object\.name|type\.object\.type' fb_en.txt > fb_labels.txt
 python utils/load_freebase_labels.py fb_labels.txt ents_freebase.pickle
 ```
 
-## Verbalize the triples using the labels
+### Optional: Wikipedia titles and types
+To prefer the more likely-unique Wikipedia `en_title` over `type.object.name`,
+extract it from the RDF dump and load it:
 ```
-python utils/verbalize_freebase.py --freebase-labels ents_freebase.pickle fb_en.txt verbalized_triples.bz2 [--total-number-of-triples number] [--include-types]
+zgrep -a 'key/wikipedia.en_title' freebase-rdf-2015-08-09-00-01.gz > fb_en_titles.txt
+python utils/load_freebase_labels.py fb_labels.txt ents_freebase.pickle --en-titles fb_en_titles.txt
 ```
 
-Entities are verbalized as `label (id)` by default, falling back to just the id
-when no label is available. Pass `--include-types` to also add the entity's most
-specific type, producing `label (type id)`.
+If the same title is shared by several entities the script fails, unless
+`--no-fail-on-duplicates-id` is passed, in which case such titles are flagged so
+the id can be appended during verbalization. To also include the type, add
+`type.object.type` to the filter and pass `--include-types` when verbalizing.
+
+## Verbalize the triples using the labels
+```
+python utils/verbalize_freebase.py --freebase-labels ents_freebase.pickle fb_en.txt verbalized_triples.bz2 [--total-number-of-triples number]
+```
+
+Entities are verbalized as `label (id)`, or just the id when no label is
+available. With `--en-titles` the Wikipedia `en_title` is used instead (e.g.
+`Albert_Einstein`), suffixed with the id when the title is shared (e.g.
+`Clone (m/0123)`). Pass `--include-types` to also add the entity's most specific
+type, producing `name (type id)`.
 
 ## Tokenize and Populate
 

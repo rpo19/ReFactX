@@ -45,22 +45,30 @@ def entity_type(entity_id: str, labels: dict[str, list]) -> str | None:
 def verbalize_entity(
     entity_id: str, labels: dict[str, list], include_types: bool = False
 ) -> str:
-    """Create a unique display name from label and Freebase MID.
+    """Create a unique display name from the Wikipedia title, label, and MID.
 
-    By default the name is ``label (id)``, or just the ``id`` when no label is
-    available. When ``include_types`` is set, the most specific type is inserted
-    before the id as ``label (type id)``.
+    By default the Wikipedia ``en_title`` is used when available and unique;
+    ambiguous titles fall back to ``en_title (id)`` and entities without a title
+    fall back to ``label (id)``, or just the ``id`` when there is no label either.
+    When ``include_types`` is set, the most specific type is inserted before the
+    id as ``name (type id)``.
     """
     record = labels.get(entity_id)
-    label = record[0] if record else None
+    label = record[0] if record else ""
+    en_title = record[2] if record and len(record) > 2 else ""
+    en_title_unique = record[3] if record and len(record) > 3 else True
     display_id = entity_id.replace(".", "/", 1)
-    if not include_types:
-        if label:
-            return f"{label} ({display_id})"
-        return display_id
-    type_name = entity_type(entity_id, labels)
-    if label and type_name:
-        return f"{label} ({type_name} {display_id})"
+    base = en_title or label
+
+    if include_types:
+        if not base:
+            return display_id
+        type_name = entity_type(entity_id, labels)
+        parts = [type_name, display_id] if type_name else [display_id]
+        return f"{base} ({' '.join(parts)})"
+
+    if en_title:
+        return en_title if en_title_unique else f"{en_title} ({display_id})"
     if label:
         return f"{label} ({display_id})"
     return display_id
