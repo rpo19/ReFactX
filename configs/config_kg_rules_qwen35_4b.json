@@ -1,7 +1,7 @@
 {
     "experiment_name": "kg_rules_qwen35_4b",
     "dataset": "rules",
-    "rules_dir": "notebooks/ReFactX-with-Rules",
+    "rules_dir": "..",
     "model_name": "Qwen/Qwen3.5-4B",
     "model_dtype": "bfloat16",
     "device": "auto",

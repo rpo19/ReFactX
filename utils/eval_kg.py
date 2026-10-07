@@ -17,11 +17,15 @@ In both cases the knowledge graph is provided by ``--rules-dir``.
 All options can also be given in a JSON config passed with ``--config``; explicit
 command-line options override the config. See ``configs/config_kg_rules_qwen35_4b.json``.
 
+The rule-backed knowledge graph (``api.py``) lives in the **parent**
+``ReFactX-with-Rules`` repo, so ``--rules-dir`` defaults to ``..``.
+
 Examples
 --------
+    # run from inside the ReFactX submodule
     python utils/eval_kg.py --config configs/config_kg_rules_qwen35_4b.json
     python utils/eval_kg.py --config configs/config_kg_rules_qwen35_4b.json --n 20 --debug
-    python utils/eval_kg.py --dataset rules --model-name Qwen/Qwen3.5-0.8B --n 10
+    python utils/eval_kg.py --dataset rules --rules-dir .. --n 10
 """
 from __future__ import annotations
 
@@ -109,8 +113,9 @@ def merge_config(ctx, params, cfg):
               help="JSON config file; explicit CLI options override it.")
 @click.option("--dataset", default="rules", show_default=True,
               help="'rules' for the ReFactX-with-Rules benchmark, or a CSV path.")
-@click.option("--rules-dir", default="notebooks/ReFactX-with-Rules", show_default=True,
-              help="Directory containing the rule-backed api.py.")
+@click.option("--rules-dir", default="..", show_default=True,
+              help="Directory containing the rule-backed api.py (default: the parent "
+                   "ReFactX-with-Rules repo).")
 @click.option("--experiment-name", default=None, help="Name used for the default output file.")
 @click.option("--model-name", default="Qwen/Qwen3.5-4B", show_default=True)
 @click.option("--model-dtype", type=click.Choice(list(DTYPES)), default="bfloat16", show_default=True)
