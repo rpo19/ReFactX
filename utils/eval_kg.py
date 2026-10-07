@@ -136,6 +136,10 @@ def merge_config(ctx, params, cfg):
               help="Let the object of a hop become the subject of the next.")
 @click.option("--avoid-duplicates", is_flag=True, default=True,
               help="Do not let <kg> regenerate an already produced triple.")
+@click.option("--forbid-revisits/--allow-revisits", default=True,
+              help="Keep long-chain walks acyclic (no entity/edge revisited).")
+@click.option("--sentinel", is_flag=True, default=False,
+              help="Emit an explicit <no further records> object when a branch is exhausted.")
 @click.option("--do-sample", is_flag=True, default=False, help="Sample instead of greedy decoding.")
 @click.option("--temperature", type=float, default=0.7, show_default=True)
 @click.option("--top-p", type=float, default=0.80, show_default=True)
@@ -172,6 +176,8 @@ def main(ctx, config_path, **params):
     thinking = opt["thinking"]
     long_chains = opt["long_chains"]
     avoid_duplicates = opt["avoid_duplicates"]
+    forbid_revisits = opt["forbid_revisits"]
+    sentinel = opt["sentinel"]
     do_sample = opt["do_sample"]
     temperature = opt["temperature"]
     top_p = opt["top_p"]
@@ -262,6 +268,8 @@ def main(ctx, config_path, **params):
         get_objects=api.get,
         long_chains=long_chains,
         avoid_duplicates=avoid_duplicates,
+        forbid_revisits=forbid_revisits,
+        sentinel=sentinel,
         eot=" </kg>\n",
     )
 
@@ -285,6 +293,8 @@ def main(ctx, config_path, **params):
         "prompt": str(prompt_path),
         "long_chains": long_chains,
         "avoid_duplicates": avoid_duplicates,
+        "forbid_revisits": forbid_revisits,
+        "sentinel": sentinel,
         "thinking": thinking,
         "do_sample": do_sample,
         "max_new_tokens": max_new_tokens,

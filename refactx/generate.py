@@ -304,10 +304,27 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
     names to opaque metadata, or iterables of names.
 
     By default generation stops after the first object.  With ``long_chains``
-    enabled, that object becomes the subject of the next hop.  Metadata is
-    retained on ``generated_path_metadata`` and is deliberately not given a
-    prescribed schema; ``metadata_filter`` is the optional place to enforce a
-    schema-specific policy.
+    enabled, that object becomes the subject of the next hop.
+
+    With ``forbid_revisits`` (default) the walk is kept acyclic: an object that
+    already appears as an entity on the path is never offered, and neither is
+    the reverse of an already-traversed edge (following the same property back
+    from the object it just reached).  Set it to ``False`` to allow revisits.
+
+    ``avoid_duplicates`` suppresses *facts* that were already generated in a
+    previous ``<kg>`` of the same chat turn: re-using a subject or relation is
+    fine, but the same ``<subject> <relation> <object>`` triple is not offered
+    twice.  The check is deliberately applied only while choosing the object
+    (otherwise the shared first token of the index would forbid starting a new
+    path with an already-used subject).
+
+    With ``sentinel`` enabled, when the current prefix runs out of new facts
+    the model emits an explicit ``<no further records>`` object instead of the
+    branch being silently truncated.
+
+    Metadata is retained on ``generated_path_metadata`` and is deliberately not
+    given a prescribed schema; ``metadata_filter`` is the optional place to
+    enforce a schema-specific policy.
     """
 
     ENTITY = 'entity'
@@ -317,7 +334,9 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
     def __init__(self, state, tokenizer, start_idx, index,
                  get_relations, get_objects, long_chains=False,
                  relation_metadata=None, object_metadata=None,
-                 metadata_filter=None, eot='\\n', avoid_duplicates=True):
+                 metadata_filter=None, eot='\\n', avoid_duplicates=True,
+                 forbid_revisits=True, sentinel=False,
+                 sentinel_text='no further records>'):
         super().__init__(state, tokenizer, start_idx)
         if not callable(get_relations) or not callable(get_objects):
             raise TypeError('get_relations and get_objects must be callable')
@@ -329,6 +348,9 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
         self.object_metadata = object_metadata
         self.metadata_filter = metadata_filter
         self.avoid_duplicates = avoid_duplicates
+        self.forbid_revisits = forbid_revisits
+        self.sentinel = sentinel
+        self.sentinel_text = sentinel_text
         self.phase = self.ENTITY
         self.phase_index = index
         self.phase_start = 0
@@ -338,6 +360,14 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
         self._terminal = []
         self._encode_cache = {}
         self.eot_tokens = self._encode(eot) if eot is not None else []
+        # `long_chains` turns each object into the next subject.  Since a path
+        # can always be extended while the current entity has relations, that
+        # would otherwise force the model to keep going.  We therefore offer
+        # the terminal sequence as an extra leaf in the relation index so the
+        # model may stop at any hop boundary (see `_begin_relations`).
+        self._hops = 0
+        self._stop_text = ' .' + self._decode(self.eot_tokens)
+        self._stop_ids = None
 
     def _encode(self, value):
         if value is None:
@@ -378,6 +408,53 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
             subject=subject, relation=relation,
         ))
 
+    def _path_entities(self):
+        return {entry['entity'] for entry in self.path}
+
+    def _traversed_edges(self):
+        return {(e['entity'], e['relation'], e['object'])
+                for e in self.path if 'relation' in e and 'object' in e}
+
+    def _revisit_blocked(self, name, subject, relation, visited, edges):
+        # 1) never visit an entity that is already on the path
+        if name in visited:
+            return True
+        # 2) never traverse the reverse of an edge already used, i.e. walking
+        #    the same property back from the object it just reached
+        if (name, relation, subject) in edges:
+            return True
+        return False
+
+    def _filter_objects(self, result, subject, relation):
+        """Drop objects that would revisit an entity or reverse a used edge."""
+        visited = self._path_entities()
+        edges = self._traversed_edges()
+
+        def _keep(raw_name):
+            return not self._revisit_blocked(
+                self._name(raw_name), subject, relation, visited, edges)
+
+        if isinstance(result, dict):
+            return {name: metadata for name, metadata in result.items() if _keep(name)}
+        return [name for name in result if _keep(name)]
+
+    def _prune_visited(self, possible, sequence):
+        """Drop next-tokens whose branches were already fully generated.
+
+        Only applied while choosing an object: the cache stores whole paths, so
+        evaluating it at the entity/relation level would also forbid re-using a
+        subject or relation for a *different* triple.
+        """
+        try:
+            visited, _ = self.state.cache_index.next_tokens(sequence)
+        except (EmptyIndexException, TripleNotFoundException):
+            return possible
+        return {
+            token: count - visited.get(token, 0)
+            for token, count in possible.items()
+            if count - visited.get(token, 0) > 0
+        }
+
     def _make_index(self, result, kind, subject=None, relation=None):
         dynamic = DictIndex()
         self.phase_names = {}
@@ -398,21 +475,37 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
 
     def _begin_relations(self, entity, sequence):
         result = self.get_relations(entity)
-        self.phase_index = self._make_index(result, self.RELATION, subject=entity)
+        dynamic = self._make_index(result, self.RELATION, subject=entity)
+        has_relations = len(dynamic) > 0
+        # At a hop boundary (at least one triple already emitted) allow the
+        # model to stop instead of forcing it to continue, because the graph
+        # could always provide another relation.  The terminal sequence is
+        # added as an extra leaf next to the relations so `next_tokens`
+        # naturally offers both choices.
+        self._stop_ids = None
+        if self.long_chains and self._hops >= 1 and has_relations:
+            self._stop_ids = tuple(self._encode(self._stop_text))
+            dynamic.add(list(self._stop_ids))
+        self.phase_index = dynamic
         self.phase = self.RELATION
         self.phase_start = len(sequence)
-        self.phase_names = self.phase_names
-        return len(self.phase_index) > 0
+        return has_relations
 
     def _begin_objects(self, subject, relation, sequence):
         result = self.get_objects(subject, relation)
+        if self.forbid_revisits:
+            result = self._filter_objects(result, subject, relation)
         self.phase_index = self._make_index(result, self.OBJECT, subject, relation)
         self.phase = self.OBJECT
         self.phase_start = len(sequence)
         return len(self.phase_index) > 0
 
-    def _queue_terminal(self, sequence):
-        self._terminal = self._encode(' .' + self._decode(self.eot_tokens))
+    def _queue_terminal(self, sequence, sentinel=False):
+        text = ' .' + self._decode(self.eot_tokens)
+        if sentinel:
+            # An explicit object standing for "nothing new down this branch".
+            text = ' <' + self.sentinel_text + text
+        self._terminal = self._encode(text)
         if not self._terminal:
             self._complete(sequence)
 
@@ -422,6 +515,18 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
         self.state.sentinel_remaining = []
         self.state.state = 0
         self.done = True
+
+    def _record_path(self):
+        """Record the completed path, dropping a trailing unfinished subject.
+
+        With ``long_chains`` the object becomes the next subject before the
+        following relation is known, so the last path entry may still lack a
+        ``relation`` when the model decides to stop.
+        """
+        path = self.path
+        if path and 'relation' not in path[-1]:
+            path = path[:-1]
+        self.generated_path_metadata.append(deepcopy(path))
 
     def _emit_terminal(self, mask, mask_idx, sequence):
         if self._terminal:
@@ -444,16 +549,22 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
             self.path.append({'entity': name, 'metadata': metadata})
             return self._begin_relations(name, sequence)
         if self.phase == self.RELATION:
+            if self._stop_ids is not None and tuple(component) == self._stop_ids:
+                # The model chose to stop at this hop boundary.
+                self._record_path()
+                self._complete(sequence)
+                return False
             self.path[-1]['relation'] = name
             self.path[-1]['relation_metadata'] = metadata
             return self._begin_objects(self.path[-1]['entity'], name, sequence)
         self.path[-1]['object'] = name
         self.path[-1]['object_metadata'] = metadata
+        self._hops += 1
         if self.long_chains and self._begin_relations(name, sequence):
             # The object is also the next subject; do not emit it twice.
             self.path.append({'entity': name, 'metadata': metadata})
             return True
-        self.generated_path_metadata.append(deepcopy(self.path))
+        self._record_path()
         self._queue_terminal(sequence)
         return False
 
@@ -467,23 +578,20 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
             except (EmptyIndexException, TripleNotFoundException):
                 possible = {}
             raw_possible = bool(possible)
-            if possible and self.avoid_duplicates:
-                try:
-                    visited, _ = self.state.cache_index.next_tokens(sequence)
-                    possible = {
-                        token: count - visited.get(token, 0)
-                        for token, count in possible.items()
-                        if count - visited.get(token, 0) > 0
-                    }
-                except (EmptyIndexException, TripleNotFoundException):
-                    pass
+            # Only object selection may be pruned for duplicates: re-using a
+            # subject or relation for a different triple is legitimate, and
+            # pruning at those levels would forbid the shared first token.
+            if possible and self.avoid_duplicates and self.phase == self.OBJECT:
+                possible = self._prune_visited(possible, sequence)
             if possible:
                 tokens = [token for token in possible if 0 <= token < mask.shape[-1]]
                 mask[mask_idx, tokens] = 0
                 return
-            if raw_possible and self.avoid_duplicates:
-                self.generated_path_metadata.append(deepcopy(self.path))
-                self._queue_terminal(sequence)
+            if raw_possible and self.avoid_duplicates and self.phase == self.OBJECT:
+                # Every candidate object was already generated: this branch
+                # holds no new fact, so finish it (optionally via sentinel).
+                self._record_path()
+                self._queue_terminal(sequence, sentinel=self.sentinel)
                 self._emit_terminal(mask, mask_idx, sequence)
                 return
 
@@ -496,8 +604,8 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
                 return
             if not advanced:
                 # A callback with no results terminates the current path.
-                self.generated_path_metadata.append(deepcopy(self.path))
-                self._queue_terminal(sequence)
+                self._record_path()
+                self._queue_terminal(sequence, sentinel=self.sentinel)
                 self._emit_terminal(mask, mask_idx, sequence)
                 return
             # ``_advance`` moved to the next component.  Query its index in
@@ -747,7 +855,11 @@ class PatternConstrainedState():
                 self.generation_history.append(self.active_generation)
                 self.active_generation = None
                 self.end_of_triple_reset()
-                self.token_ids = []
+                # Keep the token that arrived right after the constrained span:
+                # it is the first token of the free continuation and may start
+                # the next pattern (e.g. a back-to-back `<kg>`), so dropping it
+                # would hide that pattern from the sliding window.
+                self.token_ids = self.token_ids[-1:]
             else:
                 return
 
