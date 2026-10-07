@@ -336,5 +336,108 @@ class TestKnowledgeGraphSentinel(_KGTestMixin, unittest.TestCase):
         self.assertIn('no further records', text)
 
 
+class TestKnowledgeGraphDeadBranches(_KGTestMixin, unittest.TestCase):
+    """Once a branch is known to hold no new fact it must stop being offered.
+
+    The sentinel is shown once (so the model learns the branch is empty) and the
+    prefix is then forbidden, which breaks the "<S> <R> <no further records>"
+    repetition loop.
+    """
+
+    def _dead_relations(self, state):
+        return state.kg_memory.get('dead_relations', set())
+
+    def _dead_entities(self, state):
+        return state.kg_memory.get('dead_entities', set())
+
+    def test_relation_without_objects_is_marked_dead(self):
+        graph = {'Paris': {'capital of': ['France'], 'ghost': []}}
+        state, index = self._new_state_and_index()
+        gen = self._make_gen(state, index, sentinel=True, graph=graph)
+        seq = []
+        self._feed(gen, seq, self._encode(' <Paris>'))
+        self._feed(gen, seq, self._encode(' <ghost>'))
+        self._drain(gen, seq)
+        self.assertIn(('Paris', 'ghost'), self._dead_relations(state))
+
+    def test_dead_relation_is_not_offered_again(self):
+        graph = {'Paris': {'capital of': ['France'], 'ghost': []}}
+        state, index = self._new_state_and_index()
+        gen = self._make_gen(state, index, sentinel=True, graph=graph)
+        seq = []
+        self._feed(gen, seq, self._encode(' <Paris>'))
+        self._feed(gen, seq, self._encode(' <ghost>'))
+        self._drain(gen, seq)
+
+        gen2 = self._make_gen(state, index, sentinel=True, graph=graph)
+        seq2 = []
+        self._feed(gen2, seq2, self._encode(' <Paris>'))
+        self._constrain(gen2, seq2)  # advance to the relation index
+        names = {name for name, _ in gen2.phase_names.values()}
+        self.assertNotIn('ghost', names)
+        self.assertIn('capital of', names)
+
+    def test_entity_without_live_relations_is_marked_dead(self):
+        graph = {'Paris': {'ghost': []}}
+        state, index = self._new_state_and_index()
+        gen = self._make_gen(state, index, sentinel=True, graph=graph)
+        seq = []
+        self._feed(gen, seq, self._encode(' <Paris>'))
+        self._feed(gen, seq, self._encode(' <ghost>'))
+        self._drain(gen, seq)
+        # <ghost> has no object, and it is Paris' only relation, so Paris is
+        # immediately remembered as dead.
+        self.assertIn(('Paris', 'ghost'), self._dead_relations(state))
+        self.assertIn('Paris', self._dead_entities(state))
+
+    def test_dead_entity_prefix_not_offered_again(self):
+        graph = {'Paris': {'ghost': []}}
+        state, index = self._new_state_and_index()
+        gen = self._make_gen(state, index, sentinel=True, graph=graph)
+        seq = []
+        self._feed(gen, seq, self._encode(' <Paris>'))
+        self._feed(gen, seq, self._encode(' <ghost>'))
+        self._drain(gen, seq)
+
+        # A later pass may still show the sentinel once for the dead prefix,
+        # but must never emit the entity name again.
+        gen2 = self._make_gen(state, index, sentinel=True, graph=graph)
+        seq2 = []
+        emitted = self._drain(gen2, seq2)
+        text = self.tokenizer.decode(emitted)
+        self.assertNotIn('Paris', text)
+
+        gen3 = self._make_gen(state, index, sentinel=True, graph=graph)
+        seq3 = []
+        emitted3 = self._drain(gen3, seq3)
+        self.assertNotIn('Paris', self.tokenizer.decode(emitted3))
+
+    def test_is_fully_dead_only_covers_dead_subtree(self):
+        state, index = self._new_state_and_index(' <Paris>')
+        index.add(self._encode(' <Lyon>'))
+        gen = self._make_gen(state, index)
+        gen._mark_entity_dead('Paris', self._encode(' <Paris>'))
+        self.assertTrue(gen._is_fully_dead(self._encode(' <Paris>')))
+        self.assertFalse(gen._is_fully_dead(self._encode(' <Lyon>')))
+        self.assertFalse(gen._is_fully_dead([]))  # Lyon is still live
+
+    def test_partial_prefix_gets_sentinel(self):
+        state, index = self._new_state_and_index(' <Paris>')
+        index.add(self._encode(' <Lyon>'))
+        gen = self._make_gen(state, index, sentinel=True)
+        gen._mark_entity_dead('Paris', self._encode(' <Paris>'))
+        # Typing the dead entity's name must end in a sentinel, without ever
+        # completing the entity.
+        seq = []
+        for tok in self._encode(' <Paris'):
+            allowed = self._constrain(gen, seq)
+            if tok not in allowed:
+                break
+            seq.append(tok)
+        emitted = self._drain(gen, seq)
+        text = self.tokenizer.decode(emitted)
+        self.assertIn('no further records', text)
+
+
 if __name__ == '__main__':
     unittest.main()

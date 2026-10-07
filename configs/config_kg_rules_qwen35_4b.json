@@ -21,7 +21,7 @@
     "long_chains": false,
     "avoid_duplicates": true,
     "forbid_revisits": true,
-    "sentinel": false,
+    "sentinel": true,
     "do_sample": false,
     "temperature": 0.7,
     "top_p": 0.8,

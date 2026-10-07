@@ -6,6 +6,7 @@ import torch
 from copy import deepcopy
 import math
 import types
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Type
 
@@ -320,7 +321,12 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
 
     With ``sentinel`` enabled, when the current prefix runs out of new facts
     the model emits an explicit ``<no further records>`` object instead of the
-    branch being silently truncated.
+    branch being silently truncated.  An exhausted branch is offered only once
+    (so the model gets to see the sentinel, even mid-entity, e.g.
+    ``<Gremese <no further records>``) and is then forbidden: a relation with no
+    live object is dropped from the relation index, and an entity whose every
+    relation is dead is dropped from the entity prefix.  This keeps the model
+    from looping on ``<S> <R> <no further records>``.
 
     Metadata is retained on ``generated_path_metadata`` and is deliberately not
     given a prescribed schema; ``metadata_filter`` is the optional place to
@@ -351,6 +357,9 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
         self.forbid_revisits = forbid_revisits
         self.sentinel = sentinel
         self.sentinel_text = sentinel_text
+        # Dead-branch bookkeeping (show a sentinel once, then forbid the
+        # prefix) matters both for duplicate suppression and for the sentinel.
+        self.track_dead = bool(avoid_duplicates or sentinel)
         self.phase = self.ENTITY
         self.phase_index = index
         self.phase_start = 0
@@ -455,6 +464,84 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
             if count - visited.get(token, 0) > 0
         }
 
+    # -- dead-branch bookkeeping -------------------------------------------
+    # Facts already generated (per ``<kg>`` block) are remembered here so an
+    # exhausted branch is offered exactly once — long enough for the model to
+    # see the ``<no further records>`` sentinel — and is then forbidden.  The
+    # memory lives on the shared ``state`` so it survives across the several
+    # ``<kg>`` blocks of a single answer.
+
+    def _memory(self):
+        mem = getattr(self.state, 'kg_memory', None)
+        if mem is None:
+            mem = {}
+            self.state.kg_memory = mem
+        if 'dead_entities' not in mem:
+            mem['dead_entities'] = set()
+            mem['dead_prefix_counts'] = Counter()
+            mem['dead_relations'] = set()
+            mem['sentinel_prefixes'] = set()
+        return mem
+
+    def _mark_relation_dead(self, subject, relation):
+        self._memory()['dead_relations'].add((subject, relation))
+
+    def _mark_entity_dead(self, name, tokens):
+        mem = self._memory()
+        if name in mem['dead_entities']:
+            return
+        mem['dead_entities'].add(name)
+        tokens = tuple(tokens)
+        for i in range(len(tokens) + 1):
+            mem['dead_prefix_counts'][tokens[:i]] += 1
+
+    def _entity_tokens(self, subject):
+        if self.path and self.path[-1].get('entity') == subject \
+                and 'tokens' in self.path[-1]:
+            return self.path[-1]['tokens']
+        return tuple(self._encode(' <' + subject + '>'))
+
+    def _maybe_mark_entity_dead(self, subject):
+        """Mark an entity dead once every one of its relations is dead."""
+        if not self.track_dead:
+            return
+        dead = self._memory()['dead_relations']
+        if any((subject, relation) not in dead
+               for relation in self.get_relations(subject)):
+            return
+        self._mark_entity_dead(subject, self._entity_tokens(subject))
+
+    def _subtree_count(self, tokens):
+        """Number of leaves of the entity index under this token prefix."""
+        tree = getattr(self.index, 'tree', None)
+        if tree is None:
+            return 0
+        level, cursor, level_cursor = tree, 0, 0
+        tokens = tuple(tokens)
+        while cursor < len(tokens) and level_cursor < len(level[1]):
+            item = level[1][level_cursor]
+            if isinstance(item, dict):
+                if tokens[cursor] not in item:
+                    return 0
+                level = item[tokens[cursor]]
+                level_cursor = 0
+            else:
+                if tokens[cursor] != item:
+                    return 0
+                level_cursor += 1
+            cursor += 1
+        if cursor < len(tokens):
+            return 0
+        return level[0]
+
+    def _is_fully_dead(self, tokens):
+        """Whether every entity under this prefix is a known dead entity."""
+        tokens = tuple(tokens)
+        total = self._subtree_count(tokens)
+        if total <= 0:
+            return False
+        return self._memory()['dead_prefix_counts'][tokens] >= total
+
     def _make_index(self, result, kind, subject=None, relation=None):
         dynamic = DictIndex()
         self.phase_names = {}
@@ -475,6 +562,9 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
 
     def _begin_relations(self, entity, sequence):
         result = self.get_relations(entity)
+        if self.track_dead:
+            dead = self._memory()['dead_relations']
+            result = [relation for relation in result if (entity, relation) not in dead]
         dynamic = self._make_index(result, self.RELATION, subject=entity)
         has_relations = len(dynamic) > 0
         # At a hop boundary (at least one triple already emitted) allow the
@@ -493,9 +583,17 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
 
     def _begin_objects(self, subject, relation, sequence):
         result = self.get_objects(subject, relation)
+        if isinstance(result, dict):
+            items = dict(result)
+        else:
+            items = list(result)
+        if not items and self.track_dead:
+            # No object at all: remember so this relation stops being offered.
+            self._mark_relation_dead(subject, relation)
+            self._maybe_mark_entity_dead(subject)
         if self.forbid_revisits:
-            result = self._filter_objects(result, subject, relation)
-        self.phase_index = self._make_index(result, self.OBJECT, subject, relation)
+            items = self._filter_objects(items, subject, relation)
+        self.phase_index = self._make_index(items, self.OBJECT, subject, relation)
         self.phase = self.OBJECT
         self.phase_start = len(sequence)
         return len(self.phase_index) > 0
@@ -526,7 +624,8 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
         path = self.path
         if path and 'relation' not in path[-1]:
             path = path[:-1]
-        self.generated_path_metadata.append(deepcopy(path))
+        if path:
+            self.generated_path_metadata.append(deepcopy(path))
 
     def _emit_terminal(self, mask, mask_idx, sequence):
         if self._terminal:
@@ -546,8 +645,14 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
             value = (self._name(self._decode(component)), {})
         name, metadata = value
         if self.phase == self.ENTITY:
-            self.path.append({'entity': name, 'metadata': metadata})
-            return self._begin_relations(name, sequence)
+            self.path.append({'entity': name, 'metadata': metadata,
+                              'tokens': tuple(component)})
+            alive = self._begin_relations(name, sequence)
+            if not alive and self.track_dead:
+                # The entity has no live relation left: remember it so it is
+                # not offered again (it still gets to show one sentinel first).
+                self._mark_entity_dead(name, component)
+            return alive
         if self.phase == self.RELATION:
             if self._stop_ids is not None and tuple(component) == self._stop_ids:
                 # The model chose to stop at this hop boundary.
@@ -578,6 +683,32 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
             except (EmptyIndexException, TripleNotFoundException):
                 possible = {}
             raw_possible = bool(possible)
+
+            # Entity phase: forbid prefixes whose whole entity subtree is a
+            # known dead branch.  A prefix is shown the sentinel once (so the
+            # model sees there is nothing to visit, e.g. ``<Gremese <no further
+            # records>``) and enters ``sentinel_prefixes``; afterwards every
+            # token leading back into it is removed.
+            if self.phase == self.ENTITY and self.track_dead:
+                mem = self._memory()
+                if mem['dead_entities']:
+                    tokens = tuple(component)
+                    if self._is_fully_dead(tokens):
+                        if tokens not in mem['sentinel_prefixes']:
+                            mem['sentinel_prefixes'].add(tokens)
+                            self._queue_terminal(sequence, sentinel=True)
+                        else:
+                            self._queue_terminal(sequence)
+                        self._record_path()
+                        self._emit_terminal(mask, mask_idx, sequence)
+                        return
+                    possible = {
+                        token: count for token, count in possible.items()
+                        if not (tokens + (token,) in mem['sentinel_prefixes']
+                                and self._is_fully_dead(tokens + (token,)))
+                    }
+                    raw_possible = bool(possible)
+
             # Only object selection may be pruned for duplicates: re-using a
             # subject or relation for a different triple is legitimate, and
             # pruning at those levels would forbid the shared first token.
@@ -590,6 +721,10 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
             if raw_possible and self.avoid_duplicates and self.phase == self.OBJECT:
                 # Every candidate object was already generated: this branch
                 # holds no new fact, so finish it (optionally via sentinel).
+                if len(self.path) and 'relation' in self.path[-1] and self.track_dead:
+                    self._mark_relation_dead(
+                        self.path[-1]['entity'], self.path[-1]['relation'])
+                    self._maybe_mark_entity_dead(self.path[-1]['entity'])
                 self._record_path()
                 self._queue_terminal(sequence, sentinel=self.sentinel)
                 self._emit_terminal(mask, mask_idx, sequence)
@@ -749,6 +884,10 @@ class PatternConstrainedState():
 
         self.sentinel_remaining = []
 
+        # KnowledgeGraphGeneration dead-branch bookkeeping, shared across the
+        # several ``<kg>`` blocks of a single answer.
+        self.kg_memory = {}
+
         self.thinking_end_pattern = thinking_end_pattern.lower() if ignore_case and thinking_end_pattern else thinking_end_pattern
         self._thinking_cache_reset_done = False
 
@@ -798,6 +937,7 @@ class PatternConstrainedState():
         self._thinking_cache_reset_done = False
         self._first_call = True
         self.active_generation = None
+        self.kg_memory = {}
         if clear_patterns:
             self.patterns = []
         self.generation_history = []
@@ -822,6 +962,7 @@ class PatternConstrainedState():
         self.subtree_cache = deepcopy(other.subtree_cache) if copy else other.subtree_cache
         self.thinking_end_pattern = other.thinking_end_pattern
         self._thinking_cache_reset_done = other._thinking_cache_reset_done
+        self.kg_memory = deepcopy(getattr(other, 'kg_memory', {}))
 
         self.debug = other.debug
         self.debug_history = deepcopy(other.debug_history) if copy else other.debug_history
