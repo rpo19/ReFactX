@@ -78,15 +78,28 @@ If the same title is shared by several entities the script fails, unless
 `--no-fail-on-duplicates-id` is passed, in which case such titles are flagged so
 the id can be appended during verbalization.
 
+### Load property names
+Predicates are namespaced ids (`people.person.place_of_birth`); extract a
+simplified display name for each (last segment only, e.g. `place of birth`):
+```
+python utils/load_freebase_properties.py fb_en.txt freebase-properties.pickle
+```
+Names are made unique: within each group of ids sharing a final segment the most
+frequent one keeps the short name and the others are prefixed with their parent
+segments (`genre` vs `artist genre`). Add `--collisions-report report.tsv` to
+list any names that could not be disambiguated.
+
 ## Verbalize the triples using the labels
 ```
-python utils/verbalize_freebase.py --freebase-labels ents_freebase.pickle fb_en.txt verbalized_triples.bz2 [--total-number-of-triples number]
+python utils/verbalize_freebase.py --freebase-labels ents_freebase.pickle --freebase-properties freebase-properties.pickle fb_en.txt verbalized_triples.bz2 [--total-number-of-triples number]
 ```
 
 Entities are verbalized as `label (id)`, or just the id when no label is
 available. With `--en-titles` the Wikipedia `en_title` is used instead (e.g.
-`Albert_Einstein`), suffixed with the id when the title is shared (e.g.
-`Clone (m/0123)`).
+`Albert Einstein`), suffixed with the id when the title is shared (e.g.
+`Clone (m/0123)`). When `--freebase-properties` is given, predicates are
+verbalized with their simplified unique name (`artist`, `place of birth`)
+instead of the raw id.
 
 ## Tokenize and Populate
 

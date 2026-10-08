@@ -59,7 +59,12 @@ def parse_en_title_line(line: str) -> tuple[str, str] | None:
 
 
 def load_en_titles(en_titles_path: Path) -> dict[str, str]:
-    """Return ``{mid: wikipedia en_title}`` from a filtered N-Triples dump."""
+    """Return ``{mid: display title}`` from a filtered N-Triples dump.
+
+    Wikipedia ``en_title`` values are stored URL-style with underscores for
+    spaces (``Richard_Nixon``).  They are converted to plain display form here so
+    entities are rendered under their natural name instead of an underscored one.
+    """
     titles: dict[str, str] = {}
     with en_titles_path.open("r", encoding="utf-8") as source:
         for line in tqdm(source, desc="Loading Freebase en_titles"):
@@ -68,7 +73,7 @@ def load_en_titles(en_titles_path: Path) -> dict[str, str]:
                 continue
             mid, title = parsed
             if title:
-                titles.setdefault(mid, title)
+                titles.setdefault(mid, title.replace("_", " "))
     return titles
 
 
@@ -80,7 +85,8 @@ def load_labels(
     """Return ``{mid: [label, en_title, en_title_unique]}`` records.
 
     ``label`` is the entity's ``type.object.name`` (empty string when unknown),
-    ``en_title`` is its ``wikipedia.en_title`` (empty string when unknown) and
+    ``en_title`` is its ``wikipedia.en_title`` in display form, i.e. with
+    underscores converted to spaces (empty string when unknown) and
     ``en_title_unique`` is ``False`` when another entity shares the same title.
 
     Raises ``ValueError`` when two entities share a Wikipedia title, unless

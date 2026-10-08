@@ -33,11 +33,21 @@ def verbalize_entity(entity_id: str, labels: dict[str, list]) -> str:
     return display_id
 
 
+def predicate_name(predicate: str, properties: dict[str, list] | None = None) -> str:
+    """Map a Freebase property id to its display name, or keep the raw id."""
+    if properties:
+        record = properties.get(predicate)
+        if record:
+            return record[0]
+    return predicate
+
+
 def verbalize(
     dump: Path,
     labels: dict[str, list],
     output: Path,
     total: int | None = None,
+    properties: dict[str, list] | None = None,
 ) -> int:
     written = 0
     with dump.open("r", encoding="utf-8") as source, bz2.open(
@@ -56,7 +66,11 @@ def verbalize(
             if object_.startswith("m."):
                 object_ = verbalize_entity(object_, labels)
             destination.write(
-                TEMPLATE.format(subject=subject, predicate=predicate, object_=object_)
+                TEMPLATE.format(
+                    subject=subject,
+                    predicate=predicate_name(predicate, properties),
+                    object_=object_,
+                )
             )
             written += 1
     return written
@@ -72,16 +86,30 @@ def verbalize(
 @click.argument("dump", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.argument("output", type=click.Path(dir_okay=False, path_type=Path))
 @click.option("--total-number-of-triples", type=int, default=None)
+@click.option(
+    "--freebase-properties",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Pickle produced by load_freebase_properties.py. When given, predicates "
+        "are verbalized with their simplified, unique display name."
+    ),
+)
 def main(
     freebase_labels: Path,
     dump: Path,
     output: Path,
     total_number_of_triples: int | None,
+    freebase_properties: Path | None,
 ) -> None:
     """Write verbalized Freebase triples to a compressed output file."""
     with freebase_labels.open("rb") as source:
         labels = pickle.load(source)
-    count = verbalize(dump, labels, output, total_number_of_triples)
+    properties = None
+    if freebase_properties is not None:
+        with freebase_properties.open("rb") as source:
+            properties = pickle.load(source)
+    count = verbalize(dump, labels, output, total_number_of_triples, properties)
     click.echo(f"Wrote {count} triples to {output}")
 
 
