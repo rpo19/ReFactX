@@ -55,32 +55,39 @@ Download dump with (source doi.org/10.1145/3437963.3441753 see github):
 wget https://download.microsoft.com/download/A/E/4/AE428B7A-9EF9-446C-85CF-D8ED0C9B1F26/FastRDFStore-data.zip --no-check-certificate
 ```
 
-### Filter labels
-By default entities are verbalized with their `type.object.name`:
+The archive holds `fb_en.txt`, a tab-separated dump of every triple
+(`subject<TAB>predicate<TAB>object`), plus `fb_labels.txt` (the
+`type.object.name` lines) and the RDF dump used to recover Wikipedia titles. The
+steps below turn these into a verbalized `.bz2` that `populate_postgres` ingests.
+
+### 1. Extract entity labels
+Entities are verbalized with their `type.object.name`:
 ```
 grep -a -P 'type\.object\.name' fb_en.txt > fb_labels.txt
 ```
 
-### Load labels into python dict
-```
-python utils/load_freebase_labels.py fb_labels.txt ents_freebase.pickle
-```
-
-### Optional: Wikipedia titles
-To prefer the more likely-unique Wikipedia `en_title` over `type.object.name`,
-extract it from the RDF dump and load it:
+### 2. Extract Wikipedia titles
+A Wikipedia title is a more likely-unique name than `type.object.name`, so it is
+preferred. Extract it from the RDF dump:
 ```
 zgrep -a 'key/wikipedia.en_title' freebase-rdf-2015-08-09-00-01.gz > fb_en_titles.txt
-python utils/load_freebase_labels.py fb_labels.txt ents_freebase.pickle --en-titles fb_en_titles.txt
 ```
+Titles are stored URL-style with underscores for spaces (`Richard_Nixon`); the
+loader converts them to display form (`Richard Nixon`).
 
-If the same title is shared by several entities the script fails, unless
-`--no-fail-on-duplicates-id` is passed, in which case such titles are flagged so
-the id can be appended during verbalization.
+### 3. Build the entity pickle
+```
+python utils/load_freebase_labels.py fb_labels.txt ents_freebase_en_titles.pickle --en-titles fb_en_titles.txt
+```
+Maps each mid to `[label, en_title, en_title_unique]`. The `en_title` is used
+when present; `en_title_unique` is `False` when several entities share the same
+title, so the id is appended during verbalization. If a title is shared the
+script fails, unless `--no-fail-on-duplicates-id` is passed to flag the
+ambiguous titles instead of aborting.
 
-### Load property names
+### 4. Build the property-name pickle
 Predicates are namespaced ids (`people.person.place_of_birth`); extract a
-simplified display name for each (last segment only, e.g. `place of birth`):
+simplified display name for each (the final segment, e.g. `place of birth`):
 ```
 python utils/load_freebase_properties.py fb_en.txt freebase-properties.pickle
 ```
@@ -89,17 +96,17 @@ the most frequent one keeps the short name and the others append their full id
 (`genre`, `genre (music.artist.genre)`). Add `--collisions-report report.tsv` to
 list any names that stayed ambiguous (a sanity check; normally empty).
 
-## Verbalize the triples using the labels
+### 5. Verbalize the triples
 ```
-python utils/verbalize_freebase.py --freebase-labels ents_freebase.pickle --freebase-properties freebase-properties.pickle fb_en.txt verbalized_triples.bz2 [--total-number-of-triples number]
+python utils/verbalize_freebase.py --freebase-labels ents_freebase_en_titles.pickle --freebase-properties freebase-properties.pickle fb_en.txt freebase_verbalized_triples_en_titles.bz2 [--total-number-of-triples number]
 ```
-
-Entities are verbalized as `label (id)`, or just the id when no label is
-available. With `--en-titles` the Wikipedia `en_title` is used instead (e.g.
-`Albert Einstein`), suffixed with the id when the title is shared (e.g.
-`Clone (m/0123)`). When `--freebase-properties` is given, predicates are
-verbalized with their simplified unique name (`artist`, `place of birth`)
-instead of the raw id.
+Each triple becomes `<subject> <predicate> <object> .`. Entities are written with
+their Wikipedia `en_title` (e.g. `Albert Einstein`), or `en_title (id)` when the
+title is shared (e.g. `Clone (m/0123)`), or `label (id)` / just the `id` when no
+title is available. Predicates use the simplified unique name when
+`--freebase-properties` is given (`artist`, `place of birth`), otherwise the raw
+id. Feed the resulting `freebase_verbalized_triples_en_titles.bz2` to
+[Tokenize and Populate](#tokenize-and-populate) to build the index.
 
 ## Tokenize and Populate
 
