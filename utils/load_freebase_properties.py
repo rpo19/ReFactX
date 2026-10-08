@@ -2,17 +2,14 @@
 
 Every triple in the dump has the shape ``subject<TAB>property<TAB>object`` and
 the property is a hierarchical id such as ``music.recording.artist``.  This
-script collects the property ids with how often each occurs and maps them to
-simplified display names made of the final segment only (``artist``,
-``place of birth``, ``alpha-2``), turning underscores into spaces so the name
-reads as a phrase rather than a machine identifier.
+script maps each property id to a simplified display name made of its final
+segment (``artist``, ``place of birth``, ``alpha-2``), turning underscores into
+spaces so the name reads as a phrase rather than a machine identifier.
 
 Display names are unique by construction.  When several property ids share the
-same final segment (``film.film.genre`` and ``music.artist.genre``), the most
-frequent id keeps the short name and the others are lengthened one segment at a
-time until unique (``genre`` vs ``artist genre``), so the common, canonical
-property stays short.  Ids that cannot be told apart from the id alone add their
-full id to the name and are the only ones flagged.
+same final segment (``film.film.genre`` and ``music.artist.genre``) the bare
+segment is ambiguous, so the most frequent id keeps the short name and the
+others append their full id (``genre`` vs ``genre (music.artist.genre)``).
 
 The pickle mirrors ``load_freebase_labels.py`` and maps ``{property_id:
 [display_name, keeps_full_id]}``; ``display_name`` is always unique, so
@@ -48,23 +45,18 @@ def property_segments(property_id: str) -> list[str]:
     ]
 
 
-def simplify_property(property_id: str, segments: int = 1) -> str:
-    """Reduce a property id to a human-readable name from its last segments.
+def simplify_property(property_id: str) -> str:
+    """Reduce a property id to its final, most specific segment as a phrase.
 
-    The domain and type prefix is usually implied by the surrounding triple, so
-    one segment is the default, and underscores become spaces::
+    The domain and type prefix is implied by the surrounding triple, so only the
+    last segment is kept and underscores become spaces::
 
         music.recording.artist        -> "artist"
         people.person.place_of_birth  -> "place of birth"
         authority.iso.3166-1.alpha-2  -> "alpha-2"
         rdf-schema#domain             -> "domain"
-
-    ``segments=2`` reads ``film.actor.film`` as ``actor film``, which is how
-    colliding names are disambiguated.  Fewer segments than requested are used
-    when the id is too short.
     """
-    parts = property_segments(property_id)
-    return " ".join(parts[-segments:])
+    return property_segments(property_id)[-1]
 
 
 def load_property_counts(dump: Path, total: int | None = None) -> dict[str, int]:
@@ -94,79 +86,49 @@ def load_property_counts(dump: Path, total: int | None = None) -> dict[str, int]
 def unique_display_names(
     property_ids: list[str],
     counts: dict[str, int] | None = None,
-    max_segments: int | None = None,
 ) -> tuple[dict[str, list], dict[str, list[str]]]:
     """Build ``{property_id: [display_name, keeps_full_id]}`` with unique names.
 
-    Within each group of ids sharing a final segment, the most frequent id (ties
-    prefer the id with fewer segments, then alphabetical order) keeps the bare
-    name and the rest are lengthened one segment at a time until unique:
+    A property keeps its final segment when no other property shares it:
 
-        film.film.genre      -> "genre"         (most common of the group)
-        music.artist.genre   -> "artist genre"
+        people.person.place_of_birth -> "place of birth"
 
-    Ids that still collide at ``max_segments`` (or once all their segments are
-    used) add their full id to the name and are flagged.  Returns the records and
-    the remaining unresolvable collisions, which are normally empty.
+    When several properties share a final segment the bare name is ambiguous, so
+    the most frequent id keeps it and the rest append their full id and are
+    flagged (ties are broken alphabetically):
+
+        film.film.genre    -> "genre"          (most frequent of the group)
+        music.artist.genre -> "genre (music.artist.genre)"
+
+    Returns the records and any remaining collisions, which are impossible by
+    construction and therefore normally empty.
     """
     counts = counts or {}
-    segments = {pid: property_segments(pid) for pid in property_ids}
+    segments = {pid: property_segments(pid)[-1] for pid in property_ids}
 
     grouped: dict[str, list[str]] = {}
     for pid in property_ids:
-        grouped.setdefault(segments[pid][-1], []).append(pid)
+        grouped.setdefault(segments[pid], []).append(pid)
 
     records: dict[str, list] = {}
-    taken: set[str] = set()
-    needed: dict[str, int] = {}
-    pending: list[str] = []
-
-    for bare, ids in grouped.items():
+    for segment, ids in grouped.items():
         if len(ids) == 1:
-            records[ids[0]] = [bare, False]
-            taken.add(bare)
+            records[ids[0]] = [segment, False]
             continue
-        winner = min(ids, key=lambda pid: (-counts.get(pid, 0), len(segments[pid]), pid))
-        records[winner] = [bare, False]
-        taken.add(bare)
-        needed[winner] = 1
-        pending.extend(pid for pid in ids if pid != winner)
-
-    with_id_suffix: set[str] = set()
-    while pending:
-        buckets: dict[str, list[str]] = {}
-        for pid in pending:
-            want = needed.get(pid, 1) + 1
-            if want > len(segments[pid]) or (
-                max_segments is not None and want > max_segments
-            ):
-                with_id_suffix.add(pid)
-                continue
-            buckets.setdefault(simplify_property(pid, want), []).append(pid)
-
-        still_pending = []
-        for name, ids in buckets.items():
-            if len(ids) == 1 and name not in taken:
-                pid = ids[0]
-                needed[pid] = needed.get(pid, 1) + 1
-                records[pid] = [name, False]
-                taken.add(name)
+        winner = min(ids, key=lambda pid: (-counts.get(pid, 0), pid))
+        for pid in ids:
+            if pid == winner:
+                records[pid] = [segment, False]
             else:
-                still_pending.extend(ids)
-        pending = still_pending
+                records[pid] = [f"{segment} ({pid})", True]
 
-    for pid in with_id_suffix:
-        name = f"{simplify_property(pid)} ({pid})"
-        records[pid] = [name, True]
-
-    final = {pid: records[pid] for pid in property_ids}
-    grouped_final: dict[str, list[str]] = {}
-    for pid, record in final.items():
-        grouped_final.setdefault(record[0], []).append(pid)
+    grouped_names: dict[str, list[str]] = {}
+    for pid, record in records.items():
+        grouped_names.setdefault(record[0], []).append(pid)
     collisions = {
-        name: sorted(ids) for name, ids in grouped_final.items() if len(ids) > 1
+        name: sorted(ids) for name, ids in grouped_names.items() if len(ids) > 1
     }
-    return final, collisions
+    return records, collisions
 
 
 def report_collisions(
@@ -219,15 +181,6 @@ def write_pickle_atomically(records: dict[str, list], output: Path) -> None:
 @click.argument("output", type=click.Path(dir_okay=False, path_type=Path))
 @click.option("--total-number-of-triples", type=int, default=None)
 @click.option(
-    "--max-segments",
-    type=int,
-    default=3,
-    help=(
-        "Cap on how many segments a disambiguated name may keep. Ids that still "
-        "collide at the cap fall back to 'name (property_id)'."
-    ),
-)
-@click.option(
     "--collisions-report",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
@@ -243,13 +196,12 @@ def main(
     dump: Path,
     output: Path,
     total_number_of_triples: int | None,
-    max_segments: int,
     collisions_report: Path | None,
     fail_on_collisions: bool,
 ) -> None:
     """Build a ``{property_id: [display_name, keeps_full_id]}`` pickle from a TSV dump."""
     counts = load_property_counts(dump, total_number_of_triples)
-    records, collisions = unique_display_names(list(counts), counts, max_segments)
+    records, collisions = unique_display_names(list(counts), counts)
 
     unique_names = len({record[0] for record in records.values()})
     click.echo(
@@ -264,8 +216,8 @@ def main(
 
     if collisions and fail_on_collisions:
         raise click.ClickException(
-            f"{len(collisions)} display name(s) stayed ambiguous; rerun without "
-            f"--fail-on-collisions to keep 'name (property_id)'."
+            f"{len(collisions)} display name(s) stayed ambiguous; names are "
+            f"unique by construction, so this indicates a bug."
         )
 
     write_pickle_atomically(records, output)

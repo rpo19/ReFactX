@@ -84,10 +84,10 @@ simplified display name for each (last segment only, e.g. `place of birth`):
 ```
 python utils/load_freebase_properties.py fb_en.txt freebase-properties.pickle
 ```
-Names are made unique: within each group of ids sharing a final segment the most
-frequent one keeps the short name and the others are prefixed with their parent
-segments (`genre` vs `artist genre`). Add `--collisions-report report.tsv` to
-list any names that could not be disambiguated.
+Names are unique by construction: when several properties share a final segment
+the most frequent one keeps the short name and the others append their full id
+(`genre`, `genre (music.artist.genre)`). Add `--collisions-report report.tsv` to
+list any names that stayed ambiguous (a sanity check; normally empty).
 
 ## Verbalize the triples using the labels
 ```
