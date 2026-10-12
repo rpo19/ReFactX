@@ -14,7 +14,9 @@
 
     "output": null,
     "log_dir": "logs",
-    "n": 100,
+    "n": 200,
+    "shuffle": true,
+    "stratify_key": "kind",
 
     "max_new_tokens": 512,
     "thinking": false,
@@ -27,7 +29,7 @@
     "top_p": 0.8,
     "top_k": 20,
     "batch_size": 1,
-    "seed": null,
+    "seed": 42,
 
     "continue_run": true,
     "no_flush": false,

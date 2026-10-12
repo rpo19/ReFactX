@@ -108,6 +108,44 @@ def merge_config(ctx, params, cfg):
     return merged
 
 
+def select_questions(df, n, shuffle=False, stratify_key=None, seed=None):
+    """Select the questions to evaluate.
+
+    With ``stratify_key`` the sample of size ``n`` keeps the class proportions of
+    that column (e.g. the question ``kind``), using largest-remainder rounding.
+    ``shuffle`` randomises the order of the selected rows (also the whole set
+    when no ``n`` is given).  ``seed`` makes the selection reproducible.
+    """
+    if n is not None:
+        n = min(n, len(df))
+
+    if stratify_key and stratify_key in df.columns and n is not None:
+        groups = df.groupby(stratify_key, sort=False)
+        sizes = groups.size()
+        raw = sizes / sizes.sum() * n
+        counts = raw.astype(int)
+        remainder = n - int(counts.sum())
+        if remainder > 0:
+            for key in (raw - counts).sort_values(ascending=False).index:
+                if remainder <= 0:
+                    break
+                if counts[key] < sizes[key]:
+                    counts[key] += 1
+                    remainder -= 1
+        parts = [groups.get_group(key).sample(n=int(count), random_state=seed)
+                 for key, count in counts.items() if count > 0]
+        df = pd.concat(parts)
+        if shuffle:
+            df = df.sample(frac=1.0, random_state=seed)
+        return df.reset_index(drop=True)
+
+    if shuffle:
+        df = df.sample(frac=1.0, random_state=seed)
+    if n is not None:
+        df = df.head(n)
+    return df.reset_index(drop=True)
+
+
 @click.command()
 @click.option("--config", "config_path", type=click.Path(exists=True), default=None,
               help="JSON config file; explicit CLI options override it.")
@@ -129,7 +167,11 @@ def merge_config(ctx, params, cfg):
               help="Column used for the per-kind breakdown (empty to disable).")
 @click.option("--output", default=None, help="Output JSONL file (default: logs/<experiment>.out).")
 @click.option("--log-dir", default="logs", show_default=True)
-@click.option("--n", type=int, default=None, help="Evaluate only the first n questions.")
+@click.option("--n", type=int, default=None, help="Evaluate only n questions.")
+@click.option("--shuffle", is_flag=True, default=False,
+              help="Shuffle the questions (random order) before selecting/sampling.")
+@click.option("--stratify-key", default=None,
+              help="Column to keep proportions on when sampling n questions (e.g. 'kind').")
 @click.option("--max-new-tokens", type=int, default=512, show_default=True)
 @click.option("--thinking", is_flag=True, default=False, help="Enable the model's thinking mode.")
 @click.option("--long-chains", is_flag=True, default=False,
@@ -172,6 +214,8 @@ def main(ctx, config_path, **params):
     output = opt["output"]
     log_dir = opt["log_dir"]
     n = opt["n"]
+    shuffle = opt["shuffle"]
+    stratify_key = opt["stratify_key"]
     max_new_tokens = opt["max_new_tokens"]
     thinking = opt["thinking"]
     long_chains = opt["long_chains"]
@@ -215,9 +259,14 @@ def main(ctx, config_path, **params):
         print(f"  dataset: {api.QA} ({len(df)} questions)")
     df = df.reset_index(drop=True)
 
-    if n is not None:
-        df = df.head(n).reset_index(drop=True)
-        print(f"  limited to first {len(df)} questions")
+    if n is not None or shuffle:
+        df = select_questions(df, n, shuffle=shuffle,
+                              stratify_key=stratify_key, seed=seed)
+        detail = f"shuffled, stratified on '{stratify_key}'" if stratify_key else \
+                 ("shuffled" if shuffle else "head")
+        print(f"  selected {len(df)} questions ({detail})")
+        if kind_key and kind_key in df.columns:
+            print("  by kind:", df[kind_key].value_counts().to_dict())
 
     experiment = experiment_name or f"{Path(dataset).name}.{Path(model_name).name}.{prompt_path.stem}"
     output = Path(output) if output else (Path(log_dir) / f"{experiment}.out")
@@ -295,6 +344,9 @@ def main(ctx, config_path, **params):
         "avoid_duplicates": avoid_duplicates,
         "forbid_revisits": forbid_revisits,
         "sentinel": sentinel,
+        "shuffle": shuffle,
+        "stratify_key": stratify_key,
+        "seed": seed,
         "thinking": thinking,
         "do_sample": do_sample,
         "max_new_tokens": max_new_tokens,
