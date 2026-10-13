@@ -18,7 +18,7 @@
     "shuffle": true,
     "stratify_key": "kind",
 
-    "max_new_tokens": 512,
+    "max_new_tokens": 2048,
     "thinking": false,
     "long_chains": false,
     "avoid_duplicates": true,
