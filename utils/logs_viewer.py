@@ -1,17 +1,21 @@
-"""Tiny Streamlit viewer for ReFactX evaluation logs.
+"""Streamlit tools for ReFactX: evaluation-log viewer + index/KG explorer.
 
 Run it with::
 
     pip install streamlit
     streamlit run utils/logs_viewer.py
 
-Pick a folder in the sidebar (default: the ``logs/`` next to this file), choose
-a file, then inspect the summary and browse/filter individual questions.  The
-``Browse`` tab also flags records that ran out of tokens and triples written in
-the text that the constrained generator never produced (likely hallucinations).
+Two modes (sidebar):
+
+* **Logs viewer** — inspect ``utils/eval_kg.py`` logs: metrics, error analysis
+  and per-question browsing.  Default folder: the ``logs/`` next to this file.
+* **KG / index explorer** — load a trie/index (text file of triples, a pasted
+  list, or a PostgreSQL index) and count / enumerate the triples that start
+  with a given text prefix or token list.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -22,6 +26,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from utils import kg_explorer  # noqa: E402
 from utils.log_analysis import (  # noqa: E402
     METRIC_KEYS,
     SENTINEL,
@@ -91,15 +96,12 @@ def _render_record(record: dict):
         st.json(record)
 
 
-def main():
-    st.set_page_config(page_title="ReFactX log viewer", layout="wide")
-    st.title("ReFactX log viewer")
-
+def render_logs():
     with st.sidebar:
         st.header("Logs")
         folder = st.text_input("Folder", value=str(DEFAULT_FOLDER))
         show_all = st.checkbox("Show all files (not just *.out*)", value=False)
-        if st.button("Refresh"):
+        if st.button("Refresh logs"):
             st.cache_data.clear()
 
     folder_path = Path(folder).expanduser()
@@ -249,6 +251,122 @@ def main():
         )
         st.divider()
         _render_record(records[pick])
+
+
+@st.cache_resource(show_spinner="Loading index…")
+def _load_index(kind, payload, tokenizer_name, add_special_tokens, configkey, cache, mtime):
+    # ``mtime`` only invalidates the cache when the source file changes.
+    if kind == "postgres":
+        index = kg_explorer.load_postgres_index(payload, configkey=configkey, cache=cache)
+        name = getattr(index, "tokenizer_name", None) or tokenizer_name
+        tokenizer = kg_explorer.get_tokenizer(name)
+        index.set_tokenizer(tokenizer)
+    else:
+        tokenizer = kg_explorer.get_tokenizer(tokenizer_name)
+        if kind == "file":
+            index = kg_explorer.load_file_index(
+                payload, tokenizer, add_special_tokens=add_special_tokens)
+        else:  # pasted list of triples, one per line
+            index = kg_explorer.load_lines_index(
+                payload.splitlines(), tokenizer, add_special_tokens=add_special_tokens)
+    return index, tokenizer
+
+
+def render_explorer():
+    with st.sidebar:
+        st.header("Index source")
+        label = st.radio("Source", ["Triple file (.txt)", "Triple list (paste)",
+                                    "PostgreSQL index URL"])
+        tokenizer_name = st.text_input("Tokenizer", value="Qwen/Qwen3.5-4B")
+        add_special = st.checkbox("add_special_tokens", value=False)
+        with st.expander("PostgreSQL options"):
+            configkey = st.number_input("configkey", value=-200, step=1)
+            cache = st.text_input("cache", value="simple",
+                                  help="'simple', 'none', ...")
+        if st.button("Reload"):
+            st.cache_resource.clear()
+
+        payload = None
+        kind = {"Triple file (.txt)": "file",
+                "Triple list (paste)": "lines",
+                "PostgreSQL index URL": "postgres"}[label]
+        mtime = 0.0
+        if kind == "file":
+            path = st.text_input("Path to triples (.txt)")
+            if path:
+                payload = str(Path(path).expanduser())
+                mtime = os.path.getmtime(payload) if os.path.isfile(payload) else 0.0
+        elif kind == "lines":
+            payload = st.text_area("One triple per line", height=160)
+        else:
+            payload = st.text_input("postgresql://user:pwd@host:port/db?tablename=t")
+
+    st.subheader("Index explorer")
+    if not payload or (kind != "lines" and not payload.strip()):
+        st.info("Select a source in the sidebar and provide it to load an index.")
+        return
+
+    try:
+        index, tokenizer = _load_index(
+            kind, payload, tokenizer_name, add_special, int(configkey), cache, mtime)
+    except Exception as exc:
+        st.error(f"Failed to load index: {exc}")
+        return
+
+    try:
+        size = len(index)
+    except Exception:
+        size = "?"
+    st.success(f"Loaded {type(index).__name__} — {size} triples")
+
+    st.markdown("**Query**")
+    c1, c2 = st.columns([2, 2])
+    text = c1.text_input("Prefix (text)", value="")
+    tokens_json = c2.text_input("…or token list (JSON array of ids)", value="")
+    limit = st.slider("Max triples to enumerate", 1, 1000, 50)
+
+    if not (text or tokens_json):
+        st.caption("Type a prefix (text or token list) to count/enumerate matching triples.")
+        return
+
+    try:
+        tokens = kg_explorer.parse_tokens(text, tokens_json, tokenizer, add_special)
+    except Exception as exc:
+        st.error(f"Bad query: {exc}")
+        return
+
+    report = kg_explorer.prefix_report(index, tokens, tokenizer, limit=limit)
+    if report["note"]:
+        st.warning(report["note"])
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("triples starting with prefix", report["count"])
+    m2.metric("tokens", len(tokens))
+    m3.metric("shown", len(report["triples"]))
+    st.text_input("decoded prefix", value=report["decoded"], disabled=True)
+    st.caption(f"tokens: {tokens}")
+
+    if report["next"]:
+        st.markdown("**Next tokens**")
+        st.dataframe(pd.DataFrame(report["next"]), width="stretch", hide_index=True)
+
+    if report["triples"]:
+        st.markdown("**Matching triples**")
+        rows = [{"tokens": s, "triple": t} for s, t in report["triples"]]
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
+                     height=320)
+    if report.get("truncated"):
+        st.caption(f"Showing the first {len(report['triples'])} of {report['count']} triples.")
+
+
+def main():
+    st.set_page_config(page_title="ReFactX tools", layout="wide")
+    st.title("ReFactX tools")
+    mode = st.sidebar.radio("Mode", ["Logs viewer", "KG / index explorer"])
+    if mode == "Logs viewer":
+        render_logs()
+    else:
+        render_explorer()
 
 
 if __name__ == "__main__":
