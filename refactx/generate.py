@@ -368,6 +368,11 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
         self.generated_path_metadata = []
         self._terminal = []
         self._encode_cache = {}
+        # Set when a triple's terminal starts being emitted and cleared once it
+        # is recorded (``_complete``); if generation stops in between (e.g. it
+        # hits max_new_tokens) the triple is never added to the cache.  We keep
+        # it on the state so the caller can report ``incomplete_triples``.
+        self._pending_terminal = False
         self.eot_tokens = self._encode(eot) if eot is not None else []
         # `long_chains` turns each object into the next subject.  Since a path
         # can always be extended while the current entity has relations, that
@@ -599,6 +604,10 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
         return len(self.phase_index) > 0
 
     def _queue_terminal(self, sequence, sentinel=False):
+        if not self._pending_terminal:
+            # A triple has just begun: it is only safe once ``_complete`` runs.
+            self._pending_terminal = True
+            self.state.incomplete_triples += 1
         text = ' .' + self._decode(self.eot_tokens)
         if sentinel:
             # An explicit object standing for "nothing new down this branch".
@@ -608,6 +617,9 @@ class KnowledgeGraphGeneration(PatternConstrainedGeneration):
             self._complete(sequence)
 
     def _complete(self, sequence):
+        if self._pending_terminal:
+            self._pending_terminal = False
+            self.state.incomplete_triples = max(0, self.state.incomplete_triples - 1)
         self.state.cache_add(sequence, self.start_idx)
         self.state.subtree_cache.reset()
         self.state.sentinel_remaining = []
@@ -884,9 +896,11 @@ class PatternConstrainedState():
 
         self.sentinel_remaining = []
 
-        # KnowledgeGraphGeneration dead-branch bookkeeping, shared across the
-        # several ``<kg>`` blocks of a single answer.
+        # KnowledgeGraphGeneration bookkeeping, shared across the several ``<kg>``
+        # blocks of a single answer.
         self.kg_memory = {}
+        # Triples whose terminal started but was not recorded (truncation).
+        self.incomplete_triples = 0
 
         self.thinking_end_pattern = thinking_end_pattern.lower() if ignore_case and thinking_end_pattern else thinking_end_pattern
         self._thinking_cache_reset_done = False
@@ -938,6 +952,7 @@ class PatternConstrainedState():
         self._first_call = True
         self.active_generation = None
         self.kg_memory = {}
+        self.incomplete_triples = 0
         if clear_patterns:
             self.patterns = []
         self.generation_history = []
@@ -963,6 +978,7 @@ class PatternConstrainedState():
         self.thinking_end_pattern = other.thinking_end_pattern
         self._thinking_cache_reset_done = other._thinking_cache_reset_done
         self.kg_memory = deepcopy(getattr(other, 'kg_memory', {}))
+        self.incomplete_triples = getattr(other, 'incomplete_triples', 0)
 
         self.debug = other.debug
         self.debug_history = deepcopy(other.debug_history) if copy else other.debug_history

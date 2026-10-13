@@ -96,6 +96,36 @@ def aggregate(rows):
     return out
 
 
+def truncation_stats(notes):
+    """Summarise whether the token budget was the bottleneck.
+
+    ``notes`` is a list of dicts with ``hit_max``, ``answered``, ``correct`` and
+    ``n_tokens``.  When a run is truncated a lot and truncated records are much
+    less likely to answer, the budget (not the model's knowledge) is the limit.
+    """
+    n = len(notes)
+    if n == 0:
+        return {"n": 0}
+    truncated = [x for x in notes if x["hit_max"]]
+    full = [x for x in notes if not x["hit_max"]]
+    tokens = [x["n_tokens"] for x in notes if x.get("n_tokens") is not None]
+
+    def mean(rows, key):
+        return sum(r[key] for r in rows) / len(rows) if rows else 0.0
+
+    return {
+        "n": n,
+        "truncated": len(truncated),
+        "truncated_rate": len(truncated) / n,
+        "mean_new_tokens": (sum(tokens) / len(tokens)) if tokens else None,
+        "max_new_tokens": max(tokens) if tokens else None,
+        "truncated_answered": mean(truncated, "answered"),
+        "truncated_correct": mean(truncated, "correct"),
+        "untruncated_answered": mean(full, "answered"),
+        "untruncated_correct": mean(full, "correct"),
+    }
+
+
 def merge_config(ctx, params, cfg):
     """Return effective options: values explicitly passed on the CLI win over config."""
     merged = {}
@@ -399,6 +429,8 @@ def main(ctx, config_path, **params):
             for i, (question, reference, kind) in enumerate(zip(questions, references, kinds)):
                 if batch_start + i < start_from:
                     continue
+                # ``end`` is the number of generated tokens (padding excluded).
+                # If no pad/eos was produced the model ran into the token budget.
                 gen_ids = outputs[i][start_idx:].tolist()
                 end = len(gen_ids)
                 for j, tok in enumerate(gen_ids):
@@ -407,6 +439,8 @@ def main(ctx, config_path, **params):
                         break
                 full_prediction = tokenizer.decode(gen_ids[:end])
                 prediction = refactx.get_answer(full_prediction)
+                stopped = end < len(gen_ids)
+                hit_max_tokens = int(not stopped)
 
                 input_sample = {answer_key: reference, question_key: question, kind_key: kind}
                 precision, recall, f1, correct, dont_know = calculate_metrics(
@@ -414,6 +448,7 @@ def main(ctx, config_path, **params):
 
                 state = logits_processor.states[i, 0]
                 triples = list(map(tokenizer.decode, state.generated_triples))
+                incomplete_triples = int(getattr(state, "incomplete_triples", 0))
 
                 metrics = dict(zip(METRIC_KEYS, (precision, recall, f1, correct, dont_know)))
                 metrics["answered"] = int(bool(prediction))
@@ -425,9 +460,12 @@ def main(ctx, config_path, **params):
                     prediction=prediction,
                     full_prediction=full_prediction,
                     triples=triples,
+                    incomplete_triples=incomplete_triples,
                     kind=kind,
                     evaluation={k: metrics[k] for k in METRIC_KEYS},
                     answered=metrics["answered"],
+                    n_new_tokens=end,
+                    hit_max_tokens=hit_max_tokens,
                 )
                 out_fd.write(json.dumps(record) + "\n")
                 if debug:
@@ -441,6 +479,7 @@ def main(ctx, config_path, **params):
         out_fd.flush()
         overall = []
         per_kind = {}
+        token_notes = []
         with open(output) as in_fd:
             for line in in_fd:
                 line = line.strip()
@@ -457,10 +496,18 @@ def main(ctx, config_path, **params):
                 metrics["answered"] = int(record.get("answered", 0))
                 overall.append(metrics)
                 per_kind.setdefault(record.get("kind"), []).append(metrics)
+                token_notes.append({
+                    "kind": record.get("kind"),
+                    "hit_max": int(record.get("hit_max_tokens", 0)),
+                    "answered": int(record.get("answered", 0)),
+                    "correct": evaluation.get("correct", 0),
+                    "n_tokens": record.get("n_new_tokens"),
+                })
 
         summary = {
             "macro": aggregate(overall),
             "by_kind": {k: aggregate(v) for k, v in sorted(per_kind.items(), key=lambda kv: str(kv[0]))},
+            "truncation": truncation_stats(token_notes),
             "n": len(overall),
             "date": get_utc_date_and_time(),
         }
@@ -476,6 +523,14 @@ def main(ctx, config_path, **params):
     for kind, m in summary["by_kind"].items():
         print(f"  {str(kind):10s} n={m['n']:4d} f1={m['f1']:.3f} "
               f"acc={m['correct']:.3f} dk={m['dont_know']:.3f} ans={m['answered']:.3f}")
+    t = summary.get("truncation", {})
+    if t.get("n"):
+        print("=== Truncation / tokens ===")
+        print(f"  truncated      {t['truncated']}/{t['n']} ({t['truncated_rate']:.1%})")
+        if t.get("mean_new_tokens") is not None:
+            print(f"  tokens         mean {t['mean_new_tokens']:.1f}  max {t['max_new_tokens']}")
+        print(f"  truncated      answered={t['truncated_answered']:.3f} correct={t['truncated_correct']:.3f}")
+        print(f"  non-truncated  answered={t['untruncated_answered']:.3f} correct={t['untruncated_correct']:.3f}")
     print("Summary written to", output)
 
 

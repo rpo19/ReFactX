@@ -439,5 +439,34 @@ class TestKnowledgeGraphDeadBranches(_KGTestMixin, unittest.TestCase):
         self.assertIn('no further records', text)
 
 
+class TestKnowledgeGraphIncompleteTriples(_KGTestMixin, unittest.TestCase):
+    """A triple whose terminal is not finished must be flagged as incomplete."""
+
+    def test_counter_set_then_cleared(self):
+        state, index = self._new_state_and_index()
+        gen = self._make_gen(state, index)
+        seq = []
+        self._feed(gen, seq, self._encode(' <Paris>'))
+        self._feed(gen, seq, self._encode(' <capital of>'))
+        self._feed(gen, seq, self._encode(' <France>'))
+        # This call advances to the terminal and emits its first token only.
+        self._constrain(gen, seq)
+        self.assertEqual(state.incomplete_triples, 1)
+        # Finishing the terminal records the triple and clears the counter.
+        self._drain(gen, seq)
+        self.assertTrue(gen.done)
+        self.assertEqual(state.incomplete_triples, 0)
+
+    def test_completed_triple_never_counts(self):
+        state, index = self._new_state_and_index()
+        gen = self._make_gen(state, index)
+        seq = []
+        self._feed(gen, seq, self._encode(' <Paris>'))
+        self._feed(gen, seq, self._encode(' <capital of>'))
+        self._feed(gen, seq, self._encode(' <France>'))
+        self._drain(gen, seq)
+        self.assertEqual(state.incomplete_triples, 0)
+
+
 if __name__ == '__main__':
     unittest.main()
