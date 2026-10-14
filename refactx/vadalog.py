@@ -76,13 +76,16 @@ class VadalogGeneration(PatternConstrainedGeneration):
     def __init__(self, state, tokenizer, start_idx,
                  open_text=DEFAULT_OPEN, close_text=DEFAULT_CLOSE,
                  engine=None, execute=True, max_code_tokens=None,
-                 grammar=True, grammar_ebnf=None, lexicon=None, entities=None):
+                 grammar=True, grammar_ebnf=None, lexicon=None, entities=None,
+                 analyze=True, require_safe=False):
         super().__init__(state, tokenizer, start_idx)
         self.open_text = open_text
         self.close_text = close_text
         self.engine = engine if engine is not None else VadalogEngine()
         self.execute = execute
         self.max_code_tokens = max_code_tokens
+        self.analyze = analyze
+        self.require_safe = require_safe
         self._close_ids = self._encode(close_text)
         self._forced = []
         self._pending_code = None
@@ -131,9 +134,19 @@ class VadalogGeneration(PatternConstrainedGeneration):
 
     # -- completion --------------------------------------------------------
     def _finish(self, code_text):
-        block = {"code": (code_text or "").strip(), "result": None}
-        if self.execute:
-            block["result"] = self.engine.run(block["code"])
+        code = (code_text or "").strip()
+        block = {"code": code, "result": None}
+        if self.analyze:
+            from refactx.vadalog_analysis import analyze
+            block["analysis"] = analyze(code)
+        if self.require_safe and self.analyze and not block["analysis"]["safe"]:
+            # Symbol table / range restriction failed: do not run the engine.
+            block["result"] = {
+                "ok": False, "result": None,
+                "error": "unsafe block: " + "; ".join(block["analysis"]["violations"]),
+            }
+        elif self.execute:
+            block["result"] = self.engine.run(code)
         self.state.vadalog_blocks.append(block)
         self.done = True
 

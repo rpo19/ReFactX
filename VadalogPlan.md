@@ -8,11 +8,12 @@ properties and variables.
 
 Run with: `branch feat/vadalog`.
 
-> **Status:** Phase 0 ✅, Phase 1 ✅, Phase 2 ✅, Phase 2b ✅.  `refactx/vadalog.py`
-> (`VadalogGeneration`, `VadalogEngine` stub), `refactx/vadalog_grammar.py`
-> + `refactx/grammars/vadalog.ebnf` (xgrammar grammar),
+> **Status:** Phase 0 ✅, Phase 1 ✅, Phase 2 ✅, Phase 2b ✅, Phase 3 ✅.
+> `refactx/vadalog.py` (`VadalogGeneration`, `VadalogEngine` stub),
+> `refactx/vadalog_grammar.py` + `refactx/grammars/vadalog.ebnf` (xgrammar),
 > `refactx/vadalog_lexicon.py` (baked vocabulary),
-> `refactx/vadalog_entities.py` (dynamic entity grounding for large sets),
+> `refactx/vadalog_entities.py` (dynamic entity grounding),
+> `refactx/vadalog_analysis.py` (symbol table + safety),
 > registered in `utils/eval_kg.py` behind `--vadalog`, prompt
 > `prompts/prompt_vadalog_nothink.yaml`, tests `tests/test_vadalog*.py`.
 > The `vadalog` engine is not installed here, so execution degrades to a
@@ -165,23 +166,39 @@ into the grammar; multi-char tokens and the closing quote behave correctly.
 
 ---
 
-## 4. Phase 3 — variables & safety (Challenge 2b)
+## 4. Phase 3 — variables & safety (Challenge 2b)  ✅
 
-The part a plain grammar/regex cannot express — needs decoder state.
+The part a plain grammar/regex cannot express.
 
-- [ ] Maintain a **symbol table** (`VadalogState`): variables introduced so far.
-- [ ] Vadalog is head-first, so:
-  - [ ] head variables: introduce freely from a small closed alphabet
-        (`X, Y, Z, …`);
-  - [ ] body variables: constrain to the already-introduced set (rebuild the
-        variable lexicon each time a name is added).
-- [ ] Enforce **range restriction / safety**: every head variable must appear in
-      the body. Enforce live (body vars ⊆ head vars) and/or validate + reject
-      after generation.
-- [ ] Policy decision (see Open questions): allow body-only variables or not.
+- [x] **Symbol table** (`refactx/vadalog_analysis.py`): parse a block into rules
+      and report ``head_vars`` / ``body_vars`` / ``body_only_vars`` per rule.
+- [x] Variables come from a small closed alphabet (Phase 2 grammar), so head and
+      body variables are drawn from the same set.
+- [x] **Range restriction / safety**: every **head** variable must appear in the
+      body (so the head is ground); facts must be variable-free.
+- [x] **Arity consistency**: a predicate may not be used with two arities.
+- [x] Wired into `VadalogGeneration(analyze=True, require_safe=False)`: the block
+      stores its `analysis`; with `require_safe=True` an unsafe block is **not
+      executed** (a structured error is recorded instead).
+- [x] Tests: `tests/test_vadalog_analysis.py`.
 
-**Acceptance:** every emitted rule is safe (head vars ⊆ body vars); repeated
-variable names within a rule are consistent.
+**Correction to the original plan.** The plan said "body vars ⊆ head vars".
+The correct Datalog notion is the **opposite**: safety requires
+**head vars ⊆ body vars** — body-only (existential) variables are *allowed and
+necessary* (e.g. the transitive rule's `Z`).  We implement the standard rule and
+report body-only variables in the analysis.
+
+**Why post-hoc + not live.** Vadalog is head-first, so the body is not known
+while the head is generated; head-variable binding can only be checked once the
+body is complete.  We therefore validate at block end and optionally skip
+execution.  (A stricter live policy — "no body-only variables" — is possible as
+an opt-in using the same char∧token side-channel as Phase 2b; kept as future work.)
+
+**Acceptance:** every emitted rule is reported safe iff head vars ⊆ body vars;
+arity conflicts are flagged; `require_safe` blocks execution of unsafe programs.
+✅ (136 tests pass overall.)
+
+**Files:** `refactx/vadalog_analysis.py`, `refactx/vadalog.py`, `tests/test_vadalog_analysis.py`.
 
 ---
 
