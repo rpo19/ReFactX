@@ -326,6 +326,75 @@ reusable; engine failures degrade gracefully.
 
 ---
 
+## General future improvement — tokenizer-agnostic (char-level) indexes
+
+*(Beyond Vadalog: this applies to ReFactX broadly — `<kg>`,
+`KnowledgeGraphGeneration`, `FactGeneration`, and the Postgres/fts indexes.)*
+
+**Problem.** Today an index (`DictIndex`, `PostgresTrieIndex`) stores **token
+ids produced by the indexing tokenizer**.  `next_tokens(sequence)` therefore
+only works when the model that generates is tokenized *exactly* the same way.
+Serving a different model (different vocab, different merges, different
+whitespace handling) means **re-indexing** for every tokenizer, and even the
+same model can surprise you because BPE splits a string differently depending
+on context (no token healing).
+
+**Observation.** A constraint is a property of the **string language**, not of
+the tokenizer — tokenization is just a rendering of that string.  Phase 2b's
+`CharTrie ∧ TokenTrie` trick makes this concrete: keep the language at the
+**character** level (a char trie / automaton), map it to token ids with a
+character trie of the *serving* model's vocabulary, and a candidate token is
+allowed iff its **whole decoded text** stays inside the language.  This is exactly
+what xgrammar does to reconcile a grammar with a tokenizer (`TokenizerInfo`).
+
+**Consequence.** One index can constrain **any** model/tokenizer: build the
+char-level index once, then, per model, build only the `TokenTrie` from its
+`TokenizerInfo`.  Index once, serve Qwen / Llama / Gemma — no re-indexing — and
+the result is token-boundary safe (token healing built in).
+
+**What it would take**
+
+- [ ] Keep a **character-level representation** at index time: the strings (or a
+      char trie) instead of only token ids.  Compress it (minimized DFA / trie→
+      regex) so large KGs stay affordable.
+- [ ] Add a **`TokenizerAdapter`** (a `TokenTrie` over the serving model's vocab,
+      built from `TokenizerInfo`) shared across generation classes.
+- [ ] Generalize `next_tokens` to `allowed_tokens(char_state) → token ids` for
+      `DictIndex`/Postgres (i.e. a char-level variant of `DictIndex`).
+- [ ] Carry **counts / numleaves** in char space (or reconstruct them) so
+      duplicate-avoidance (`subtract_tokens`) and sampled `next_tokens` keep working.
+- [ ] For the **Postgres** index: either store a char-level trie/subtree, or
+      convert token-level subtrees on the fly using the adapter.
+- [ ] Deprecate the indexing-time tokenizer dependency; make the tokenizer a
+      **serving-time** input.
+
+**Caveats / limits**
+
+- Extra state: char tries are larger than token tries; mitigate with DFA
+  minimization / regex compilation.
+- Byte-level BPE and special/invalid-UTF-8 tokens: build `TokenTrie` from
+  decoded text and handle multi-byte cases explicitly.
+- Cost: the char∧token DFS runs per step; fine in the prototype (~ms), but measure
+  on very large languages and cache per char-state.
+- Only the **vocabulary** is needed cross-model, so this stays cheap to adapt
+  (`TokenizerInfo.from_huggingface`); the model weights are irrelevant.
+
+**Prototype sketch**
+
+```python
+char_index = CharIndex.from_strings(entities)      # once, tokenizer-agnostic
+adapter   = TokenizerAdapter(model_tokenizer)      # TokenTrie + vocab texts/allowed
+for step:
+    state = char_index.step(state, decoded_text)   # char state for the cursor
+    allowed = adapter.tokens_for(char_index, state) # char language ∧ vocab
+    mask[mask_idx] = -inf; mask[mask_idx, allowed] = 0
+```
+
+This would also let the **grammar** route (Phase 1) and the **index** route
+(`<kg>`) share one tokenizer-adapter mechanism.
+
+---
+
 ## Risks
 
 - Tokenizer quirks around whitespace / quotes / newlines (xgrammar healing helps).
