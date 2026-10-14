@@ -76,7 +76,7 @@ class VadalogGeneration(PatternConstrainedGeneration):
     def __init__(self, state, tokenizer, start_idx,
                  open_text=DEFAULT_OPEN, close_text=DEFAULT_CLOSE,
                  engine=None, execute=True, max_code_tokens=None,
-                 grammar=True, grammar_ebnf=None):
+                 grammar=True, grammar_ebnf=None, lexicon=None):
         super().__init__(state, tokenizer, start_idx)
         self.open_text = open_text
         self.close_text = close_text
@@ -96,8 +96,11 @@ class VadalogGeneration(PatternConstrainedGeneration):
         if grammar:
             try:
                 from refactx.vadalog_grammar import VadalogGrammar
-                self._grammar = VadalogGrammar(tokenizer, open_text, close_text,
-                                               grammar_ebnf)
+                ebnf = grammar_ebnf
+                if lexicon:
+                    from refactx.vadalog_lexicon import build_grounded_ebnf
+                    ebnf = build_grounded_ebnf(open_text, close_text, **lexicon)
+                self._grammar = VadalogGrammar(tokenizer, open_text, close_text, ebnf)
                 self._matcher = self._grammar.new_matcher()
                 self._bitmask = self._grammar.allocate_bitmask()
             except Exception as exc:  # pragma: no cover - environment dependent

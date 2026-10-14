@@ -8,13 +8,14 @@ properties and variables.
 
 Run with: `branch feat/vadalog`.
 
-> **Status:** Phase 0 ✅ and Phase 1 ✅ done.  `refactx/vadalog.py`
+> **Status:** Phase 0 ✅, Phase 1 ✅, Phase 2 ✅.  `refactx/vadalog.py`
 > (`VadalogGeneration`, `VadalogEngine` stub), `refactx/vadalog_grammar.py`
-> + `refactx/grammars/vadalog.ebnf` (xgrammar-compiled Vadalog grammar),
-> registered in `utils/eval_kg.py` behind `--vadalog`, prompt
-> `prompts/prompt_vadalog_nothink.yaml`, tests `tests/test_vadalog.py` and
-> `tests/test_vadalog_grammar.py`.  The `vadalog` engine is not installed here,
-> so execution degrades to a structured error until Phase 4.
+> + `refactx/grammars/vadalog.ebnf` (xgrammar grammar),
+> `refactx/vadalog_lexicon.py` (vocabulary grounding), registered in
+> `utils/eval_kg.py` behind `--vadalog`, prompt
+> `prompts/prompt_vadalog_nothink.yaml`, tests `tests/test_vadalog*.py`.
+> The `vadalog` engine is not installed here, so execution degrades to a
+> structured error until Phase 4.
 
 ---
 
@@ -97,27 +98,40 @@ the grammar as a safety net.
 
 ---
 
-## 3. Phase 2 — entity & relation lexicons (Challenge 2a)
+## 3. Phase 2 — entity & relation lexicons (Challenge 2a)  ✅
 
-Bring the vocabulary under control (same idea as `KnowledgeGraphGeneration`).
+**Approach chosen: encode the vocabulary into the grammar as alternations**
+(`refactx/vadalog_lexicon.py`), rather than a separate token mask intersected at
+run time.  xgrammar then handles tokenization, so this is token-boundary safe and
+needs no runtime slot tracker.  Cost is grammar size → relations/variables are
+cheap, entities are capped (see below).
 
-- [ ] **Entity lexicon**: `DictIndex` built from `api.entity_index()` (reuse the
-      eval's index construction).
-- [ ] **Predicate/relation lexicon**: `DictIndex` of schema predicates
-      (`api.property_strings` universe), split by position:
-  - [ ] *body* atoms (EDB) → existing predicates only;
-  - [ ] *head* atom (IDB) → allow a known target set (e.g. `control`,
-        `ultimate_control`) and forbid collisions with EDB names.
-- [ ] Track the **expected slot** while parsing (entity | relation | number |
-      variable | none) — a lightweight incremental parser parallel to the matcher
-      (or derive it from the grammar stack).
-- [ ] In `constrain`, intersect: `allowed = grammar_bitmask ∩ lexicon_tokens(slot)`.
-- [ ] Normalization: one canonical quoting/escaping for entities, shared by the
-      lexicon builder and (later) the executor.
+- [x] **Body predicates** (EDB) → `body_pred ::= "own" | "is_own" | ...`.
+- [x] **Head predicates** (IDB) → `head_pred ::= "control" | ...`; defaults to the
+      body set; forbids using an EDB name as a fresh head-fact predicate.
+- [x] **Variables** → a small alphabet (`"X" | "Y" | "Z"`).
+- [x] **Entity constants** → `string ::= "\"" ("Acme Corp" | "Globex") "\""`,
+      optional and bounded by `MAX_ENTITIES` (a few thousand); oversized sets
+      raise, so the caller passes a question-relevant subset.
+- [x] `collect_relations(api, sample=...)` builds the predicate set from
+      `api.property_strings`.
+- [x] Wired via `VadalogGeneration(lexicon={...})`; unset terminals fall back to
+      the generic grammar (Phase 1).
+- [x] Tests: `tests/test_vadalog_lexicon.py` (render, collect, accept/reject a
+      grounded grammar, and a token-level generation test).
 
-**Acceptance:** generated atoms only reference existing predicates; entity
-arguments only reference entities present in the index; invalid names never
-reach the model's output.
+**Deviation from the original plan:** we don't use a `DictIndex` + slot tracker +
+mask intersection.  Rationale: grammar-level alternation is simpler, exact w.r.t.
+tokenization, and sufficient for the small predicate/variable sets; the
+intended `DictIndex`/tracker route is the fallback for **unbounded** entity sets
+(100k+), which we cap instead.  If full-KG entity grounding is needed, add a
+Phase 2b using a char-trie ∧ vocab-token-trie mask (token-boundary safe).
+
+**Acceptance:** generated atoms only reference grounded predicates; entity
+arguments only reference the entity set; variables only the alphabet; invalid
+names are rejected by the grammar.  ✅ (112 tests pass overall).
+
+**Files:** `refactx/vadalog_lexicon.py`, `refactx/vadalog.py`, `tests/test_vadalog_lexicon.py`.
 
 ---
 
