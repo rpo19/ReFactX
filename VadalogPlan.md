@@ -8,11 +8,12 @@ properties and variables.
 
 Run with: `branch feat/vadalog`.
 
-> **Status:** Phase 0 ✅, Phase 1 ✅, Phase 2 ✅.  `refactx/vadalog.py`
+> **Status:** Phase 0 ✅, Phase 1 ✅, Phase 2 ✅, Phase 2b ✅.  `refactx/vadalog.py`
 > (`VadalogGeneration`, `VadalogEngine` stub), `refactx/vadalog_grammar.py`
 > + `refactx/grammars/vadalog.ebnf` (xgrammar grammar),
-> `refactx/vadalog_lexicon.py` (vocabulary grounding), registered in
-> `utils/eval_kg.py` behind `--vadalog`, prompt
+> `refactx/vadalog_lexicon.py` (baked vocabulary),
+> `refactx/vadalog_entities.py` (dynamic entity grounding for large sets),
+> registered in `utils/eval_kg.py` behind `--vadalog`, prompt
 > `prompts/prompt_vadalog_nothink.yaml`, tests `tests/test_vadalog*.py`.
 > The `vadalog` engine is not installed here, so execution degrades to a
 > structured error until Phase 4.
@@ -132,6 +133,35 @@ arguments only reference the entity set; variables only the alphabet; invalid
 names are rejected by the grammar.  ✅ (112 tests pass overall).
 
 **Files:** `refactx/vadalog_lexicon.py`, `refactx/vadalog.py`, `tests/test_vadalog_lexicon.py`.
+
+---
+
+## 3b. Phase 2b — dynamic entity grounding (large entity sets)  ✅
+
+Phase 2 bakes entities into the grammar, which does not scale past a few
+thousand names.  Phase 2b grounds the **string constants** at decode time so the
+entity set can be arbitrarily large (`refactx/vadalog_entities.py`):
+
+- [x] `CharTrie` over the entity names tracks the string content being typed.
+- [x] `TokenTrie` over the vocabulary maps character constraints to token ids —
+      **token-boundary safe** (a multi-char token is allowed iff its whole text
+      stays a valid entity prefix).
+- [x] `EntityGrounder.restrict(mask, idx, text)` intersects with the grammar mask
+      by *adding* rows (``0`` allowed / ``-inf`` disallowed):
+  - *outside* a string: prune quote tokens that cannot open a valid entity
+    (precomputed, static);
+  - *inside* a string: allow only tokens extending the current content prefix,
+    plus the closing quote when the content is a complete entity name.
+- [x] Handles escapes; precomputed vocab tries are cached per tokenizer.
+- [x] Wired via `VadalogGeneration(..., entities=[...])`.
+- [x] Tests: `tests/test_vadalog_entities.py` (scanning, simulate, restrict,
+      token-level completion) with a 50k-name set (build ~1.6s, ~8ms/step).
+
+**Acceptance:** entities are restricted to the supplied set without baking them
+into the grammar; multi-char tokens and the closing quote behave correctly.
+✅ (125 tests pass overall.)
+
+**Files:** `refactx/vadalog_entities.py`, `refactx/vadalog.py`, `tests/test_vadalog_entities.py`.
 
 ---
 

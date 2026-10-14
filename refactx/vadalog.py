@@ -76,7 +76,7 @@ class VadalogGeneration(PatternConstrainedGeneration):
     def __init__(self, state, tokenizer, start_idx,
                  open_text=DEFAULT_OPEN, close_text=DEFAULT_CLOSE,
                  engine=None, execute=True, max_code_tokens=None,
-                 grammar=True, grammar_ebnf=None, lexicon=None):
+                 grammar=True, grammar_ebnf=None, lexicon=None, entities=None):
         super().__init__(state, tokenizer, start_idx)
         self.open_text = open_text
         self.close_text = close_text
@@ -106,6 +106,16 @@ class VadalogGeneration(PatternConstrainedGeneration):
             except Exception as exc:  # pragma: no cover - environment dependent
                 self._grammar = None
                 self.grammar_error = str(exc)
+        # Dynamic entity grounding for large entity sets (Phase 2b).
+        self._entities = None
+        self.entity_error = None
+        if entities:
+            try:
+                from refactx.vadalog_entities import EntityGrounder
+                self._entities = EntityGrounder(tokenizer, entities)
+            except Exception as exc:  # pragma: no cover - environment dependent
+                self._entities = None
+                self.entity_error = str(exc)
         if not hasattr(state, "vadalog_blocks"):
             state.vadalog_blocks = []
 
@@ -174,6 +184,10 @@ class VadalogGeneration(PatternConstrainedGeneration):
                     self._finish(text.split(self.close_text, 1)[0])
                     return
                 self._grammar.apply_mask(mask, mask_idx, self._matcher, self._bitmask)
+                if self._entities is not None:
+                    self._entities.restrict(mask, mask_idx, text)
                 return
 
         mask[mask_idx, :] = 0  # unconstrained inside the block
+        if self._entities is not None:
+            self._entities.restrict(mask, mask_idx, text)
