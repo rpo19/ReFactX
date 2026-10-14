@@ -59,6 +59,7 @@ from refactx.generate import (
     ConstrainedStateList,
     KnowledgeGraphGeneration,
 )
+from refactx.vadalog import VadalogGeneration
 
 from utils.eval import calculate_metrics, get_utc_date_and_time, logrotate
 
@@ -212,6 +213,8 @@ def select_questions(df, n, shuffle=False, stratify_key=None, seed=None):
               help="Keep long-chain walks acyclic (no entity/edge revisited).")
 @click.option("--sentinel", is_flag=True, default=False,
               help="Emit an explicit <no further records> object when a branch is exhausted.")
+@click.option("--vadalog", is_flag=True, default=False,
+              help="Enable the <vadalog>{code}</vadalog> command (Phase 0: unconstrained block).")
 @click.option("--do-sample", is_flag=True, default=False, help="Sample instead of greedy decoding.")
 @click.option("--temperature", type=float, default=0.7, show_default=True)
 @click.option("--top-p", type=float, default=0.80, show_default=True)
@@ -252,6 +255,7 @@ def main(ctx, config_path, **params):
     avoid_duplicates = opt["avoid_duplicates"]
     forbid_revisits = opt["forbid_revisits"]
     sentinel = opt["sentinel"]
+    vadalog = opt["vadalog"]
     do_sample = opt["do_sample"]
     temperature = opt["temperature"]
     top_p = opt["top_p"]
@@ -351,6 +355,11 @@ def main(ctx, config_path, **params):
         sentinel=sentinel,
         eot=" </kg>\n",
     )
+    if vadalog:
+        logits_processor.add_pattern(
+            "<vadalog>", VadalogGeneration,
+            execute=True,
+        )
 
     generation_config = dict(
         max_new_tokens=max_new_tokens,
@@ -374,6 +383,7 @@ def main(ctx, config_path, **params):
         "avoid_duplicates": avoid_duplicates,
         "forbid_revisits": forbid_revisits,
         "sentinel": sentinel,
+        "vadalog": vadalog,
         "shuffle": shuffle,
         "stratify_key": stratify_key,
         "seed": seed,
@@ -449,6 +459,7 @@ def main(ctx, config_path, **params):
                 state = logits_processor.states[i, 0]
                 triples = list(map(tokenizer.decode, state.generated_triples))
                 incomplete_triples = int(getattr(state, "incomplete_triples", 0))
+                vadalog_blocks = list(getattr(state, "vadalog_blocks", []))
 
                 metrics = dict(zip(METRIC_KEYS, (precision, recall, f1, correct, dont_know)))
                 metrics["answered"] = int(bool(prediction))
@@ -461,6 +472,7 @@ def main(ctx, config_path, **params):
                     full_prediction=full_prediction,
                     triples=triples,
                     incomplete_triples=incomplete_triples,
+                    vadalog_blocks=vadalog_blocks,
                     kind=kind,
                     evaluation={k: metrics[k] for k in METRIC_KEYS},
                     answered=metrics["answered"],

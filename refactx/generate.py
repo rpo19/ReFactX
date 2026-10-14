@@ -901,6 +901,8 @@ class PatternConstrainedState():
         self.kg_memory = {}
         # Triples whose terminal started but was not recorded (truncation).
         self.incomplete_triples = 0
+        # ``<vadalog>`` blocks produced during this answer.
+        self.vadalog_blocks = []
 
         self.thinking_end_pattern = thinking_end_pattern.lower() if ignore_case and thinking_end_pattern else thinking_end_pattern
         self._thinking_cache_reset_done = False
@@ -953,6 +955,7 @@ class PatternConstrainedState():
         self.active_generation = None
         self.kg_memory = {}
         self.incomplete_triples = 0
+        self.vadalog_blocks = []
         if clear_patterns:
             self.patterns = []
         self.generation_history = []
@@ -979,6 +982,7 @@ class PatternConstrainedState():
         self._thinking_cache_reset_done = other._thinking_cache_reset_done
         self.kg_memory = deepcopy(getattr(other, 'kg_memory', {}))
         self.incomplete_triples = getattr(other, 'incomplete_triples', 0)
+        self.vadalog_blocks = deepcopy(getattr(other, 'vadalog_blocks', []))
 
         self.debug = other.debug
         self.debug_history = deepcopy(other.debug_history) if copy else other.debug_history

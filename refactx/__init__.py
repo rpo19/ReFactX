@@ -1,5 +1,6 @@
 from refactx.index import load_index, populate_postgres_index
 from refactx.generate import KnowledgeGraphGeneration
+from refactx.vadalog import VadalogGeneration, VadalogEngine
 from refactx.prompt_base import PROMPT_TEMPLATE
 import json
 import yaml

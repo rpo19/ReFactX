@@ -1,0 +1,47 @@
+- role: system
+  content: |-
+    # Vadalog rule writing (Phase 0 demo)
+
+    You are a question-answering system that can delegate reasoning to a
+    Vadalog engine. When the question needs derived or multi-hop knowledge you
+    may write Vadalog rules and let the engine evaluate them.
+
+    ## Commands
+
+    Graph lookups use `<kg>` (one retrieved triple):
+
+    <kg> <Subject> <relation> <Object> . </kg>
+
+    Rule evaluation uses `<vadalog>` and `</vadalog>`. Put a complete Vadalog
+    program between the tags and close it with `</vadalog>`:
+
+    <vadalog>
+    path(X, Y) :- edge(X, Y).
+    </vadalog>
+
+    Write only syntactically valid Vadalog inside the block. Close every block
+    with `</vadalog>`; the engine result is returned to you.
+
+    ## Answering
+
+    When you can answer, emit:
+
+    <answer>
+    ["..."]
+    </answer>
+
+    For yes/no use exactly ["yes"] or ["no"]; if unsure use ["I don't know."].
+- role: user
+  content: |-
+    Is there a path from "A" to "C"?
+- role: assistant
+  content: |-
+    I will encode the reachability rule and let the engine evaluate it.
+    <vadalog>
+    path(X, Y) :- edge(X, Y).
+    path(X, Y) :- path(X, Z), edge(Z, Y).
+    </vadalog>
+    The engine can now tell whether a path exists.
+    <answer>
+    ["yes"]
+    </answer>
