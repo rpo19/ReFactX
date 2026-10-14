@@ -133,6 +133,56 @@ variable names within a rule are consistent.
 
 ---
 
+## 4b. Phase 3b — argument sorts / predicate signatures ("type-constrained")
+
+Extend grounding with **types**: treat each predicate as a typed function and
+require its arguments to inhabit the expected sort.  This is the idea from
+*Type-Constrained Code Generation with Language Models* (Mündler et al., PLDI
+2025, arXiv 2504.09246) adapted to a relational language — their "search over
+inhabitable types" becomes "is there a term of this sort for this position?".
+
+- [ ] `PredicateSignature(name, arity, arg_sorts)` + a `SignatureCatalog`.
+- [ ] **Discover** signatures from what we already have:
+  - [ ] base sorts from the entity `type` column
+        (`data/entities.csv`: `company` / `person`);
+  - [ ] per-relation **domain/range** observed over the entity set
+        (`get_relations` / `get_objects`, or the reasoner);
+  - [ ] declared signatures for derived/IDB predicates
+        (`control`, `ultimate_control`, …).
+- [ ] **Sort inference / unification**: each variable gets the intersection of
+      the domains of the positions it occurs in; require a non-empty,
+      consistent sort (a variable cannot be both `company` and `person`).
+- [ ] Constrain **constant** arguments to entities of the required sort
+      (lexicon filtered by sort).
+- [ ] **Arity** check: atoms must match the predicate arity (grammar + signature).
+- [ ] **Inhabitable-term / reachability** check: at a position requiring sort
+      `S`, ensure some variable-of-sort-`S` or constant-of-sort-`S` can inhabit
+      it; otherwise mask (dead end) — the direct analogue of their type
+      reachability.
+- [ ] **Head predicate policy**: head must be a declared IDB (or a freshly
+      declared predicate) with a signature; forbid reusing an EDB name as head.
+
+**Sources for the signatures (semantic web).** We can bootstrap the catalog
+from standards rather than hand-writing it:
+
+| Source | Maps to |
+|---|---|
+| entity `type` column | base sorts (`company`, `person`) |
+| OWL/RDFS `rdfs:domain` / `rdfs:range` | per-argument sorts of a predicate |
+| `owl:ObjectProperty` / `owl:DatatypeProperty` | object vs literal argument |
+| Freebase / Neo4j relation types | domain/range per relation |
+| **SHACL** `sh:path` + `sh:class` | allowed object class (range) |
+| SHACL `sh:datatype` / `sh:nodeKind` | literal type / IRI vs literal |
+| SHACL `sh:minCount` / `sh:maxCount` | cardinality (catalog sanity) |
+| SHACL `sh:in` | enumerations (allowed constants) |
+| SHACL `sh:or` / `sh:and` | disjunction/conjunction of allowed sorts |
+| Vadalog data types (`int`, `string`, …) | literal sorts |
+
+**Acceptance:** every argument is sort-consistent, every variable has a coherent
+sort, no position is uninhabitable, arities match the catalog.
+
+---
+
 ## 5. Phase 4 — execution & result injection
 
 - [ ] `VadalogEngine` adapter: parse the block, run it through the `vadalog`
@@ -195,6 +245,32 @@ reusable; engine failures degrade gracefully.
 5. **Failure mode on engine error**: hard-stop the `<vadalog>` block vs retry.
 6. **Scope of v1 grammar**: which Vadalog features are in/out (recursion,
    aggregates, disjunction).
+7. **Sort granularity**: base sorts only (`company`/`person`) vs finer classes
+   (subclasses, Freebase types); how strict (hard constraint vs soft prior)?
+8. **Signature source**: data-derived domain/range vs OWL (`rdfs:domain/range`)
+   vs **SHACL shapes** vs hand-declared — and how to merge/override them.
+9. **Subsumption**: is `company` a subtype of `legal entity`? Needed for
+   subclass-aware sort unification; do we model a small class hierarchy?
+
+---
+
+## Related work / inspiration
+
+- **Type-Constrained Code Generation with Language Models** — Mündler, He, Wang,
+  Sen, Song, Vechev (PLDI 2025, arXiv 2504.09246).
+  Repo: `github.com/eth-sri/type-constrained-code-generation`.
+  *Same paradigm* (constrained decoding with an incremental, context-carrying
+  parser; "every prefix completable to a valid program") but for a *typed GPL
+  (TypeScript)*; the central problem there is **type reachability / inhabitable
+  types**, which maps here to the Phase 3b "inhabitable-term" check.  Their
+  `ExistingIdentifierParserState` (identifiers restricted to in-scope ones) is
+  the blueprint for our **variable symbol table** + entity/property lexicons.
+  They hand-roll the automaton per construct because a generic CFG can't carry
+  semantics; we keep a generic grammar engine (xgrammar) for syntax and add a
+  **semantic side-channel** for grounding/sorts.
+- **Semantic web schema sources**: RDFS/OWL (`rdfs:domain`, `rdfs:range`,
+  `owl:ObjectProperty`/`DatatypeProperty`), Freebase schema, and **SHACL**
+  shapes — see the mapping table in Phase 3b.
 
 ---
 
@@ -204,3 +280,5 @@ reusable; engine failures degrade gracefully.
 - Keeping the parallel parser's "expected slot" in sync with the grammar stack.
 - Grammar↔lexicon mask intersection must be correct and cheap per token.
 - Engine variability / non-termination on unsafe rules (mitigate with validation).
+- Signature discovery noise: observed domain/range can be incomplete/over-broad;
+  sort unification must degrade gracefully (widen, don't dead-end).
