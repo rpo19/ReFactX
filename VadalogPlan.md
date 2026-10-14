@@ -8,11 +8,13 @@ properties and variables.
 
 Run with: `branch feat/vadalog`.
 
-> **Status:** Phase 0 ✅ done (`refactx/vadalog.py`, `VadalogEngine` stub,
-> registered in `utils/eval_kg.py` behind `--vadalog`, trivial prompt
-> `prompts/prompt_vadalog_nothink.yaml`, tests `tests/test_vadalog.py`).
-> The `vadalog` engine is not installed here, so execution degrades to a
-> structured error until Phase 4.
+> **Status:** Phase 0 ✅ and Phase 1 ✅ done.  `refactx/vadalog.py`
+> (`VadalogGeneration`, `VadalogEngine` stub), `refactx/vadalog_grammar.py`
+> + `refactx/grammars/vadalog.ebnf` (xgrammar-compiled Vadalog grammar),
+> registered in `utils/eval_kg.py` behind `--vadalog`, prompt
+> `prompts/prompt_vadalog_nothink.yaml`, tests `tests/test_vadalog.py` and
+> `tests/test_vadalog_grammar.py`.  The `vadalog` engine is not installed here,
+> so execution degrades to a structured error until Phase 4.
 
 ---
 
@@ -59,33 +61,39 @@ hands it to a stub executor and stores the result; existing tests still pass
 
 ---
 
-## 2. Phase 1 — grammar-constrained generation (Challenge 1)
+## 2. Phase 1 — grammar-constrained generation (Challenge 1)  ✅
 
-- [ ] Write a Vadalog **EBNF** for a conservative subset (`refactx/grammars/vadalog.ebnf`):
-  - [ ] rule: `head :- body .`
-  - [ ] atom: `pred ( term { , term } )`
-  - [ ] term: variable | string | number | arithmetic expr (optional)
-  - [ ] body: atoms joined by `,` and `;`, negation `~`, comparisons
-  - [ ] optional whitespace between tokens (Vadalog is whitespace-insensitive)
-  - [ ] explicitly **out of scope** in v1: recursion, aggregates, `@` annotations
-- [ ] Compile with xgrammar:
-  - [ ] `TokenizerInfo.from_huggingface(tokenizer)` → `GrammarCompiler`
-  - [ ] `compiler.compile_grammar(ebnf)` (or `compile_structural_tag` wrapping the
-        `<vadalog>` tags with the content grammar)
-  - [ ] cache the `CompiledGrammar` (compile once)
-- [ ] Wire the matcher into `VadalogGeneration.constrain`:
-  - [ ] `matcher.accept_token(last)` → `fill_next_token_bitmask(bitmask, 0)` →
-        `apply_token_bitmask_inplace(scores, bitmask)`
-  - [ ] handle `is_terminated()` / tag close
-- [ ] Offline grammar tests (`tests/test_vadalog_grammar.py`) using
-      `GrammarMatcher.accept_string` + `is_completed()`: accept valid rules,
-      reject malformed ones — **no model needed**.
+- [x] Vadalog **EBNF** for a conservative subset (`refactx/grammars/vadalog.ebnf`):
+      `rule`, `atom`, `terms`, `term`, `body`, `literal`, `variable`,
+      `identifier`, `string`, `number`, `ws` (negation `~`, disjunction `;`,
+      comparisons and aggregates are out of scope for v1).
+- [x] Compile with xgrammar (`refactx/vadalog_grammar.py`):
+      `TokenizerInfo.from_huggingface` → `GrammarCompiler.compile_grammar`,
+      compiled once and cached per (tokenizer, tags).
+- [x] The `root` rule wraps the content with the tags
+      (`root ::= "<vadalog>" ws program ws "</vadalog>"`), assembled in code;
+      `new_matcher()` consumes the opening tag so the matcher is positioned at
+      the start of the content.
+- [x] Wired into `VadalogGeneration.constrain`: feed new tokens with
+      `accept_token`, then `fill_next_token_bitmask` →
+      `apply_token_bitmask_inplace` to set the mask; the block finishes when
+      `is_completed()` (closing tag accepted).  `grammar=False` disables it;
+      compilation failures fall back to unconstrained.
+- [x] Offline grammar tests (`tests/test_vadalog_grammar.py`) via
+      `accept_string` + `is_completed` and token-level `accept_token` +
+      bitmask — **no model needed**.
 
-**Acceptance:** model output inside `<vadalog>` always parses as Vadalog (subset);
-grammar tests pass; malformed inputs are rejected by the matcher.
+**Accepted:** valid programs (single/multi-rule, strings, negation) are accepted
+at both string and token level; malformed ones are rejected; the generation
+class drives a valid program to completion.  105 tests pass overall.
 
-**Risks:** tokenizer whitespace/quote handling (mitigate with token healing and
-explicit optional-space in the EBNF); grammar growth is iterative.
+**Notes / decisions:** the closing tag is part of the grammar (cleaner than a
+separate structural tag, which expects a JSON-schema content).  `is_completed`
+— not `is_terminated` — marks the end.  `max_code_tokens` forced-close bypasses
+the grammar as a safety net.
+
+**Risks:** tokenizer whitespace/quote handling (xgrammar token healing + explicit
+`ws`); grammar growth is iterative.
 
 ---
 

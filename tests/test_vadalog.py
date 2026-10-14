@@ -49,13 +49,42 @@ class TestVadalogGeneration(unittest.TestCase):
     def _make(self, state, **kw):
         return VadalogGeneration(state, self.tokenizer, 0, **kw)
 
-    def test_unconstrained_inside_block(self):
+    def test_grammar_constrains_inside_block(self):
         state = _state(self.tokenizer)
         gen = self._make(state, engine=VadalogEngine(runner=lambda code: "ok"))
         seq = self._encode(" path(X, Y) :- edge(X, Y). ")
         mask = self._mask()
         gen.constrain(seq, mask, 0)
-        # every token is allowed and the block is not finished yet
+        allowed = set(self._allowed(mask))
+        # constrained: not every token is allowed, but valid Vadalog tokens are
+        self.assertLess(len(allowed), self.vocab)
+        # a complete program: the closing tag may start, '#' may not appear
+        self.assertIn(self._encode("<")[0], allowed)
+        self.assertNotIn(self._encode("#")[0], allowed)
+        self.assertFalse(gen.done)
+
+    def test_grammar_drives_a_valid_program_to_completion(self):
+        state = _state(self.tokenizer)
+        gen = self._make(state, engine=VadalogEngine(runner=lambda code: "R"))
+        seq = []
+        tokens = self._encode(" path(X, Y) :- edge(X, Y). ") + self._encode("</vadalog>")
+        for token in tokens:
+            mask = self._mask()
+            gen.constrain(seq, mask, 0)
+            self.assertIn(token, self._allowed(mask))
+            seq.append(token)
+        gen.constrain(seq, self._mask(), 0)  # close tag fed -> completes
+        self.assertTrue(gen.done)
+        self.assertEqual(len(state.vadalog_blocks), 1)
+        self.assertIn("edge(X, Y)", state.vadalog_blocks[0]["code"])
+        self.assertNotIn("</vadalog>", state.vadalog_blocks[0]["code"])
+
+    def test_unconstrained_when_grammar_disabled(self):
+        state = _state(self.tokenizer)
+        gen = self._make(state, grammar=False, engine=VadalogEngine(runner=lambda code: "ok"))
+        seq = self._encode(" path(X, Y) :- edge(X, Y). ")
+        mask = self._mask()
+        gen.constrain(seq, mask, 0)
         self.assertEqual(len(self._allowed(mask)), self.vocab)
         self.assertFalse(gen.done)
 

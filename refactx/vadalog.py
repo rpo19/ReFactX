@@ -1,13 +1,16 @@
-"""``<vadalog>{code}</vadalog>`` — Phase 0 plumbing.
+"""``<vadalog>{code}</vadalog>`` — constrained Vadalog generation.
 
 Lets the model emit Vadalog rules inside a ``<vadalog> ... </vadalog>`` command,
 collects the code, hands it to the Vadalog engine and stores the result on the
 generation state so the rest of the answer can use it.
 
-Phase 0 intentionally only enforces the **closing tag**: generation inside the
-block is otherwise unconstrained.  Grammar-constrained decoding (Challenge 1)
-and entity/relation/variable lexicons (Challenge 2) are layered on in later
-phases — see ``VadalogPlan.md``.
+* Phase 0 — plumbing: collect the block, execute it, store the result.
+* Phase 1 — **grammar-constrained** decoding: an xgrammar-compiled Vadalog
+  grammar restricts every token so the block is always syntactically valid
+  (Challenge 1).  Set ``grammar=False`` to disable.
+
+Entity/relation/variable grounding (Challenge 2) is layered on in later phases —
+see ``VadalogPlan.md``.
 """
 from __future__ import annotations
 
@@ -72,7 +75,8 @@ class VadalogGeneration(PatternConstrainedGeneration):
 
     def __init__(self, state, tokenizer, start_idx,
                  open_text=DEFAULT_OPEN, close_text=DEFAULT_CLOSE,
-                 engine=None, execute=True, max_code_tokens=None):
+                 engine=None, execute=True, max_code_tokens=None,
+                 grammar=True, grammar_ebnf=None):
         super().__init__(state, tokenizer, start_idx)
         self.open_text = open_text
         self.close_text = close_text
@@ -82,6 +86,23 @@ class VadalogGeneration(PatternConstrainedGeneration):
         self._close_ids = self._encode(close_text)
         self._forced = []
         self._pending_code = None
+        # Grammar constraint (Challenge 1).  Falls back to unconstrained when
+        # xgrammar is unavailable or compilation fails.
+        self._grammar = None
+        self._matcher = None
+        self._bitmask = None
+        self._fed = 0
+        self.grammar_error = None
+        if grammar:
+            try:
+                from refactx.vadalog_grammar import VadalogGrammar
+                self._grammar = VadalogGrammar(tokenizer, open_text, close_text,
+                                               grammar_ebnf)
+                self._matcher = self._grammar.new_matcher()
+                self._bitmask = self._grammar.allocate_bitmask()
+            except Exception as exc:  # pragma: no cover - environment dependent
+                self._grammar = None
+                self.grammar_error = str(exc)
         if not hasattr(state, "vadalog_blocks"):
             state.vadalog_blocks = []
 
@@ -106,19 +127,7 @@ class VadalogGeneration(PatternConstrainedGeneration):
     def constrain(self, sequence, mask, mask_idx):
         text = self._decode(sequence)
 
-        # The model closed the block itself.
-        if not self._forced and self.close_text in text:
-            mask[mask_idx, :] = 0
-            self._finish(text.split(self.close_text, 1)[0])
-            return
-
-        # Too long without closing: force the closing tag.
-        if (not self._forced and self.max_code_tokens is not None
-                and len(sequence) >= self.max_code_tokens):
-            self._forced = list(self._close_ids)
-            self._pending_code = text  # code as of the trigger, close excluded
-
-        # Emit a queued closing-tag token.
+        # A forced closing tag is being emitted (safety net; bypasses grammar).
         if self._forced:
             token = self._forced.pop(0)
             mask[mask_idx, :] = -math.inf
@@ -127,5 +136,41 @@ class VadalogGeneration(PatternConstrainedGeneration):
             if not self._forced:
                 self._finish(self._pending_code)
             return
+
+        # The model (or the grammar) closed the block.
+        if self.close_text in text:
+            mask[mask_idx, :] = 0
+            self._finish(text.split(self.close_text, 1)[0])
+            return
+
+        # Too long without closing: force the closing tag.
+        if (self.max_code_tokens is not None
+                and len(sequence) >= self.max_code_tokens):
+            self._forced = list(self._close_ids)
+            self._pending_code = text  # code at the trigger, close excluded
+            token = self._forced.pop(0)
+            mask[mask_idx, :] = -math.inf
+            if 0 <= token < mask.shape[-1]:
+                mask[mask_idx, token] = 0
+            if not self._forced:
+                self._finish(self._pending_code)
+            return
+
+        if self._grammar is not None:
+            # Advance the grammar matcher with any tokens not fed yet.
+            for token in sequence[self._fed:]:
+                if not self._matcher.accept_token(token):
+                    # Mask and matcher went out of sync; give up constraining.
+                    self._grammar = None
+                    self.grammar_error = "matcher rejected a generated token"
+                    break
+            self._fed = len(sequence)
+            if self._grammar is not None:
+                if self._matcher.is_completed():
+                    mask[mask_idx, :] = 0
+                    self._finish(text.split(self.close_text, 1)[0])
+                    return
+                self._grammar.apply_mask(mask, mask_idx, self._matcher, self._bitmask)
+                return
 
         mask[mask_idx, :] = 0  # unconstrained inside the block

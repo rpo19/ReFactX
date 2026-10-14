@@ -1,0 +1,21 @@
+# Vadalog grammar — conservative subset (GBNF / xgrammar EBNF).
+#
+# Only the *content* is defined here; the ``root`` rule that wraps it with the
+# ``<vadalog> ... </vadalog>`` tags is assembled in code
+# (see ``refactx/vadalog_grammar.py``).
+#
+# Deliberately out of scope for v1: aggregates (#sum, #count, ...), arithmetic
+# expressions, recursion guards and ``@`` annotations.
+
+program ::= rule (ws rule)*
+rule ::= atom ws ":-" ws body ws "." | atom ws "."
+atom ::= identifier ws "(" ws terms? ws ")"
+terms ::= term (ws "," ws term)*
+term ::= variable | string | number
+body ::= literal (ws "," ws literal)*
+literal ::= "~" ws atom | atom
+variable ::= [A-Z] [A-Za-z0-9_]*
+identifier ::= [a-z] [a-zA-Z0-9_]*
+string ::= "\"" ([^"\\] | "\\" [^\n])* "\""
+number ::= "-"? [0-9]+ ("." [0-9]+)?
+ws ::= [ \t\n\r]*
