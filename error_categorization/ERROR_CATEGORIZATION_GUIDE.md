@@ -14,6 +14,57 @@ The model labels above follow the experiment description supplied with these fil
 
 The three larger baseline Mintaka logs are also JSONL evaluation files and should be reviewed with the same extraction procedure. They may be tens of megabytes larger because each example contains the prompt, retrieved triples, the full model generation, and the full formatted sample. Avoid opening any of these files in an editor or printing them with `cat`. Use the commands below to extract only the fields needed for analysis.
 
+## Companion tooling
+
+These utilities complement this guide:
+
+- `utils/advanced_error_analysis.py` performs the mechanical part of the taxonomy
+  automatically (truncation, unparsed answers, normalization mismatches, and a
+  retrieval-vs-selection split of the remaining errors) and renders a Markdown
+  report:
+
+  ```bash
+  python utils/advanced_error_analysis.py logs/*.out.* --output report.md
+  ```
+
+  Its output for the two training-split logs currently under `logs/` is checked in
+  as `error_categorization/advanced_error_analysis_report.md`.
+- `utils/sft_training_analysis.py` does the same across the four SFT-distillation
+  datasets and additionally counts the positive (correct, tool-using) traces by
+  question type, answer shape and tool pattern:
+
+  ```bash
+  python utils/sft_training_analysis.py logs/sft_training/*.out* \
+      --output error_categorization/sft_training_data_report.md
+  ```
+
+  The resulting pool diagnostics and the synthetic-data plan are in
+  `sft_training_data_report.md` and `sft_synthetic_data_plan.md`.
+- `utils/verify_answers.py` (adapted from `feat/verification`) reports how many
+  strict-wrong answers are evaluation artifacts for any dataset:
+
+  ```bash
+  python utils/verify_answers.py logs/sft_training/*.out*
+  ```
+- `utils/classify_behaviors.py` labels every answer with Jev (TypeSafe System
+  One) as `best` / `acceptable` / `bad` / `error`; `utils/generate_count_traces.py`
+  generates verified count traces with DeepSeek; `utils/build_sft_dataset.py`
+  assembles the behaviour-balanced SFT mixture. See
+  `error_categorization/sft_pipeline.md`:
+
+  ```bash
+  python utils/classify_behaviors.py logs/sft_training/*.out* --limit 500 --mock
+  python utils/generate_count_traces.py --input <log> --n 1000 --mock
+  python utils/build_sft_dataset.py --natural logs/behaviors/* --synthetic <counts> \
+      --output logs/sft_training_mix.jsonl --two-wiki-cap 2000
+  ```
+- `utils/logs_viewer.py` (Streamlit) browses any log interactively and shows the
+  per-question hallucination check (`pip install streamlit`, then
+  `streamlit run utils/logs_viewer.py`).
+
+The automatically assigned categories are a triage aid only: confirm any case you
+quote with the evidence-based procedure below.
+
 ## File layout
 
 The checkpoint-720 Mintaka and 2Wiki files contain 202 JSON objects, one per line. The larger baseline Mintaka files use the same JSONL record convention; use the metadata/metrics inspection command below to confirm their exact record counts before assuming the same line numbers.

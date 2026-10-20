@@ -31,6 +31,9 @@ httpindex = [
 	"flask",
 	"gunicorn",
 ]
+viewer = [
+	"streamlit",
+]
 
 [project.scripts]
 refactx-populate-postgres = "refactx.cli.populate_postgres:main"
