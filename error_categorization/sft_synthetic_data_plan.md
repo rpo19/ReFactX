@@ -312,6 +312,7 @@ The pipeline is implemented and documented in `error_categorization/sft_pipeline
 |---|---|
 | Behaviour labels (Jev) | `utils/classify_behaviors.py` (`utils/behaviors.py`, `utils/jev_client.py`) |
 | Synthetic count traces (DeepSeek) | `utils/generate_count_traces.py` |
+| Synthetic backtracking traces (inject / prompted) | `utils/generate_backtracking_traces.py` |
 | Behaviour-aware SFT mixture | `utils/build_sft_dataset.py` |
 
 ```bash

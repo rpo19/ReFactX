@@ -207,7 +207,7 @@ def enforce_ratio(cands: list[dict], best_ratio: float, min_acceptable: float,
 def to_output(c: dict) -> dict:
     record = c["record"]
     behavior = c.get("behavior")
-    return {
+    output = {
         "question": record.get("question"),
         "gt_answer": record.get("gt_answer"),
         "prediction": record.get("prediction"),
@@ -226,6 +226,12 @@ def to_output(c: dict) -> dict:
         "source_log": c["source"],
         "synthetic": bool(record.get("synthetic")),
     }
+    # Behaviour-specific synthetic metadata (e.g. backtracking): keep it so the
+    # mixture can be audited and the DPO pairs reused downstream.
+    for key in ("behaviour_tags", "verification", "generator", "backtracking", "dpo_pair"):
+        if record.get(key) is not None:
+            output[key] = record[key]
+    return output
 
 
 def summarize(cands: list[dict]) -> dict:

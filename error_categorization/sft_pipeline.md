@@ -20,6 +20,7 @@ flowchart LR
 | `utils/jev_client.py` | minimal TypeSafe System One client (retries, usage, cost) |
 | `utils/classify_behaviors.py` | label every record of an eval log with Jev |
 | `utils/generate_count_traces.py` | generate verified `<count>` traces with DeepSeek |
+| `utils/generate_backtracking_traces.py` | generate explore → detect → correct traces (offline injection or prompted) |
 | `utils/build_sft_dataset.py` | select, stratify and write the SFT mixture |
 
 ---
@@ -160,6 +161,42 @@ teacher-wrong-or-no-count` (default targets the behaviour gap).
 Output: an eval-format JSONL with `synthetic: true`, `generator`, `verification`,
 `triples` (the `<fact>` calls) and `prompt`/`full_prediction` ready for
 `utils/sft_train.py`.
+
+---
+
+## 3b. Generate backtracking traces
+
+```bash
+# offline: splice a wrong branch into correct traces (no API key)
+python utils/generate_backtracking_traces.py \
+    --input logs/sft_training/cwq_train_eval_qwen38_27b.out.0 \
+    --select positive --n 700 --mode inject \
+    --output logs/synthetic/backtracking_cwq.jsonl
+
+# prompted generation (needs DEEPSEEK_API_KEY), for derived answers
+python utils/generate_backtracking_traces.py \
+    --input logs/behaviors/twowiki.behaviors --select wrong-with-facts \
+    --n 300 --mode generate --output logs/synthetic/backtracking_2wiki.jsonl
+```
+
+`--mode inject` (default) rebuilds the answer path from a correct trace and
+splices in a real distractor fact from the same record's retrieved triples, an
+explicit rejection that closes the branch, and the recovery. It is
+deterministic, free and grounded by construction, but it needs the answer to be
+the object of a retrieved triple, so it only covers entity answers (measured
+acceptance: CWQ ~57%, WebQSP ~42%, Mintaka ~23%, 2Wiki ~2%). Use `--mode
+generate` for derived answers (counts, lists, comparisons, yes/no), where the
+model is prompted and the `<fact>` tool is simulated from the record's triples.
+
+Both modes enforce the plan's §3.4.3 contract: correct answer, ≥2 `<fact>` calls,
+a correction span after the wrong branch, a *closed* wrong branch, and every fact
+inside the record's retrieved triples. `--max-chars` and `--max-fact-chars` cap
+length/rambling. Each accepted record carries `behaviour_tags: ["backtracking",
+"self-correction", "grounded"]`, `backtracking` and a `dpo_pair` (`chosen` =
+corrected trace, `rejected` = wrong-branch completion). The `prompt` is
+inference-style (system prompt + question), so the behaviour instruction never
+leaks into the SFT prompt; the generation instruction is stored under
+`generator`.
 
 ---
 
