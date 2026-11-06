@@ -30,6 +30,15 @@ The output is a JSONL log in the same shape as ``utils/eval.py`` (header,
 records, ``macro_*`` summary) with the synthetic fields used by
 ``utils/build_sft_dataset.py``.
 
+``--mode generate`` uses a *meta* prompt
+(``prompts/prompt_qwen36_synthetic_generator.yaml``) that wraps the real task
+prompt (``--task-prompt``) and asks the model to produce one training example
+from a question and its correct answer. The correct answer only steers the
+trace; the validator still enforces grounded facts and closes the wrong branch.
+Every record is tagged ``generator.gold_conditioned = true``. The task prompt is
+also what is stored in the output records, so the SFT context matches
+deployment.
+
 Examples::
 
     # offline: build backtracking traces from correct Mintaka traces
@@ -72,8 +81,11 @@ from utils.behaviors import (  # noqa: E402
     dataset_name,
     parse_answer,
 )
+from utils.log_io import open_log  # noqa: E402
 
-DEFAULT_PROMPT = "prompts/prompt_qwen36_angular2_nothink.yaml"
+DEFAULT_PROMPT = "prompts/prompt_qwen36_synthetic_generator.yaml"
+TASK_PROMPT = "prompts/prompt_qwen36_angular2_nothink.yaml"
+TASK_PROMPT_PLACEHOLDER = "{{TASK_PROMPT}}"
 SENTINEL = "no further records"
 BEHAVIOUR_TAGS = ["backtracking", "self-correction", "grounded"]
 
@@ -101,14 +113,6 @@ CLOSURE_RE = re.compile(
 # ---------------------------------------------------------------------------
 # Triple / trace parsing (pure functions, tested)
 # ---------------------------------------------------------------------------
-
-def open_log(path):
-    """Open a plain or gzipped JSONL log for reading."""
-    import gzip
-    path = Path(path)
-    return gzip.open(path, "rt", encoding="utf-8", errors="replace") \
-        if path.suffix == ".gz" else open(path, encoding="utf-8", errors="replace")
-
 
 def normalize_triple(text: str) -> str:
     """Collapse whitespace and drop a trailing period (same as log_analysis)."""
@@ -516,21 +520,57 @@ def inject_one(record: dict, *, max_chars: int = 6000, max_fact_chars: int = 200
 # Mode 2: prompted generation (DeepSeek + simulated fact tool)
 # ---------------------------------------------------------------------------
 
-def build_backtracking_user_message(question: str) -> str:
+def load_generator_prompt(meta_path: str | Path = DEFAULT_PROMPT,
+                          task_path: str | Path = TASK_PROMPT) -> str:
+    """Wrap the real task prompt inside the synthetic-example generator prompt."""
+    meta = load_system_prompt(meta_path)
+    task = load_system_prompt(task_path)
+    return meta.replace(TASK_PROMPT_PLACEHOLDER, task)
+
+
+def build_backtracking_user_message(question: str, answer=None) -> str:
+    """Gold-conditioned user turn for the example generator."""
+    reference = _format_reference(answer)
     return (
-        f"Question: {question}\n\n"
-        "Produce a self-correcting (backtracking) trace with exactly this shape:\n"
-        "1. Choose a plausible but WRONG first branch and retrieve it with one <fact> call "
-        "written as `<fact> <Subject> <relation>` (the harness appends the real object).\n"
+        f"Question: {question}\n"
+        f"Reference answer: {reference}\n\n"
+        "Generate the assistant response for this question, following the task prompt, "
+        "and demonstrate a self-correcting (backtracking) trace with exactly this shape:\n"
+        "1. Choose a plausible but WRONG first branch and retrieve it with one <fact> "
+        "request written as `<fact> <Subject> <relation>` (the harness appends the real "
+        "object).\n"
         "2. Say explicitly why that candidate is wrong for this question (wrong relation, "
         "wrong entity type, or contradiction with another retrieved fact).\n"
         "3. CLOSE the wrong branch: reject it explicitly or exhaust it to "
         "`<no further records>`. Never leave a wrong path open.\n"
-        "4. Say you will instead do something different, then retrieve the correct path with "
-        "further <fact> calls.\n"
-        "5. Answer with the correct final answer in <answer>[...]</answer>.\n"
-        "Only use objects the harness returns; never invent facts."
+        "4. Say you will instead do something different, then retrieve the correct path "
+        "with further <fact> requests.\n"
+        "5. Answer with the reference answer in <answer>[...]</answer>, derived from the "
+        "retrieved facts rather than copied from this message.\n"
+        "Only use objects the harness returns; never invent facts.\n\n"
+        "Example of the required shape (the harness fills in the objects and closes "
+        "the tags):\n"
+        "Question: Who directed Slumdog Millionaire?\n\n"
+        "I will first check a plausible but likely wrong relation, the producer of "
+        "Slumdog Millionaire, to rule it out.\n"
+        "<fact> <Slumdog Millionaire> <producer>\n"
+        "The fact tool returned Christian Colson. That is the producer, not the "
+        "director, so it cannot answer the question. That's not the right path: I "
+        "reject this candidate and back out of this branch.\n"
+        "I will instead retrieve the relation the question actually asks for.\n"
+        "<fact> <Slumdog Millionaire> <director>\n"
+        "The fact tool returned Danny Boyle, which directly answers the question, so "
+        "I have sufficient evidence and need no further facts.\n"
+        "<answer>\n[\"Danny Boyle\"]\n</answer>"
     )
+
+
+def _format_reference(value) -> str:
+    if value in (None, "", []):
+        return "unknown"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value)
+    return str(value)
 
 
 class SourceFactOracle:
@@ -573,7 +613,7 @@ def generate_one(record: dict, client, system_prompt: str, *, max_turns: int = 4
                  temperature: float = 0.7, max_tokens: int = 2048) -> dict:
     """Prompt the model, simulating the fact tool from the record's triples."""
     question = record.get("question") or ""
-    user_message = build_backtracking_user_message(question)
+    user_message = build_backtracking_user_message(question, record.get("gt_answer"))
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
@@ -636,7 +676,7 @@ def mock_generate(record: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def build_record(record: dict, question: str, result: dict, *, system_prompt: str,
-                 generator_meta: dict, dataset: str) -> dict:
+                 generator_meta: dict, dataset: str, sft_prompt: Optional[str] = None) -> dict:
     trace = result["trace"]
     prediction = parse_answer(trace)
     answers = reference_answers(record)
@@ -645,6 +685,7 @@ def build_record(record: dict, question: str, result: dict, *, system_prompt: st
         prediction, answers, dataset=dataset, question=question,
         input_sample=record.get("input_sample"),
     )
+    sft_system_prompt = sft_prompt if sft_prompt is not None else system_prompt
     diagnostics = result.get("diagnostics") or {}
     return {
         "input_sample": record.get("input_sample") or {},
@@ -656,8 +697,8 @@ def build_record(record: dict, question: str, result: dict, *, system_prompt: st
         # Inference-style prompt: the behaviour instruction is *not* part of the
         # prompt, so the trace teaches the behaviour rather than obedience to a
         # synthetic instruction. The generation prompt is kept under `generator`.
-        "prompt": f"{system_prompt}\n\nQuestion: {question}",
-        "full_sample": f"{system_prompt}\n\nQuestion: {question}\n\n{trace}",
+        "prompt": f"{sft_system_prompt}\n\nQuestion: {question}",
+        "full_sample": f"{sft_system_prompt}\n\nQuestion: {question}\n\n{trace}",
         "triples": extract_facts(trace),
         "new_tokens_generated": sum(
             int(usage.get("completion_tokens", 0) or 0) for usage in result.get("usages", [])
@@ -756,7 +797,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--verified", action="store_true",
                         help="select positives with the dataset-aware verifier")
     parser.add_argument("--min-triples", type=int, default=2)
-    parser.add_argument("--prompt", default=DEFAULT_PROMPT)
+    parser.add_argument("--prompt", default=DEFAULT_PROMPT,
+                        help="meta prompt that wraps the task prompt and asks for an example")
+    parser.add_argument("--task-prompt", default=TASK_PROMPT,
+                        help="the real task prompt (embedded in the meta prompt and stored in SFT)")
     parser.add_argument("--model", default="deepseek-flash")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max-tokens", type=int, default=2048)
@@ -780,7 +824,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Imported lazily so the offline (``inject``) path and the tests do not need
     # the API client module (which pulls in ``pandas`` via ``log_analysis``).
-    system_prompt = load_system_prompt(args.prompt)
+    system_prompt = load_generator_prompt(args.prompt, args.task_prompt)
+    sft_system_prompt = load_system_prompt(args.task_prompt)
     client = None
     if args.mode == "generate" and not args.mock:
         from utils.generate_count_traces import DeepSeekClient
@@ -797,12 +842,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         "answer_key": "answerText",
         "model_name": args.model if args.mode == "generate" else "inject",
         "prompt": args.prompt,
+        "task_prompt": args.task_prompt,
         "synthetic": True,
         "behaviour": "backtracking",
         "generator": {
             "type": "inject" if args.mode == "inject" or args.mock else "deepseek",
             "model": None if args.mode == "inject" else args.model,
             "mode": args.mode,
+            "prompt": args.prompt,
+            "task_prompt": args.task_prompt,
+            "gold_conditioned": True,
             "max_chars": args.max_chars,
             "temperature": args.temperature if args.mode == "generate" else None,
         },
@@ -826,10 +875,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                                     max_fact_chars=args.max_fact_chars, dataset=dataset)
             elif args.mock:
                 result = mock_generate(record)
-                ok, reasons, diagnostics = validate_backtracking_trace(
-                    result["trace"], record, dataset=dataset, max_chars=args.max_chars
-                )
-                result.update({"ok": ok, "reason": "; ".join(reasons), "diagnostics": diagnostics})
+                if result.get("ok"):
+                    ok, reasons, diagnostics = validate_backtracking_trace(
+                        result["trace"], record, dataset=dataset, max_chars=args.max_chars
+                    )
+                    result.update({"ok": ok, "reason": "; ".join(reasons),
+                                   "diagnostics": diagnostics})
             else:
                 result = generate_one(record, client, system_prompt,
                                       max_turns=args.max_turns, temperature=args.temperature,
@@ -851,10 +902,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             generator_meta = dict(header["generator"])
             if args.mode == "generate" and not args.mock:
                 generator_meta["instruction"] = build_backtracking_user_message(
-                    record.get("question") or "")
+                    record.get("question") or "", record.get("gt_answer"))
             sample = build_record(record, record.get("question") or "", result,
                                   system_prompt=system_prompt, generator_meta=generator_meta,
-                                  dataset=dataset)
+                                  dataset=dataset, sft_prompt=sft_system_prompt)
             out.write(json.dumps(sample) + "\n")
             accepted += 1
             if not args.quiet and accepted % 50 == 0:

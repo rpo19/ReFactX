@@ -48,13 +48,13 @@ These utilities complement this guide:
   ```
 - `utils/classify_behaviors.py` labels every answer with Jev (TypeSafe System
   One) as `best` / `acceptable` / `bad` / `error`; `utils/generate_count_traces.py`
-  generates verified count traces with DeepSeek; `utils/build_sft_dataset.py`
-  assembles the behaviour-balanced SFT mixture. See
+  generates count traces with DeepSeek (gold-conditioned, no tool simulation);
+  `utils/build_sft_dataset.py` assembles the behaviour-balanced SFT mixture. See
   `error_categorization/sft_pipeline.md`:
 
   ```bash
   python utils/classify_behaviors.py logs/sft_training/*.out* --limit 500 --mock
-  python utils/generate_count_traces.py --input <log> --n 1000 --mock
+  python utils/generate_count_traces.py --input <log> --n 1000
   python utils/build_sft_dataset.py --natural logs/behaviors/* --synthetic <counts> \
       --output logs/sft_training_mix.jsonl --two-wiki-cap 2000
   ```

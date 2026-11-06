@@ -5,11 +5,16 @@ import unittest
 from pathlib import Path
 
 from utils.generate_backtracking_traces import (
+    DEFAULT_PROMPT,
+    TASK_PROMPT,
     SourceFactOracle,
+    build_backtracking_user_message,
     build_injected_trace,
     build_record,
     inject_fact_result,
     inject_one,
+    load_generator_prompt,
+    load_system_prompt,
     main,
     parse_fact_calls,
     parse_open_fact_calls,
@@ -17,6 +22,9 @@ from utils.generate_backtracking_traces import (
     rejected_from_trace,
     validate_backtracking_trace,
 )
+
+PROMPTS = Path(__file__).resolve().parents[1] / "prompts"
+REPO = PROMPTS.parent
 
 RECORD = {
     "question": "Who directed Slumdog Millionaire?",
@@ -44,6 +52,38 @@ GOOD_TRACE = (
     'The retrieved facts give Danny Boyle, which supports the answer.\n'
     '<answer>\n["Danny Boyle"]\n</answer>'
 )
+
+
+class TestPrompts(unittest.TestCase):
+    """The generator prompt wraps the real task prompt and asks for Q+A examples."""
+
+    def test_wrapper_includes_task_prompt(self):
+        prompt = load_generator_prompt(REPO / DEFAULT_PROMPT, REPO / TASK_PROMPT)
+        self.assertIn("Synthetic training-example generator", prompt)
+        self.assertIn("Real task prompt", prompt)
+        self.assertIn("Fact-Grounded Question Answering", prompt)  # task prompt body
+        self.assertNotIn("{{TASK_PROMPT}}", prompt)
+
+    def test_wrapper_template_has_placeholder(self):
+        text = load_system_prompt(REPO / DEFAULT_PROMPT)
+        self.assertIn("{{TASK_PROMPT}}", text)
+
+    def test_defaults_point_to_generator_prompt(self):
+        self.assertTrue(str(DEFAULT_PROMPT).endswith("prompt_qwen36_synthetic_generator.yaml"))
+        self.assertTrue(str(TASK_PROMPT).endswith("prompt_qwen36_angular2_nothink.yaml"))
+
+    def test_generation_message_is_gold_conditioned(self):
+        message = build_backtracking_user_message("Who directed X?", "Danny Boyle")
+        self.assertIn("Reference answer: Danny Boyle", message)
+        self.assertIn("<fact> <Subject> <relation>", message)
+
+    def test_generation_message_has_example(self):
+        message = build_backtracking_user_message("Who directed X?", "Danny Boyle")
+        self.assertIn("Example of the required shape", message)
+        self.assertIn("<fact> <Slumdog Millionaire> <producer>", message)
+        self.assertIn("I reject this candidate and back out of this branch", message)
+        # The example must teach the open-tag contract, not write its own object.
+        self.assertNotIn("</fact>", message)
 
 
 class TestParsing(unittest.TestCase):

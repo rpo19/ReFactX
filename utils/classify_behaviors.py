@@ -47,7 +47,7 @@ from utils.behaviors import (  # noqa: E402
     parse_jev_response,
 )
 from utils.jev_client import JevClient, JevError, MockJevClient  # noqa: E402
-from utils.log_analysis import open_log  # noqa: E402
+from utils.log_io import open_log  # noqa: E402
 
 BEHAVIOR_METADATA_VERSION = "1"
 

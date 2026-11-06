@@ -48,7 +48,7 @@ from utils.behaviors import (  # noqa: E402
     is_positive,
     question_type,
 )
-from utils.log_analysis import open_log  # noqa: E402
+from utils.log_io import open_log  # noqa: E402
 
 BEHAVIOR_PRIORITY = {"best": 3, "acceptable": 2, "bad": 1, "error": 0}
 

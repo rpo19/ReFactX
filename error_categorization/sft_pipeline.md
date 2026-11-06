@@ -7,7 +7,7 @@ behaviour-labelled, behaviour-balanced SFT dataset:
 flowchart LR
     A[eval logs<br/>logs/sft_training/*] --> B[classify_behaviors.py<br/>Jev]
     B --> C[logs/*.behaviors<br/>behaviour labels]
-    A --> D[generate_count_traces.py<br/>DeepSeek + count tool]
+    A --> D[generate_count_traces.py<br/>DeepSeek, single call]
     D --> E[synthetic count JSONL]
     C --> F[build_sft_dataset.py]
     E --> F
@@ -19,7 +19,7 @@ flowchart LR
 | `utils/behaviors.py` | shared labels, Jev prompt/state builders, answer parsing, metrics |
 | `utils/jev_client.py` | minimal TypeSafe System One client (retries, usage, cost) |
 | `utils/classify_behaviors.py` | label every record of an eval log with Jev |
-| `utils/generate_count_traces.py` | generate verified `<count>` traces with DeepSeek |
+| `utils/generate_count_traces.py` | generate `<count>` traces with DeepSeek (gold-conditioned, no tool simulation) |
 | `utils/generate_backtracking_traces.py` | generate explore → detect → correct traces (offline injection or prompted) |
 | `utils/build_sft_dataset.py` | select, stratify and write the SFT mixture |
 
@@ -125,41 +125,43 @@ Pricing (jev-1.14.0): **$0.042 per 1M input tokens, output free**.
 ## 3. Generate count traces with DeepSeek
 
 ```bash
-# offline dry run
-python utils/generate_count_traces.py \
-    --input logs/sft_training/mintaka_train_eval_qwen38_27b.out.3.gz \
-    --select teacher-wrong-or-no-count --n 20 --mock --output /tmp/counts.jsonl
-
-# real run
 export DEEPSEEK_API_KEY=...
 python utils/generate_count_traces.py \
     --input logs/sft_training/mintaka_train_eval_qwen38_27b.out.3.gz \
     --select teacher-wrong-or-no-count --n 1000 \
-    --count-source gold --output logs/synthetic/count_traces.jsonl
+    --output logs/synthetic/count_traces.jsonl
 ```
 
-DeepSeek cannot run the local constrained decoder, so the tool **simulates the
-count tool**:
+The generator is intentionally simple:
 
-1. the model emits `<count> <Subject> <relation>` and stops;
-2. the tool looks up the verified count and injects `= N` / `</count>`;
-3. the model continues and answers with `<answer>["N"]</answer>`;
-4. the trace is kept only if the count equals the verified value and the answer
-   equals that value.
+1. send the real task prompt plus the question **and its gold answer** to the
+   model (gold-conditioned);
+2. take the single response and check, with a regex, that `<count>` was used and
+   that the `<answer>` block parses;
+3. save the trace.
 
-Count sources:
+There is no tool simulation and no external count lookup: the model writes the
+count call itself and the data is fully synthetic. Samples whose answer does not
+match the reference are dropped unless `--keep-incorrect` is passed.
 
-- `--count-source gold` — use the question's gold count (safe for Mintaka count
-  questions; the relation the model asked for is not independently checked);
-- `--count-source kgext` — call `$REFACTX_COUNT_URL` with
-  `{"subject": ..., "relation": ...}` and expect `{"count": N}` (recommended when
-  an index endpoint is available).
+Use `--continue` to resume a run: questions already present in `--output` are
+skipped and the new records are appended (the file is rewritten with the
+existing records plus a fresh summary line). A tqdm progress bar is shown unless
+`--quiet` is passed.
+
+Prompts: `--prompt` is a meta prompt
+(`prompts/prompt_qwen36_synthetic_generator.yaml`) that **encapsulates the real
+task prompt** (`--task-prompt`, default
+`prompts/prompt_qwen36_angular2_nothink.yaml`) and asks the model to produce one
+example from the **question and its correct answer**. The task prompt is also
+what is stored in the output records, so the SFT context matches deployment.
+Records are tagged `generator.gold_conditioned = true`.
 
 Candidate selection: `--select all | teacher-wrong | teacher-no-count |
 teacher-wrong-or-no-count` (default targets the behaviour gap).
 
-Output: an eval-format JSONL with `synthetic: true`, `generator`, `verification`,
-`triples` (the `<fact>` calls) and `prompt`/`full_prediction` ready for
+Output: an eval-format JSONL with `synthetic: true`, `generator`, `verification`
+(`count_called`, `answer_ok`), and `prompt`/`full_prediction` ready for
 `utils/sft_train.py`.
 
 ---
@@ -187,6 +189,15 @@ the object of a retrieved triple, so it only covers entity answers (measured
 acceptance: CWQ ~57%, WebQSP ~42%, Mintaka ~23%, 2Wiki ~2%). Use `--mode
 generate` for derived answers (counts, lists, comparisons, yes/no), where the
 model is prompted and the `<fact>` tool is simulated from the record's triples.
+
+`--mode generate` uses the same meta prompt
+(`prompts/prompt_qwen36_synthetic_generator.yaml`), which wraps the real task
+prompt (`--task-prompt`) and gives the model the question **and its correct
+answer**; the user turn adds the self-correction shape. The answer only steers
+the trace: the validator still enforces grounded facts, a closed wrong branch
+and a correct final answer, and records are tagged
+`generator.gold_conditioned = true`. The task prompt is also what is stored in
+the output records.
 
 Both modes enforce the plan's §3.4.3 contract: correct answer, ≥2 `<fact>` calls,
 a correction span after the wrong branch, a *closed* wrong branch, and every fact
@@ -296,8 +307,10 @@ quality and the behaviour distribution.
 
 ## 6. Offline testing
 
-Both API tools support `--mock`, and `utils/build_sft_dataset.py` is fully
-offline. The test suite covers the deterministic pieces:
+The count generator requires an API key. The backtracking tool supports
+`--mock` for its prompted mode (its `inject` mode is offline), and
+`utils/build_sft_dataset.py` is fully offline. The test suite covers the
+deterministic pieces (CLI tests stub the chat client):
 
 ```bash
 python -m unittest tests.test_behaviors tests.test_classify_behaviors \
