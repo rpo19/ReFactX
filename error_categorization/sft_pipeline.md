@@ -20,7 +20,6 @@ flowchart LR
 | `utils/jev_client.py` | minimal TypeSafe System One client (retries, usage, cost) |
 | `utils/classify_behaviors.py` | label every record of an eval log with Jev |
 | `utils/generate_count_traces.py` | generate `<count>` traces with DeepSeek (gold-conditioned, no tool simulation) |
-| `utils/generate_backtracking_traces.py` | generate explore → detect → correct traces (offline injection or prompted) |
 | `utils/build_sft_dataset.py` | select, stratify and write the SFT mixture |
 
 ---
@@ -166,48 +165,14 @@ Output: an eval-format JSONL with `synthetic: true`, `generator`, `verification`
 
 ---
 
-## 3b. Generate backtracking traces
+## 3b. Backtracking traces (removed)
 
-```bash
-# offline: splice a wrong branch into correct traces (no API key)
-python utils/generate_backtracking_traces.py \
-    --input logs/sft_training/cwq_train_eval_qwen38_27b.out.0 \
-    --select positive --n 700 --mode inject \
-    --output logs/synthetic/backtracking_cwq.jsonl
-
-# prompted generation (needs DEEPSEEK_API_KEY), for derived answers
-python utils/generate_backtracking_traces.py \
-    --input logs/behaviors/twowiki.behaviors --select wrong-with-facts \
-    --n 300 --mode generate --output logs/synthetic/backtracking_2wiki.jsonl
-```
-
-`--mode inject` (default) rebuilds the answer path from a correct trace and
-splices in a real distractor fact from the same record's retrieved triples, an
-explicit rejection that closes the branch, and the recovery. It is
-deterministic, free and grounded by construction, but it needs the answer to be
-the object of a retrieved triple, so it only covers entity answers (measured
-acceptance: CWQ ~57%, WebQSP ~42%, Mintaka ~23%, 2Wiki ~2%). Use `--mode
-generate` for derived answers (counts, lists, comparisons, yes/no), where the
-model is prompted and the `<fact>` tool is simulated from the record's triples.
-
-`--mode generate` uses the same meta prompt
-(`prompts/prompt_qwen36_synthetic_generator.yaml`), which wraps the real task
-prompt (`--task-prompt`) and gives the model the question **and its correct
-answer**; the user turn adds the self-correction shape. The answer only steers
-the trace: the validator still enforces grounded facts, a closed wrong branch
-and a correct final answer, and records are tagged
-`generator.gold_conditioned = true`. The task prompt is also what is stored in
-the output records.
-
-Both modes enforce the plan's §3.4.3 contract: correct answer, ≥2 `<fact>` calls,
-a correction span after the wrong branch, a *closed* wrong branch, and every fact
-inside the record's retrieved triples. `--max-chars` and `--max-fact-chars` cap
-length/rambling. Each accepted record carries `behaviour_tags: ["backtracking",
-"self-correction", "grounded"]`, `backtracking` and a `dpo_pair` (`chosen` =
-corrected trace, `rejected` = wrong-branch completion). The `prompt` is
-inference-style (system prompt + question), so the behaviour instruction never
-leaks into the SFT prompt; the generation instruction is stored under
-`generator`.
+Synthetic backtracking generation is **not part of the pipeline**. The tool was
+removed: templated/injected corrections can teach a ritualistic "explore → reject
+→ resume" pattern and extra verbosity, and the behaviour is better left to
+on-policy RL (GSPO) on a verifier than to imitation of synthetic detours. The
+motivation and validation contract remain in `sft_synthetic_data_plan.md` §3.4
+for reference; the SFT mixture does not include synthetic backtracking.
 
 ---
 
@@ -297,20 +262,20 @@ official prices:
 | Full four-dataset pool | 51 319 | ~$11.9 | ~$23.8 | ~$3.32 |
 | Correct answers only | 21 055 | ~$3.8 | ~$7.6 | ~$1.06 |
 
-Synthetic count generation (~1 200 output tokens, 50% acceptance):
-**~$1.5 off-peak / ~$2.9 peak** for 1 000 accepted traces.
+Synthetic count generation (measured: ~1 002 calls, ~1 840 input and 143 output
+tokens per call, ~100 % acceptance): **~$0.3 off-peak / ~$0.6 peak** for 1 000
+accepted traces.
 
-Run a 500-record pilot first (~$0.13 DeepSeek / ~$0.04 Jev) to check label
-quality and the behaviour distribution.
+Run a small pilot (`--n 50`, <$0.05) first to check the trace format before the
+full run.
 
 ---
 
 ## 6. Offline testing
 
-The count generator requires an API key. The backtracking tool supports
-`--mock` for its prompted mode (its `inject` mode is offline), and
+The count generator requires an API key; its CLI tests stub the chat client.
 `utils/build_sft_dataset.py` is fully offline. The test suite covers the
-deterministic pieces (CLI tests stub the chat client):
+deterministic pieces:
 
 ```bash
 python -m unittest tests.test_behaviors tests.test_classify_behaviors \
@@ -325,9 +290,21 @@ python -m unittest tests.test_behaviors tests.test_classify_behaviors \
   with DeepSeek (or humans) before trusting Jev at scale; `behavior.confidence`
   and the two `noul` probabilities are stored for filtering.
 - **Gold count source** does not verify that the relation the model asked for is
-  the intended one; prefer `kgext` when the index is available.
+  the intended one; every count is now gold-conditioned and the model writes the
+  count itself, so check the generated relation in an audit sample.
 - **Thinking mode** on DeepSeek multiplies output tokens (and cost). The
   generator sends `thinking: {"type": "disabled"}` by default (`--thinking omit`
   to drop the field).
 - The classifier reads the trace, so very long traces are clipped (head+tail);
   the final answer and the retrieved facts are always included.
+
+---
+
+## 8. Proposed diagnostic: fact / tool utility
+
+A follow-up analysis (not implemented yet) measures whether the retrieved facts
+and counts were *necessary* to reach the answer: an LLM judge proposes a minimal
+useful set and the trace's calls are compared with it (utility precision/recall,
+wasted calls, calls per useful fact). It separates "correct but wasteful" from
+"correct and grounded" and can feed a GSPO reward term. Full method and caveats:
+`sft_synthetic_data_plan.md` §11 and `advanced_error_analysis_report.md`.

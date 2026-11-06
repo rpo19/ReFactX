@@ -410,3 +410,24 @@ The categories above split the teacher's errors into the mechanically detectable
 
 See `ERROR_CATEGORIZATION_GUIDE.md` for the manual, evidence-based procedure to confirm individual cases and `error_categorization_report.md` for the interpretation of the held-out test runs.
 
+## Proposed follow-up: fact / tool utility
+
+Accuracy does not say whether the retrieved facts were *needed*. A proposed
+diagnostic asks an LLM judge for **a minimal set of tool results that suffices to
+derive the gold answer** (given the question, the gold answer and the candidate
+`<fact>`/`<count>` results, not the whole trace) and then compares it with the
+results the trace actually used:
+
+- **utility precision** = necessary facts / used facts;
+- **utility recall** = necessary facts that were used / all necessary facts;
+- **wasted calls** = used − necessary; **calls per useful fact** = used / necessary;
+- for counts: whether the `<count>` was necessary and actually used.
+
+Sliced by dataset, question type, behaviour label and correctness, this separates
+"correct but wasteful" retrieval from "correct and grounded", and gives a
+continuous signal next to the binary `bad` label. Caveats: the minimal set is not
+unique (measure set overlap, report the unambiguous share, validate on 100–200
+human-annotated traces) and derived answers need computation, so containment in
+the answer is only a cheap baseline. Method and metrics are detailed in
+`sft_synthetic_data_plan.md` §11.
+

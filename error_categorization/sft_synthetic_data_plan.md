@@ -64,7 +64,8 @@ claims to teach is (a) present, (b) *necessary* for the trace to succeed, and
 - **≥ 1 500** verified count-tool traces, at least 1 000 on Mintaka count questions;
 - **≥ 2 000** *sentinel-critical* traces (the answer is a complete set and the
   sentinel is what establishes completeness);
-- **≥ 1 000** self-correction/backtracking traces and **≥ 1 000** verify-then-answer traces;
+- **≥ 1 000** verify-then-answer traces; backtracking is dropped from SFT
+  (see §3.4) and left to RL;
 - **≥ 700** repaired composition traces on the 1 427 questions where the gold
   facts were retrieved but the answer was wrong;
 - **≤ 50%** synthetic share, **0** truncated traces, **0** duplicates, **0**
@@ -80,12 +81,17 @@ claims to teach is (a) present, (b) *necessary* for the trace to succeed, and
 | Fact-grounded single/multi-hop | ~13 800 | keep | natural pool |
 | Count tool | 257 | **1 500** | Mintaka count + synthetic counts |
 | Sentinel / exhaustive enumeration | 3 348 (not *critical*) | **2 000 critical** | WebQSP/CWQ list answers + synthetic enumeration |
-| Backtracking / self-correction | 0 | **1 000** | prompted + injected-error traces |
+| Backtracking / self-correction | 0 | — (dropped) | removed from SFT; left to GSPO on-policy |
 | Verify-then-answer | 0 | **1 000** | prompted verification traces |
 | Composition repair | 0 (1 427 failures) | **700** | re-generation on retrieved-facts failures |
 | Concise reasoning | — | — | control truncation (see §3.6) |
 
 These are **starting targets** to be revised after the pilot acceptance rates in §6.
+
+> **Decision (backtracking):** synthetic backtracking traces were removed from
+> the SFT pipeline (see §3.4). The behaviour is left to on-policy RL (GSPO) with
+> a verifiable reward, because imitation of injected detours risks teaching a
+> ritualistic pattern and verbosity.
 
 ---
 
@@ -133,7 +139,14 @@ so presence is not enough: the trace must *depend* on knowing exhaustion.
 4. Add negative-control traces where the model stops early *without* the
    sentinel and is wrong, for DPO pairing (§4).
 
-### 3.4 Backtracking / self-correction (the "special behaviour")
+### 3.4 Backtracking / self-correction (dropped from SFT)
+
+> **Status: removed from the synthetic SFT pipeline.** Templated or injected
+> corrections risk teaching a ritualistic "explore → reject → resume" pattern
+> and extra verbosity, and they are off-policy. The behaviour is left to
+> on-policy RL (GSPO) on a verifiable reward, optionally seeded with a handful
+> of *real* teacher traces. The design below is kept for reference and for
+> building an RL probe/eval set, not for the SFT mixture.
 
 This is the behaviour the paper will want to showcase: the model explores a
 plausible wrong path, detects the mistake, and recovers.
@@ -252,10 +265,12 @@ the behaviour tags and the schema below.
 | Natural verified positives | 20 973 | keep, but re-verified with the fixed evaluator |
 | + count synthetic | 1 500 | ≥1 000 from Mintaka count |
 | + sentinel-critical synthetic | 2 000 | WebQSP/CWQ enumeration |
-| + backtracking synthetic | 1 000 | 300/400/300 WebQSP/Mintaka/2Wiki |
 | + verify-then-answer synthetic | 1 000 | mixed |
 | + composition repair | 700 | from the 1 427 retrieved-facts failures outside 2Wiki |
-| **Total** | **~27 200** | ≈23% synthetic |
+| **Total** | **~26 200** | ≈21% synthetic |
+
+Backtracking synthetic traces are **not** in the mixture (see §3.4); the
+behaviour is deferred to RL.
 
 If the 2Wiki dominance is undesirable, cap 2Wiki at ~50% of the natural pool
 and rebalance toward Mintaka/WebQSP/CWQ, which carry the harder types.
@@ -269,13 +284,14 @@ and rebalance toward Mintaka/WebQSP/CWQ, which carry the harder types.
 | 0 | Fix the evaluator: ambiguous two-digit years; re-score the four logs | corrected scores | 2Wiki +3 517 recovered |
 | 1 | Generation + verification harness; reproduce natural positives | `gen_synthetic.py` + filters | 0 false accepts on a 200-sample audit |
 | 2 | Count and sentinel synthesis | tagged JSONL | targets in §2 met |
-| 3 | Backtracking and verify-then-answer | tagged JSONL + DPO pairs | judge agreement ≥90% on 200 samples |
+| 3 | Verify-then-answer; backtracking deferred to RL | tagged JSONL | judge agreement ≥90% on 200 samples |
 | 4 | Composition repair on retrieved-facts failures | tagged JSONL | ≥50% of 1 427 recovered |
 | 5 | Mix, dedup, decontaminate, train, ablate | SFT runs | per-type + behaviour gains |
 
-Ablations: natural-only vs +count vs +sentinel vs +backtracking vs +all; report
+Ablations: natural-only vs +count vs +sentinel vs +all; report
 per-type accuracy, count accuracy, sentinel precision/recall, tool-usage
-precision, truncation and abstention.
+precision, truncation and abstention. Backtracking is evaluated as an RL
+(GSPO) ablation, not as an SFT data arm.
 
 ---
 
@@ -312,7 +328,6 @@ The pipeline is implemented and documented in `error_categorization/sft_pipeline
 |---|---|
 | Behaviour labels (Jev) | `utils/classify_behaviors.py` (`utils/behaviors.py`, `utils/jev_client.py`) |
 | Synthetic count traces (DeepSeek) | `utils/generate_count_traces.py` |
-| Synthetic backtracking traces (inject / prompted) | `utils/generate_backtracking_traces.py` |
 | Behaviour-aware SFT mixture | `utils/build_sft_dataset.py` |
 
 ```bash
@@ -320,7 +335,8 @@ The pipeline is implemented and documented in `error_categorization/sft_pipeline
 python utils/classify_behaviors.py logs/sft_training/*.out* --workers 8 \
     --output-dir logs/behaviors --report logs/behaviors/report.json
 
-# 2. generate 1000 verified count traces
+# 2. generate 1000 count traces (gold-conditioned, no tool simulation)
+#    add --continue to resume an existing file
 python utils/generate_count_traces.py \
     --input logs/sft_training/mintaka_train_eval_qwen38_27b.out.3.gz \
     --select teacher-wrong-or-no-count --n 1000 \
@@ -336,5 +352,57 @@ python utils/build_sft_dataset.py \
 
 Cost (official prices): the full 51 319-record labelling is ~$12 off-peak with
 DeepSeek Flash or ~$3.3 with Jev; the 7 180-record mixture is ~$1.9 / ~$0.53.
-The 1 000 count traces cost ~$1.5–2.9 to generate. Start with a 500-record
-pilot (<$0.15) to validate the labels and the achieved 75/25 ratio.
+The 1 000 count traces cost ~$0.3–0.6 (measured: ~1 002 calls, median 143 output
+tokens). Start with a 500-record pilot (<$0.15) to validate the labels and the
+achieved 75/25 ratio.
+
+---
+
+## 11. Proposed diagnostic: fact / tool utility
+
+Accuracy says whether the answer is right, not whether the retrieved facts were
+*needed*: two correct traces can use three facts or ten. This diagnostic measures
+the signal-to-noise of the tool calls, for natural and synthetic traces alike.
+
+**Method**
+
+1. Extract the ordered tool results from each trace: `<fact>` triples and
+   `<count>` (subject, relation, value).
+2. Ask an LLM judge (never the student) for **a minimal set of tool results that
+   suffices to derive the gold answer**, given the question, the gold answer and
+   the candidate tool results only — not the whole trace, to avoid style bias.
+   Require the results verbatim, in order.
+3. Map the judge's output back to the trace's calls (exact match, entity names
+   folded with `utils/answer_normalization.fold_entity`).
+
+**Metrics** (per trace, then aggregated)
+
+- **utility precision** = `|used ∩ useful| / |used|` — share of retrieved facts
+  that were necessary;
+- **utility recall** = `|used ∩ useful| / |useful|` — did the trace retrieve
+  everything needed;
+- **wasted calls** = `|used| − |used ∩ useful|`;
+- **calls per useful fact** = `|used| / |used ∩ useful|`;
+- count-specific: was the `<count>` necessary, and was it used to derive the
+  answer instead of a retrieved fact?
+
+Slice by dataset, question type, behaviour label (`best`/`acceptable`/`bad`),
+correctness, trace length and truncation. Report separately on the natural pool
+and on the synthetic count set (there every useful trace should reach utility
+precision 1 if the count is genuinely necessary).
+
+**Validation and caveats**
+
+- The minimal set is not unique: measure set overlap, report the share of traces
+  with an unambiguous judge answer, and human-annotate 100–200 traces to report
+  judge agreement.
+- Derived answers (counts, comparisons, dates) need computation, so a fact can be
+  necessary without being string-matched in the answer. Rule-based containment
+  (object in the answer or in the gold evidence) is a cheap baseline, not the
+  target.
+- One extra judge call per trace, roughly the same order of cost as Jev
+  classification.
+
+**Use.** A continuous signal next to the binary `bad` label: it flags "correct but
+wasteful" retrieval and redundant count calls, and it is a candidate reward term
+for GSPO (penalise unused calls, not only wrong answers).
