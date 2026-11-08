@@ -5,13 +5,14 @@ support-labelled SFT dataset:
 
 ```mermaid
 flowchart LR
-    A[eval logs<br/>logs/sft_training/*] --> B[classify_behaviors.py<br/>Jev]
-    B --> C[logs/*.behaviors<br/>support labels]
+    A[eval logs<br/>logs/sft_training_logs/*] --> B[classify_behaviors.py<br/>Jev]
+    B --> C[logs/behaviors_v2/*.behaviors<br/>support labels]
     A --> D[generate_count_traces.py<br/>DeepSeek, single call]
-    D --> E[synthetic count JSONL]
+    D --> E[logs/synthetic/count_traces.jsonl]
     C --> F[build_sft_dataset.py]
     E --> F
-    F --> G[SFT mixture JSONL + manifest]
+    F --> G[logs/sft_training_mix_supported.jsonl<br/>+ manifest]
+    G --> H[utils/sft_train.py<br/>Qwen3.5-4B LoRA]
 ```
 
 | Tool | Purpose |
@@ -52,14 +53,14 @@ writes `state.generated_triples` into `triples`, and that value is sent verbatim
 
 ```bash
 # pilot: 500 records, offline heuristic (no API key)
-python utils/classify_behaviors.py logs/sft_training/mintaka_train_eval_qwen38_27b.out.3.gz \
+python utils/classify_behaviors.py logs/sft_training_logs/mintaka_train_eval_qwen38_27b.out.3.gz \
     --limit 500 --mock --output /tmp/mintaka_pilot.behaviors
 
-# full run
+# full run (what produced logs/behaviors_v2/)
 export TYPESAFE_API_KEY=...
-python utils/classify_behaviors.py logs/sft_training/*.out* \
-    --output-dir logs/behaviors --workers 8 \
-    --report logs/behaviors/behavior_report.json
+python utils/classify_behaviors.py logs/sft_training_logs/*.out* \
+    --output-dir logs/behaviors_v2 --workers 8 \
+    --report logs/behaviors_v2/report.json
 ```
 
 The input is the `utils/eval.py` JSONL log. The output has the **same format**
@@ -121,7 +122,7 @@ Pricing (jev-1.14.0): **$0.042 per 1M input tokens, output free**.
 ```bash
 export DEEPSEEK_API_KEY=...
 python utils/generate_count_traces.py \
-    --input logs/sft_training/mintaka_train_eval_qwen38_27b.out.3.gz \
+    --input logs/sft_training_logs/mintaka_train_eval_qwen38_27b.out.3.gz \
     --select teacher-wrong-or-no-count --n 1000 \
     --output logs/synthetic/count_traces.jsonl
 ```
@@ -175,14 +176,17 @@ for reference; the SFT mixture does not include synthetic backtracking.
 
 ```bash
 python utils/build_sft_dataset.py \
-    --natural logs/behaviors/mintaka.behaviors \
-              logs/behaviors/2wiki.behaviors \
-              logs/behaviors/webqsp.behaviors \
-              logs/behaviors/cwq.behaviors \
+    --natural logs/behaviors_v2/*.behaviors \
     --synthetic logs/synthetic/count_traces.jsonl \
-    --output logs/sft_training_mix.jsonl \
-    --two-wiki-cap 2000 --best-ratio 0.75 --min-acceptable 0.15
+    --verified \
+    --output logs/sft_training_mix_supported.jsonl \
+    --two-wiki-cap 2000
 ```
+
+`--include-bad` is **not** passed, so unsupported traces are dropped: the
+mixture is supported-only. `--best-ratio`/`--min-acceptable` are unnecessary for
+support-labelled logs (there is no `acceptable` class); they are kept only for
+legacy logs.
 
 Selection rules:
 
@@ -217,15 +221,26 @@ returns a single `supported`/`unsupported` decision and the builder keeps
 
 ### Output
 
+Real manifest for `logs/sft_training_mix_supported.jsonl` (6,966 samples):
+
 ```json
 {
   "_report": true,
-  "params": {"two_wiki_cap": 2000, "best_ratio": 0.75, ...},
+  "params": {"two_wiki_cap": 2000, "include_bad": false, "verified": true, "seed": 42, ...},
+  "skipped": {"not_positive": 30346},
+  "duplicates": {"natural": 57},
   "counts": {
-    "total": 7180,
-    "by_dataset": {"mintaka": 3446, "webqsp": 554, "cwq": 1180, "2wiki": 2000},
-    "by_behavior": {"supported": 6180, "unsupported": 160},
-    "by_provenance": {"natural": 6180, "synthetic": 1000}
+    "total": 6966,
+    "by_dataset": {"mintaka": 3304, "2wiki": 2000, "cwq": 1114, "webqsp": 548},
+    "by_provenance": {"natural": 5966, "synthetic": 1000},
+    "by_behavior": {"supported": 6966},
+    "by_type": {"count": 1140, "generic": 1086, "compositional": 792,
+                "comparison": 710, "comparative": 623, "single-entity": 590,
+                "multi-entity": 524, "bridge_comparison": 465, "yesno": 367,
+                "multihop": 233, "intersection": 203, "ordinal": 120,
+                "difference": 44, "superlative": 36, "inference": 33},
+    "by_shape": {"entity": 3307, "yes/no": 1503, "numeric": 1216,
+                 "date": 685, "list": 255}
   }
 }
 {"question": "...", "prompt": "...", "full_prediction": "...", "triples": [...],
@@ -239,6 +254,23 @@ The sample fields match `utils/filter_positive_training_samples.py` plus
 
 A manifest is written next to the output with all counts, skipped records and
 parameters.
+
+### Training
+
+The mixture is the direct input of `utils/sft_train.py`. Config:
+`configs/sft_config_supported_mix.json` (Qwen3.5-4B, LoRA r8/α16, bs 2 ×
+grad-accum 8, 2 epochs, lr 2e-5, `max_length` 2048, `val_split` 0.1, wandb).
+SLURM script: `hpc/sft_train_supported_mix.sh` (2 GPUs, 24 h).
+
+Shuffling and splitting:
+
+1. `build_sft_dataset.py` shuffles the final mixture with `--seed` (default 42)
+   before writing, so the file order is already randomized.
+2. `sft_train.py` then makes a **stratified** train/val split by
+   `(dataset, complexityType)` with `--val-split` (0.1 here), not a plain
+   random split.
+3. HuggingFace `Trainer` re-shuffles the training set every epoch
+   (`RandomSampler`), so epoch order differs.
 
 ---
 
@@ -262,6 +294,24 @@ accepted traces.
 Run a small pilot (`--n 50`, <$0.05) first to check the trace format before the
 full run.
 
+### Measured Jev cost (v2, support classifier)
+
+The `usage` block in `logs/behaviors_v2/report.json` is **cumulative per file**
+(known reporting bug); the true per-file cost is the difference between
+consecutive rows. Measured on the full pool:
+
+| Dataset | Records | Supported | Jev cost |
+|---|---:|---:|---:|
+| CWQ | 9,360 | 2,992 | $0.627 |
+| Mintaka | 14,000 | 5,226 | $0.877 |
+| 2Wiki | 25,133 | 20,032 | $0.658 |
+| WebQSP | 2,826 | 1,480 | $0.158 |
+| **Total** | **51,319** | **29,730** | **$2.319** |
+
+Filtering the verified positives only (20,973 records, 20,418 supported) would
+cost roughly **$0.6–0.8**; the full-pool figure above is what the actual run
+cost. Cost is ~$0.045 per 1k records with the `triples`-only state.
+
 ---
 
 ## 6. Offline testing
@@ -279,9 +329,17 @@ python -m unittest tests.test_behaviors tests.test_classify_behaviors \
 
 ## 7. Caveats
 
-- **Jev validation**: the four-way distinction is nuanced. Audit 200–500 records
-  with DeepSeek (or humans) before trusting Jev at scale; `behavior.confidence`
-  and the two `noul` probabilities are stored for filtering.
+- **Jev validation**: the support decision is a single binary and much more
+  reliable than the old four-way split, but still audit 200–500 records before
+  trusting it at scale; `behavior.confidence` and the two `noul` probabilities
+  are stored for filtering. On the verified positives it labels 97.4% supported
+  (20,418/20,973); the 555 `unsupported` are mostly closed-world "No", derived
+  counts and ISO-date vs `D-Mon-YY` formatting, not real ungrounded answers.
+- **`mask_triples` is currently a no-op.** `sft_train.py:locate_fact_ranges()`
+  looks for `"Fact:"` while the traces use `<fact> … </fact>`, so no range is
+  found. The supported-mix config sets `mask_triples: false` explicitly to avoid
+  the misleading "Masked 0 Fact: lines" message. A real fix would be
+  `re.finditer(r"<fact>.*?</fact>", text, re.DOTALL)`.
 - **Gold count source** does not verify that the relation the model asked for is
   the intended one; every count is now gold-conditioned and the model writes the
   count itself, so check the generated relation in an audit sample.

@@ -7,7 +7,7 @@ the behaviours the paper needs: the **count tool**, the **exhaustion sentinel**,
 **grounding**, and **explore → detect error → backtrack → correct** traces.
 
 All counts below are from the Qwen3.8-27B teacher runs on the four training
-splits (`logs/sft_training/`, 51 319 evaluated records).
+splits (`logs/sft_training_logs/`, 51 319 evaluated records).
 
 ---
 
@@ -329,33 +329,66 @@ The pipeline is implemented and documented in `error_categorization/sft_pipeline
 | Support labels (Jev) | `utils/classify_behaviors.py` (`utils/behaviors.py`, `utils/jev_client.py`) |
 | Synthetic count traces (DeepSeek) | `utils/generate_count_traces.py` |
 | Support-filtered SFT mixture | `utils/build_sft_dataset.py` |
+| Training | `utils/sft_train.py` + `configs/sft_config_supported_mix.json` |
 
 ```bash
 # 1. label the four evaluation logs (pilot with --limit 500 --mock first)
-python utils/classify_behaviors.py logs/sft_training/*.out* --workers 8 \
-    --output-dir logs/behaviors --report logs/behaviors/report.json
+export TYPESAFE_API_KEY=...
+python utils/classify_behaviors.py logs/sft_training_logs/*.out* --workers 8 \
+    --output-dir logs/behaviors_v2 --report logs/behaviors_v2/report.json
 
 # 2. generate 1000 count traces (gold-conditioned, no tool simulation)
 #    add --continue to resume an existing file
+export DEEPSEEK_API_KEY=...
 python utils/generate_count_traces.py \
-    --input logs/sft_training/mintaka_train_eval_qwen38_27b.out.3.gz \
+    --input logs/sft_training_logs/mintaka_train_eval_qwen38_27b.out.3.gz \
     --select teacher-wrong-or-no-count --n 1000 \
     --output logs/synthetic/count_traces.jsonl
 
-# 3. build the mixture (all non-2Wiki positives, 2Wiki capped at 2000;
-#    --include-bad keeps unsupported traces)
+# 3. build the supported-only mixture (all non-2Wiki positives, 2Wiki capped
+#    at 2000; omit --include-bad to keep supported traces only)
 python utils/build_sft_dataset.py \
-    --natural logs/behaviors/*.behaviors \
+    --natural logs/behaviors_v2/*.behaviors \
     --synthetic logs/synthetic/count_traces.jsonl \
-    --output logs/sft_training_mix.jsonl \
+    --verified \
+    --output logs/sft_training_mix_supported.jsonl \
     --two-wiki-cap 2000
+
+# 4. train (on HPC; see hpc/sft_train_supported_mix.sh)
+python -m utils.sft_train \
+    --config configs/sft_config_supported_mix.json \
+    --output-dir "$WS_PATH/sft_output_supported_mix"
 ```
+
+### Actual mixture (built)
+
+`logs/sft_training_mix_supported.jsonl` — **6,966 samples**:
+
+| Split | Count |
+|---|---:|
+| mintaka | 3,304 |
+| 2wiki (capped) | 2,000 |
+| cwq | 1,114 |
+| webqsp | 548 |
+| natural / synthetic | 5,966 / 1,000 |
+| supported | 6,966 (100%) |
+
+By type: count 1,140 · generic 1,086 · compositional 792 · comparison 710 ·
+comparative 623 · single-entity 590 · multi-entity 524 · bridge_comparison 465 ·
+yesno 367 · multihop 233 · intersection 203 · ordinal 120 · difference 44 ·
+superlative 36 · inference 33.
+By answer shape: entity 3,307 · yes/no 1,503 · numeric 1,216 · date 685 · list 255.
+
+This is a deliberately smaller mixture than the §6 target: the synthetic
+sentinel / verify-then-answer / composition-repair arms are **not** included yet
+(only the count arm, 1,000 traces). They remain the next generation targets.
 
 Cost: the support classifier sends only the question, the answer and the
 `triples` field (no trace), so a call is much cheaper than the earlier
-trace-based estimate. Measure with a 500-record pilot; the previous full-pool
-estimate (~$12 off-peak DeepSeek / ~$3.3 Jev) is an upper bound. The 1 000 count
-traces cost ~$0.3–0.6 (measured: ~1 002 calls, median 143 output tokens).
+trace-based estimate. Measured full-pool Jev cost: **$2.319** for 51,319 records
+(CWQ $0.627, Mintaka $0.877, 2Wiki $0.658, WebQSP $0.158). Verified positives
+only would be ~$0.6–0.8. The 1,000 count traces cost ~$0.3–0.6 (measured:
+~1,002 calls, median 143 output tokens).
 
 ---
 

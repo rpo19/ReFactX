@@ -34,7 +34,7 @@ These utilities complement this guide:
   question type, answer shape and tool pattern:
 
   ```bash
-  python utils/sft_training_analysis.py logs/sft_training/*.out* \
+  python utils/sft_training_analysis.py logs/sft_training_logs/*.out* \
       --output error_categorization/sft_training_data_report.md
   ```
 
@@ -44,7 +44,7 @@ These utilities complement this guide:
   strict-wrong answers are evaluation artifacts for any dataset:
 
   ```bash
-  python utils/verify_answers.py logs/sft_training/*.out*
+  python utils/verify_answers.py logs/sft_training_logs/*.out*
   ```
 - `utils/classify_behaviors.py` labels every answer with Jev (TypeSafe System
   One) as `supported` / `unsupported` (question + answer + the log's `triples`
@@ -54,10 +54,29 @@ These utilities complement this guide:
   `error_categorization/sft_pipeline.md`:
 
   ```bash
-  python utils/classify_behaviors.py logs/sft_training/*.out* --limit 500 --mock
-  python utils/generate_count_traces.py --input <log> --n 1000
-  python utils/build_sft_dataset.py --natural logs/behaviors/* --synthetic <counts> \
-      --output logs/sft_training_mix.jsonl --two-wiki-cap 2000
+  export TYPESAFE_API_KEY=...   # Jev
+  export DEEPSEEK_API_KEY=...   # count generation
+
+  # label the four evaluation logs (pilot with --limit 500 --mock first)
+  python utils/classify_behaviors.py logs/sft_training_logs/*.out* --workers 8 \
+      --output-dir logs/behaviors_v2 --report logs/behaviors_v2/report.json
+
+  # 1000 gold-conditioned count traces
+  python utils/generate_count_traces.py \
+      --input logs/sft_training_logs/mintaka_train_eval_qwen38_27b.out.3.gz \
+      --select teacher-wrong-or-no-count --n 1000 \
+      --output logs/synthetic/count_traces.jsonl
+
+  # supported-only mixture (all non-2Wiki positives, 2Wiki capped at 2000)
+  python utils/build_sft_dataset.py \
+      --natural logs/behaviors_v2/*.behaviors \
+      --synthetic logs/synthetic/count_traces.jsonl \
+      --verified --two-wiki-cap 2000 \
+      --output logs/sft_training_mix_supported.jsonl
+
+  # train (HPC)
+  python -m utils.sft_train --config configs/sft_config_supported_mix.json \
+      --output-dir "$WS_PATH/sft_output_supported_mix"
   ```
 - `utils/logs_viewer.py` (Streamlit) browses any log interactively and shows the
   per-question hallucination check (`pip install streamlit`, then

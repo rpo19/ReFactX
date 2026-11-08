@@ -338,7 +338,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         for record in records:
             if not record.get("synthetic"):
                 continue
-            record["_behavior"] = "best"
+            record["_behavior"] = "supported"
             synthetic.append(candidate(record, dataset, path.name, "synthetic"))
 
     # Deduplicate by question; synthetic traces win.
