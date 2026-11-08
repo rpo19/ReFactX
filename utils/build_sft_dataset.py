@@ -5,10 +5,11 @@ Selection rules:
 * use every natural positive from Mintaka, WebQSP and CWQ;
 * keep at most ``--two-wiki-cap`` (default 2000) 2Wiki positives;
 * add the synthetic count traces;
-* when a cap applies, sample behaviour 1 (``best``) and behaviour 2
-  (``acceptable``) at ``--best-ratio`` (default 75/25), with a
-  ``--min-acceptable`` floor so verification traces are not lost;
-* ``bad`` (correct but unsupported) traces are excluded unless ``--include-bad``;
+* drop ``unsupported`` traces (correct but not supported by the retrieved
+  facts) unless ``--include-bad``; this is the only use of the support labels;
+* legacy ``best``/``acceptable`` logs still honour ``--best-ratio`` /
+  ``--min-acceptable`` when a cap applies; support-labelled logs have no
+  ``acceptable`` class, so a cap keeps all ``supported`` traces;
 * deduplicate by question (synthetic count traces win over a duplicate natural
   trace);
 * stratify across dataset, question type and answer shape.
@@ -50,7 +51,10 @@ from utils.behaviors import (  # noqa: E402
 )
 from utils.log_io import open_log  # noqa: E402
 
-BEHAVIOR_PRIORITY = {"best": 3, "acceptable": 2, "bad": 1, "error": 0}
+BEHAVIOR_PRIORITY = {
+    "best": 3, "supported": 3, "acceptable": 2,
+    "bad": 1, "unsupported": 0, "error": 0,
+}
 
 
 def normalize_question(text: str) -> str:
@@ -147,16 +151,16 @@ def select_group(group: list[dict], n_target: Optional[int], *, best_ratio: floa
     """Select ``n_target`` items, prioritising ``best`` over ``acceptable``."""
     if not group:
         return []
-    eligible = [c for c in group if c["behavior"] != "bad" or include_bad]
+    eligible = [c for c in group if c["behavior"] not in {"bad", "unsupported"} or include_bad]
     eligible = [c for c in eligible if c["behavior"] != "error" or keep_error]
     if not eligible:
         return []
     if n_target is None or n_target >= len(eligible):
         return list(eligible)
 
-    best = [c for c in eligible if c["behavior"] == "best"]
+    best = [c for c in eligible if c["behavior"] in {"best", "supported"}]
     acceptable = [c for c in eligible if c["behavior"] == "acceptable"]
-    other = [c for c in eligible if c["behavior"] not in {"best", "acceptable"}]
+    other = [c for c in eligible if c["behavior"] not in {"best", "supported", "acceptable"}]
 
     if not best and not acceptable:
         return rng.sample(other, min(n_target, len(other)))
@@ -191,9 +195,9 @@ def cap_candidates(cands: list[dict], cap: Optional[int], **kwargs) -> list[dict
 def enforce_ratio(cands: list[dict], best_ratio: float, min_acceptable: float,
                   rng: random.Random) -> list[dict]:
     """Downsample ``acceptable`` so best:acceptable approaches ``best_ratio``."""
-    best = [c for c in cands if c["behavior"] == "best"]
+    best = [c for c in cands if c["behavior"] in {"best", "supported"}]
     acceptable = [c for c in cands if c["behavior"] == "acceptable"]
-    others = [c for c in cands if c["behavior"] not in {"best", "acceptable"}]
+    others = [c for c in cands if c["behavior"] not in {"best", "supported", "acceptable"}]
     if not best or not acceptable:
         return cands
     target_acc = int(round(len(best) * (1 - best_ratio) / max(best_ratio, 1e-9)))
@@ -239,7 +243,7 @@ def summarize(cands: list[dict]) -> dict:
         return dict(Counter(c[key] for c in cands))
 
     labels = Counter(c["behavior"] for c in cands)
-    best = labels.get("best", 0)
+    best = labels.get("best", 0) + labels.get("supported", 0)
     acceptable = labels.get("acceptable", 0)
     ratio = (best / (best + acceptable)) if (best + acceptable) else None
     return {

@@ -6,12 +6,17 @@ a ``behavior`` object added to every record, so the file remains readable by
 ``utils/eval.py`` consumers (``utils/make_latex_tables.py``, the Streamlit viewer,
 the SFT builders, ...) and can be used unchanged on test sets.
 
-Behaviour labels (see ``utils/behaviors.py``):
+Behaviour labels (see ``utils/behaviors.py``): the classifier asks one yes/no
+question over the **question**, the **model's answer** and the **`triples` field
+of the evaluation log** (the decoded generated triples written by
+``utils/eval.py``; no regex or trace parsing):
 
-* ``best``       — correct, derived from the question entities through retrieved facts;
-* ``acceptable`` — correct, known/parametric but verified with retrieved facts;
-* ``bad``        — correct but unsupported by the retrieved facts;
-* ``error``      — wrong, and the answer is not in the retrieved facts.
+> Consider the question and these facts. Is the answer supported by these facts?
+> Do not use additional knowledge to decide whether the answer is true or not.
+> Limit to simply decide whether the answer is supported by the given facts or not.
+
+* ``supported``   — the facts contain enough information to support the answer;
+* ``unsupported`` — the facts do not support the answer (the answer may still be true).
 
 Examples::
 
@@ -47,7 +52,12 @@ from utils.behaviors import (  # noqa: E402
     parse_jev_response,
 )
 from utils.jev_client import JevClient, JevError, MockJevClient  # noqa: E402
-from utils.log_io import open_log  # noqa: E402
+from utils.log_analysis import open_log  # noqa: E402
+
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - tqdm is a declared dependency
+    tqdm = None
 
 BEHAVIOR_METADATA_VERSION = "1"
 
@@ -70,32 +80,14 @@ def _contains(haystack: str, needle) -> bool:
 
 def _mock_response(state: dict, questions: Optional[dict] = None) -> dict:
     """Deterministic offline labels, for pilots and tests."""
-    correct = bool(state.get("answer_is_correct"))
-    facts = fold_entity(" ".join(state.get("retrieved_facts") or []))
-    trace = state.get("model_trace") or ""
-    reference = _as_list(state.get("reference_answer"))
-    prediction = _as_list(state.get("final_answer"))
-    supported = any(_contains(facts, v) for v in reference) or any(_contains(facts, v) for v in prediction)
-    derived = "<fact>" in trace.lower()
-    if not correct:
-        label = "error"
-    elif supported and derived:
-        label = "best"
-    elif supported:
-        label = "acceptable"
-    else:
-        label = "bad"
+    facts = fold_entity(" ".join(state.get("facts") or []))
+    answer = _as_list(state.get("answer"))
+    supported = bool(answer) and any(_contains(facts, value) for value in answer)
+    probability = 1.0 if supported else 0.0
     return {
         "model": "mock",
         "answers": {
-            "behavior": {
-                "type": "choice",
-                "choice": label,
-                "confidence": 1.0,
-                "probabilities": {name: float(name == label) for name in BEHAVIOR_LABELS},
-            },
-            "answer_supported_by_facts": {"type": "noul", "noul": 1.0 if supported else 0.0},
-            "derived_from_facts": {"type": "noul", "noul": 1.0 if derived else 0.0},
+            "answer_supported": {"type": "noul", "noul": probability},
         },
         "usage": {"input_tokens": max(1, len(json.dumps(state)) // 4), "output_tokens": 0},
     }
@@ -124,11 +116,14 @@ def classify_log(
     limit: Optional[int] = None,
     workers: int = 8,
     chunk_size: int = 64,
-    max_trace_chars: int = 8000,
-    max_facts: int = 40,
+    max_facts: int = 200,
+    max_fact_chars: int = 500,
+    support_threshold: float = 0.5,
     fail_fast: bool = False,
     quiet: bool = False,
     append: bool = False,
+    progress: bool = False,
+    total: Optional[int] = None,
 ) -> dict:
     questions = build_questions()
     counts = {label: 0 for label in BEHAVIOR_LABELS}
@@ -152,73 +147,82 @@ def classify_log(
             try:
                 state = build_state(
                     record, dataset,
-                    max_trace_chars=max_trace_chars, max_facts=max_facts,
+                    max_facts=max_facts, max_fact_chars=max_fact_chars,
                 )
                 response = client.classify(state, questions)
-                return record, parse_jev_response(response), None
+                return record, parse_jev_response(response, threshold=support_threshold), None
             except Exception as exc:  # noqa: BLE001 - recorded per record
                 if fail_fast:
                     raise
                 return record, None, f"{type(exc).__name__}: {exc}"
 
         write_header = not (append and output_path.exists())
-        with output_path.open("a" if not write_header else "w", encoding="utf-8") as out, \
-                ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-            def flush(chunk: list[dict]) -> None:
-                nonlocal errors, written
-                if not chunk:
-                    return
-                for record, result, error in pool.map(work, chunk):
-                    if error is not None:
-                        errors += 1
-                        enriched = apply_behavior(record, {"label": None, "error": error})
-                    else:
-                        label = result.get("label")
-                        if label in counts:
-                            counts[label] += 1
+        bar_total = total if total is not None else (limit if limit is not None else None)
+        bar = tqdm(total=bar_total, desc=f"{input_path.name} [{dataset}]", unit="rec") \
+            if (progress and tqdm is not None) else None
+        try:
+            with output_path.open("a" if not write_header else "w", encoding="utf-8") as out, \
+                    ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+                def flush(chunk: list[dict]) -> None:
+                    nonlocal errors, written
+                    if not chunk:
+                        return
+                    for record, result, error in pool.map(work, chunk):
+                        if error is not None:
+                            errors += 1
+                            enriched = apply_behavior(record, {"label": None, "error": error})
                         else:
-                            result["label"] = None
-                        enriched = apply_behavior(record, result)
-                    out.write(json.dumps(enriched) + "\n")
-                    written += 1
-                out.flush()
+                            label = result.get("label")
+                            if label in counts:
+                                counts[label] += 1
+                            else:
+                                result["label"] = None
+                            enriched = apply_behavior(record, result)
+                        out.write(json.dumps(enriched) + "\n")
+                        written += 1
+                        if bar is not None:
+                            bar.update(1)
+                    out.flush()
 
-            enriched_header = dict(header)
-            enriched_header["behavior_metadata"] = {
-                "version": BEHAVIOR_METADATA_VERSION,
-                "model": getattr(client, "model", "mock"),
-                "labels": BEHAVIOR_LABELS,
-                "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-            }
-            if write_header:
-                out.write(json.dumps(enriched_header) + "\n")
+                enriched_header = dict(header)
+                enriched_header["behavior_metadata"] = {
+                    "version": BEHAVIOR_METADATA_VERSION,
+                    "model": getattr(client, "model", "mock"),
+                    "labels": BEHAVIOR_LABELS,
+                    "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                }
+                if write_header:
+                    out.write(json.dumps(enriched_header) + "\n")
 
-            chunk: list[dict] = []
-            for obj in _iter_records(fd):
-                if "macro_precision" in obj:
-                    summary = obj
-                    continue
-                if "evaluation" not in obj:
-                    continue
-                seen += 1
-                if seen <= start:
-                    continue
-                if limit is not None and scheduled >= limit:
-                    break
-                chunk.append(obj)
-                scheduled += 1
-                if len(chunk) >= chunk_size:
+                chunk: list[dict] = []
+                for obj in _iter_records(fd):
+                    if "macro_precision" in obj:
+                        summary = obj
+                        continue
+                    if "evaluation" not in obj:
+                        continue
+                    seen += 1
+                    if seen <= start:
+                        continue
+                    if limit is not None and scheduled >= limit:
+                        break
+                    chunk.append(obj)
+                    scheduled += 1
+                    if len(chunk) >= chunk_size:
+                        flush(chunk)
+                        chunk = []
+                if chunk:
                     flush(chunk)
-                    chunk = []
-            if chunk:
-                flush(chunk)
 
-            if summary is not None and not append:
-                summary = dict(summary)
-                summary["behavior_counts"] = counts
-                summary["behavior_errors"] = errors
-                summary["behavior_usage"] = client.usage_summary()
-                out.write(json.dumps(summary) + "\n")
+                if summary is not None and not append:
+                    summary = dict(summary)
+                    summary["behavior_counts"] = counts
+                    summary["behavior_errors"] = errors
+                    summary["behavior_usage"] = client.usage_summary()
+                    out.write(json.dumps(summary) + "\n")
+        finally:
+            if bar is not None:
+                bar.close()
 
     if not quiet:
         print(f"{input_path.name}: wrote {written} records to {output_path} "
@@ -255,8 +259,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--limit", type=int, default=None, help="classify at most N records per input")
     parser.add_argument("--workers", type=int, default=8, help="concurrent Jev requests")
     parser.add_argument("--retries", type=int, default=5, help="retry attempts on 429/5xx")
-    parser.add_argument("--max-trace-chars", type=int, default=8000)
-    parser.add_argument("--max-facts", type=int, default=40)
+    parser.add_argument("--max-facts", type=int, default=200)
+    parser.add_argument("--max-fact-chars", type=int, default=500)
+    parser.add_argument("--support-threshold", type=float, default=0.5,
+                        help="probability above which the answer is labelled supported")
+    parser.add_argument("--total", type=int, default=None,
+                        help="total records for the progress bar (default: --limit, else unknown)")
+    parser.add_argument("--no-progress", action="store_true", help="disable the tqdm progress bar")
     parser.add_argument("--mock", action="store_true", help="offline heuristic labels (no API key)")
     parser.add_argument("--fail-fast", action="store_true", help="abort on the first API error")
     parser.add_argument("--append", action="store_true",
@@ -281,8 +290,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             input_path, output_path, client,
             dataset_override=args.dataset,
             start=args.start, limit=args.limit, workers=args.workers,
-            max_trace_chars=args.max_trace_chars, max_facts=args.max_facts,
+            max_facts=args.max_facts, max_fact_chars=args.max_fact_chars,
+            support_threshold=args.support_threshold,
             fail_fast=args.fail_fast, quiet=args.quiet, append=args.append,
+            progress=not args.quiet and not args.no_progress, total=args.total,
         ))
 
     report = {

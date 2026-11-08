@@ -36,7 +36,7 @@ class TestClassifyLog(unittest.TestCase):
                     '<fact> <France> <capital> <Paris> . </fact>\n<answer>\n["Paris"]\n</answer>', 1),
             _record("capital of Germany?", "Berlin", ["Berlin"],
                     [" <France> <capital> <Paris> ."], "Berlin", 1),
-            _record("capital of UK?", "London", ["Paris"],
+            _record("capital of UK?", "London", ["London"],
                     [" <France> <capital> <Paris> ."], "Paris", 0),
         ]
         with self.input.open("w") as f:
@@ -59,8 +59,9 @@ class TestClassifyLog(unittest.TestCase):
         lines = [json.loads(line) for line in output.read_text().splitlines()]
         header, records, summary = lines[0], lines[1:-1], lines[-1]
         self.assertIn("behavior_metadata", header)
-        self.assertEqual([r["behavior"]["label"] for r in records], ["best", "bad", "error"])
-        self.assertEqual(summary["behavior_counts"], {"best": 1, "acceptable": 0, "bad": 1, "error": 1})
+        self.assertEqual([r["behavior"]["label"] for r in records],
+                         ["supported", "unsupported", "unsupported"])
+        self.assertEqual(summary["behavior_counts"], {"supported": 1, "unsupported": 2})
         self.assertEqual(result["written"], 3)
 
     def test_limit(self):
@@ -71,7 +72,7 @@ class TestClassifyLog(unittest.TestCase):
         output, result = self._run(start=1)
         self.assertEqual(result["written"], 2)
         first = json.loads(output.read_text().splitlines()[1])
-        self.assertEqual(first["behavior"]["label"], "bad")
+        self.assertEqual(first["behavior"]["label"], "unsupported")
 
 
 if __name__ == "__main__":

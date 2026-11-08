@@ -326,9 +326,9 @@ The pipeline is implemented and documented in `error_categorization/sft_pipeline
 
 | Step | Tool |
 |---|---|
-| Behaviour labels (Jev) | `utils/classify_behaviors.py` (`utils/behaviors.py`, `utils/jev_client.py`) |
+| Support labels (Jev) | `utils/classify_behaviors.py` (`utils/behaviors.py`, `utils/jev_client.py`) |
 | Synthetic count traces (DeepSeek) | `utils/generate_count_traces.py` |
-| Behaviour-aware SFT mixture | `utils/build_sft_dataset.py` |
+| Support-filtered SFT mixture | `utils/build_sft_dataset.py` |
 
 ```bash
 # 1. label the four evaluation logs (pilot with --limit 500 --mock first)
@@ -342,19 +342,20 @@ python utils/generate_count_traces.py \
     --select teacher-wrong-or-no-count --n 1000 \
     --output logs/synthetic/count_traces.jsonl
 
-# 3. build the mixture (all non-2Wiki positives, 2Wiki capped at 2000)
+# 3. build the mixture (all non-2Wiki positives, 2Wiki capped at 2000;
+#    --include-bad keeps unsupported traces)
 python utils/build_sft_dataset.py \
     --natural logs/behaviors/*.behaviors \
     --synthetic logs/synthetic/count_traces.jsonl \
     --output logs/sft_training_mix.jsonl \
-    --two-wiki-cap 2000 --best-ratio 0.75 --min-acceptable 0.15
+    --two-wiki-cap 2000
 ```
 
-Cost (official prices): the full 51 319-record labelling is ~$12 off-peak with
-DeepSeek Flash or ~$3.3 with Jev; the 7 180-record mixture is ~$1.9 / ~$0.53.
-The 1 000 count traces cost ~$0.3–0.6 (measured: ~1 002 calls, median 143 output
-tokens). Start with a 500-record pilot (<$0.15) to validate the labels and the
-achieved 75/25 ratio.
+Cost: the support classifier sends only the question, the answer and the
+`triples` field (no trace), so a call is much cheaper than the earlier
+trace-based estimate. Measure with a 500-record pilot; the previous full-pool
+estimate (~$12 off-peak DeepSeek / ~$3.3 Jev) is an upper bound. The 1 000 count
+traces cost ~$0.3–0.6 (measured: ~1 002 calls, median 143 output tokens).
 
 ---
 
@@ -386,7 +387,7 @@ the signal-to-noise of the tool calls, for natural and synthetic traces alike.
 - count-specific: was the `<count>` necessary, and was it used to derive the
   answer instead of a retrieved fact?
 
-Slice by dataset, question type, behaviour label (`best`/`acceptable`/`bad`),
+Slice by dataset, question type, support label (`supported`/`unsupported`),
 correctness, trace length and truncation. Report separately on the natural pool
 and on the synthetic count set (there every useful trace should reach utility
 precision 1 if the count is genuinely necessary).
@@ -403,6 +404,6 @@ precision 1 if the count is genuinely necessary).
 - One extra judge call per trace, roughly the same order of cost as Jev
   classification.
 
-**Use.** A continuous signal next to the binary `bad` label: it flags "correct but
-wasteful" retrieval and redundant count calls, and it is a candidate reward term
-for GSPO (penalise unused calls, not only wrong answers).
+**Use.** A continuous signal next to the binary `unsupported` label: it flags
+"correct but wasteful" retrieval and redundant count calls, and it is a candidate
+reward term for GSPO (penalise unused calls, not only wrong answers).

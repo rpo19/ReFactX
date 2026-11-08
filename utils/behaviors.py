@@ -1,16 +1,19 @@
-"""Shared definitions for the answer-behaviour pipeline.
+"""Shared definitions for the answer-support pipeline.
 
-The four behaviours (the same labels are used by the Jev classifier, the SFT
-dataset builder and the reports):
+The classifier answers one question about each record:
 
-1. ``best``       — correct, reached by starting from the question's entities
-                    and chaining retrieved external facts.
-2. ``acceptable`` — correct, but the model already knew / proposed the answer
-                    and then verified it with retrieved facts.
-3. ``bad``        — correct, but the retrieved facts do not support it: right
-                    answer from guessing or parametric knowledge.
-4. ``error``      — wrong/missing answer, and the retrieved facts do not provide
-                    it.
+    Consider the question and these facts. Is the answer supported by these
+    facts? Do not use additional knowledge to decide whether the answer is true
+    or not. Limit to simply decide whether the answer is supported by the given
+    facts or not.
+
+The facts are the **`triples` field of the evaluation record** (the decoded
+``state.generated_triples`` written by ``utils/eval.py``).  There is no separate
+``generated_triples`` key in the logs, and no regex extraction is used.
+
+Output labels: ``supported`` / ``unsupported`` (plus the support probability).
+``unsupported`` does not mean the answer is false — only that the retrieved
+facts do not support it.
 
 This module has no heavy dependencies (no torch/transformers/refactx) so it can
 be imported by the log tools and by the API clients.
@@ -24,48 +27,22 @@ from typing import Any, Optional
 
 from utils.answer_normalization import fold_entity, parse_date, verify_answer
 
-BEHAVIOR_LABELS = ["best", "acceptable", "bad", "error"]
+SUPPORT_LABELS = ["supported", "unsupported"]
+BEHAVIOR_LABELS = SUPPORT_LABELS  # kept as the public name used by the tools
 
-BEHAVIOR_TITLES = {
-    "best": "Best (grounded traversal)",
-    "acceptable": "Acceptable (parametric + verified)",
-    "bad": "Bad (correct but unsupported)",
-    "error": "Error (wrong / answer not in facts)",
-}
-
-BEHAVIOR_DEFINITIONS = {
-    "best": (
-        "The answer is correct. The model starts from the entities or constraints in the "
-        "question and reaches the answer by retrieving and chaining external facts; the "
-        "final answer is supported by the retrieved facts and the trace actually uses them."
-    ),
-    "acceptable": (
-        "The answer is correct. The model effectively knows or proposes the answer from "
-        "prior/parametric knowledge and then checks or supports it with the retrieved "
-        "facts. The facts confirm the answer, but discovering it did not require them."
-    ),
-    "bad": (
-        "The answer is correct, but the retrieved facts do not support it. The model used "
-        "wrong, irrelevant or insufficient facts and still produced the right answer by "
-        "guessing or parametric knowledge (right answer, wrong or absent evidence)."
-    ),
-    "error": (
-        "The answer is wrong or missing, and the retrieved facts do not provide the answer. "
-        "The model failed to find or use the external facts needed to answer."
-    ),
-}
-
-JUDGE_INSTRUCTIONS = (
-    "Classify how the model produced its final answer. Use `answer_is_correct` as the "
-    "correctness definition (it is the verified label, not the model's opinion). Read the "
-    "question, the retrieved facts, the model trace and the final answer. Choose exactly "
-    "one label. Then answer the two companion yes/no questions."
+SUPPORT_INSTRUCTIONS = (
+    "Consider the question and these facts. Is the answer supported by these facts? "
+    "Do not use additional knowledge to decide whether the answer is true or not. "
+    "Limit to simply decide whether the answer is supported by the given facts or not."
 )
 
+SUPPORT_CRITERIA = {
+    "true": "The provided facts contain enough information to support the answer.",
+    "false": "The provided facts do not support the answer, even if the answer may be true in reality.",
+}
+
 ANSWER_BLOCK_RE = re.compile(r"<answer>\s*(.*?)\s*</answer>", re.DOTALL | re.IGNORECASE)
-FACT_RE = re.compile(r"<fact>\s*(.*?)\s*</fact>", re.DOTALL | re.IGNORECASE)
-COUNT_RE = re.compile(r"<count>\s*(.*?)\s*</count>", re.DOTALL | re.IGNORECASE)
-NO_FURTHER_RE = re.compile(r"no\s+further\s+(?:tokens|records)", re.IGNORECASE)
+FACT_RE = re.compile(r"<fact>", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +132,6 @@ def parse_answer(full_text: str) -> Optional[list]:
             return value if isinstance(value, list) else [value]
         except json.JSONDecodeError:
             return None
-    # Fallback to the evaluator's line-based convention.
     marker = "<answer>\n"
     if marker in text:
         raw = text.split(marker, 1)[1].split("\n", 1)[0].strip()
@@ -191,89 +167,50 @@ def calculate_metrics(prediction: Any, reference: Any, lowercase: bool = True) -
 # Jev request / response
 # ---------------------------------------------------------------------------
 
-def clip_trace(text: str, max_chars: int = 8000) -> str:
-    """Keep the head and the tail of a long trace."""
-    text = text or ""
-    if len(text) <= max_chars:
-        return text
-    head = int(max_chars * 0.6)
-    tail = max_chars - head
-    return text[:head] + "\n...[truncated]...\n" + text[-tail:]
+def build_state(record: dict, dataset: str, *, max_facts: int = 200,
+                max_fact_chars: int = 500) -> dict:
+    """The ``state`` sent to Jev: the question, the answer, and the log's triples.
 
-
-def build_state(record: dict, dataset: str, *, max_trace_chars: int = 8000,
-                max_facts: int = 40, max_fact_chars: int = 300) -> dict:
-    """The ``state`` object sent to Jev."""
-    triples = [str(t)[:max_fact_chars] for t in (record.get("triples") or [])][:max_facts]
-    verification = verify_record(record, dataset)
+    The facts come verbatim from ``record["triples"]`` (the generated triples
+    written by ``utils/eval.py``); no regex or trace parsing is applied.
+    """
+    facts = [str(t)[:max_fact_chars] for t in (record.get("triples") or [])][:max_facts]
     return {
-        "dataset": dataset,
-        "question_type": question_type(dataset, record.get("input_sample") or {}),
         "question": record.get("question"),
-        "answer_is_correct": bool(verification.normalized_match),
-        "evaluator_correct": (record.get("evaluation") or {}).get("correct") == 1,
-        "reference_answer": record.get("gt_answer"),
-        "final_answer": record.get("prediction"),
-        "retrieved_facts": triples,
-        "model_trace": clip_trace(record.get("full_prediction") or "", max_trace_chars),
+        "answer": record.get("prediction"),
+        "facts": facts,
     }
 
 
 def build_questions() -> dict:
-    """The named questions sent to Jev (one Choice + two Nouls)."""
+    """The single yes/no support question sent to Jev."""
     return {
-        "behavior": {
-            "type": "choice",
-            "instructions": JUDGE_INSTRUCTIONS,
-            "criteria": dict(BEHAVIOR_DEFINITIONS),
-        },
-        "answer_supported_by_facts": {
+        "answer_supported": {
             "type": "noul",
-            "instructions": (
-                "Do the retrieved facts contain enough information to support the final "
-                "answer, regardless of how the model produced it?"
-            ),
-            "criteria": {
-                "true": "The retrieved facts entail or directly support the final answer.",
-                "false": "The retrieved facts do not support the final answer.",
-            },
-        },
-        "derived_from_facts": {
-            "type": "noul",
-            "instructions": (
-                "Does the model trace derive the final answer from the retrieved facts "
-                "(reasoning from the question entities through the facts), rather than "
-                "asserting an answer it already knew?"
-            ),
-            "criteria": {
-                "true": "The trace uses the retrieved facts to find or compute the answer.",
-                "false": "The trace asserts the answer without deriving it from the facts.",
-            },
-        },
+            "instructions": SUPPORT_INSTRUCTIONS,
+            "criteria": dict(SUPPORT_CRITERIA),
+        }
     }
 
 
-def parse_jev_response(response: dict) -> dict:
+def parse_jev_response(response: dict, threshold: float = 0.5) -> dict:
     """Normalise a Jev response into the fields the pipeline stores."""
-    answers = (response or {}).get("answers") or {}
-    behavior = answers.get("behavior") or {}
-    label = behavior.get("choice")
-    if label not in BEHAVIOR_LABELS:
+    answer = ((response or {}).get("answers") or {}).get("answer_supported") or {}
+    probability = answer.get("noul")
+    if probability is not None:
+        probability = float(probability)
+        label = "supported" if probability >= threshold else "unsupported"
+        confidence = max(probability, 1.0 - probability)
+        probabilities = {"supported": probability, "unsupported": 1.0 - probability}
+    else:
         label = None
-    supported = (answers.get("answer_supported_by_facts") or {}).get("noul")
-    derived = (answers.get("derived_from_facts") or {}).get("noul")
-    diagnostic = None
-    if label == "error" and supported is not None and supported >= 0.5:
-        diagnostic = "wrong_with_facts"
-    elif label in {"best", "acceptable", "bad"}:
-        diagnostic = label
+        confidence = None
+        probabilities = {}
     return {
         "label": label,
-        "confidence": behavior.get("confidence"),
-        "probabilities": behavior.get("probabilities") or {},
-        "supported_probability": supported,
-        "derived_probability": derived,
-        "diagnostic": diagnostic,
+        "probability": probability,
+        "confidence": confidence,
+        "probabilities": probabilities,
         "model": (response or {}).get("model"),
         "usage": (response or {}).get("usage") or {},
     }
@@ -293,31 +230,16 @@ def _contains(haystack: str, needle: Any) -> bool:
 
 
 def heuristic_behavior(record: dict, dataset: str) -> dict:
-    """A deterministic, deliberately conservative stand-in for Jev (offline mode)."""
-    verification = verify_record(record, dataset)
-    facts = " ".join(str(t) for t in (record.get("triples") or []))
-    facts_folded = fold_entity(facts)
-    reference = _as_list(record.get("gt_answer"))
-    prediction = [str(p) for p in _as_list(record.get("prediction"))]
-    supported = any(_contains(facts_folded, v) for v in reference) or (
-        bool(prediction) and any(_contains(facts_folded, v) for v in prediction)
-    )
-    used = bool(FACT_RE.search(record.get("full_prediction") or ""))
-    if not verification.normalized_match:
-        label = "error"
-    elif supported and used:
-        label = "best"
-    elif supported:
-        label = "acceptable"
-    else:
-        label = "bad"
+    """Deterministic stand-in for Jev: does the answer appear in the facts?"""
+    facts = fold_entity(" ".join(str(t) for t in (record.get("triples") or [])))
+    prediction = _as_list(record.get("prediction"))
+    supported = bool(prediction) and any(_contains(facts, value) for value in prediction)
     return {
-        "label": label,
+        "label": "supported" if supported else "unsupported",
+        "probability": 1.0 if supported else 0.0,
         "confidence": 1.0,
-        "probabilities": {label: 1.0},
-        "supported_probability": 1.0 if supported else 0.0,
-        "derived_probability": 1.0 if used else 0.0,
-        "diagnostic": label,
+        "probabilities": {"supported": 1.0 if supported else 0.0,
+                          "unsupported": 0.0 if supported else 1.0},
         "model": "heuristic",
         "usage": {},
     }
@@ -330,7 +252,7 @@ def apply_behavior(record: dict, result: dict) -> dict:
 
 
 def behavior_counts(records: list[dict]) -> dict:
-    counts = {label: 0 for label in BEHAVIOR_LABELS}
+    counts = {label: 0 for label in SUPPORT_LABELS}
     by_dataset: dict[str, dict] = {}
     for record in records:
         label = ((record.get("behavior") or {}).get("label")) or "unlabeled"

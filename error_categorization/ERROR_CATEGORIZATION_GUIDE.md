@@ -47,7 +47,8 @@ These utilities complement this guide:
   python utils/verify_answers.py logs/sft_training/*.out*
   ```
 - `utils/classify_behaviors.py` labels every answer with Jev (TypeSafe System
-  One) as `best` / `acceptable` / `bad` / `error`; `utils/generate_count_traces.py`
+  One) as `supported` / `unsupported` (question + answer + the log's `triples`
+  field); `utils/generate_count_traces.py`
   generates count traces with DeepSeek (gold-conditioned, no tool simulation);
   `utils/build_sft_dataset.py` assembles the behaviour-balanced SFT mixture. See
   `error_categorization/sft_pipeline.md`:

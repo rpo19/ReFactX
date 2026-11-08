@@ -95,6 +95,26 @@ class TestBuilder(unittest.TestCase):
             # All test records carry a label, so nothing is dropped for this reason.
             self.assertEqual(report["skipped"].get("missing_behavior", 0), 0)
 
+    def test_support_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            log = tmp / "support.behaviors"
+            _write(log, {"dataset": "rpozzi/mintaka", "dataset_split": "train"}, [
+                _record("s-supported", "supported"),
+                _record("s-unsupported", "unsupported"),
+            ])
+            output = tmp / "mix.jsonl"
+            main(["--natural", str(log), "--output", str(output), "--quiet"])
+            lines = [json.loads(line) for line in output.read_text().splitlines()]
+            self.assertEqual(len(lines) - 1, 1)
+            self.assertEqual(lines[1]["behavior"], "supported")
+
+            output_all = tmp / "mix_all.jsonl"
+            main(["--natural", str(log), "--output", str(output_all),
+                  "--include-bad", "--quiet"])
+            lines_all = [json.loads(line) for line in output_all.read_text().splitlines()]
+            self.assertEqual(len(lines_all) - 1, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

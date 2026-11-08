@@ -1,12 +1,12 @@
-# SFT behaviour pipeline
+# SFT data pipeline
 
 This document describes the code that turns the four teacher evaluations into a
-behaviour-labelled, behaviour-balanced SFT dataset:
+support-labelled SFT dataset:
 
 ```mermaid
 flowchart LR
     A[eval logs<br/>logs/sft_training/*] --> B[classify_behaviors.py<br/>Jev]
-    B --> C[logs/*.behaviors<br/>behaviour labels]
+    B --> C[logs/*.behaviors<br/>support labels]
     A --> D[generate_count_traces.py<br/>DeepSeek, single call]
     D --> E[synthetic count JSONL]
     C --> F[build_sft_dataset.py]
@@ -16,38 +16,35 @@ flowchart LR
 
 | Tool | Purpose |
 |---|---|
-| `utils/behaviors.py` | shared labels, Jev prompt/state builders, answer parsing, metrics |
+| `utils/behaviors.py` | shared support label, Jev state/question builders, answer parsing, metrics |
 | `utils/jev_client.py` | minimal TypeSafe System One client (retries, usage, cost) |
-| `utils/classify_behaviors.py` | label every record of an eval log with Jev |
+| `utils/classify_behaviors.py` | label every record as `supported` / `unsupported` with Jev |
 | `utils/generate_count_traces.py` | generate `<count>` traces with DeepSeek (gold-conditioned, no tool simulation) |
 | `utils/build_sft_dataset.py` | select, stratify and write the SFT mixture |
 
 ---
 
-## 1. Behaviour labels
+## 1. Support labels
 
-Every answer gets exactly one label from `utils/behaviors.py`:
+The classifier answers one yes/no question per record, over the **question**, the
+**model's answer**, and the **`triples` field of the evaluation log** (the decoded
+generated triples written by `utils/eval.py`; no regex or trace parsing):
 
-| Label | Definition |
+> Consider the question and these facts. Is the answer supported by these facts?
+> Do not use additional knowledge to decide whether the answer is true or not.
+> Limit to simply decide whether the answer is supported by the given facts or not.
+
+| Label | Meaning |
 |---|---|
-| `best` | The answer is correct. The model starts from the question entities/constraints and reaches the answer by retrieving and chaining external facts; the answer is supported by those facts and the trace uses them. |
-| `acceptable` | The answer is correct. The model effectively knows or proposes it from parametric knowledge and then verifies/supports it with retrieved facts. |
-| `bad` | The answer is correct, but the retrieved facts do not support it (wrong/irrelevant/insufficient facts; right answer from guessing/parametric knowledge). |
-| `error` | The answer is wrong or missing, and the retrieved facts do not provide it. |
+| `supported` | The provided facts contain enough information to support the answer. |
+| `unsupported` | The provided facts do not support the answer (the answer may still be true in reality). |
 
-Two companion `noul` questions are asked in the same Jev request and stored next
-to the label:
+`unsupported` is the "correct but ungrounded / wrong evidence" signal used to
+filter the natural pool; it is **not** a correctness judgement. Correctness is
+still the verified evaluator label (`strict` **or** semantic `verify_answer`).
 
-- `answer_supported_by_facts` — probability that the retrieved facts support the answer;
-- `derived_from_facts` — probability that the trace derived the answer from the facts.
-
-A wrong answer whose facts *do* support the answer is labelled `error` (per the
-definition) and gets `diagnostic = "wrong_with_facts"`: that is the
-"found the facts but mis-composed" failure mode.
-
-Correctness is **verified** correctness (`strict` evaluator **or** semantic
-`verify_answer`), not the raw strict flag, so date/alias misevaluations are not
-misclassified as `error`.
+The log field is `triples`. There is no `generated_triples` key: `utils/eval.py`
+writes `state.generated_triples` into `triples`, and that value is sent verbatim.
 
 ---
 
@@ -71,16 +68,19 @@ used on test sets and by every existing reader:
 
 ```json
 "behavior": {
-  "label": "best",
-  "confidence": 0.91,
-  "probabilities": {"best": 0.91, "acceptable": 0.07, "bad": 0.01, "error": 0.01},
-  "supported_probability": 0.96,
-  "derived_probability": 0.88,
-  "diagnostic": "best",
+  "label": "supported",
+  "probability": 0.93,
+  "confidence": 0.93,
+  "probabilities": {"supported": 0.93, "unsupported": 0.07},
   "model": "jev-1.14.0",
   "usage": {"input_tokens": 1873, "output_tokens": 0}
 }
 ```
+
+`--support-threshold` (default 0.5) converts the probability into the label;
+`confidence` is `max(probability, 1 − probability)` so `--min-confidence` filters
+uncertain decisions. `--max-facts` (default 200) and `--max-fact-chars` (500)
+bound the facts sent.
 
 The header gains `behavior_metadata`; the macro summary gains `behavior_counts`,
 `behavior_errors` and `behavior_usage`. For chunked runs use
@@ -95,24 +95,19 @@ The header gains `behavior_metadata`; the macro summary gains `behavior_counts`,
 {
   "model": "jev-1.14.0",
   "state": {
-    "dataset": "mintaka",
-    "question_type": "count",
-    "question": "...",
-    "answer_is_correct": true,
-    "evaluator_correct": true,
-    "reference_answer": ["8"],
-    "final_answer": ["8"],
-    "retrieved_facts": ["<France> <shares border with> <Belgium> ."],
-    "model_trace": "... (head+tail, <= 8000 chars)"
+    "question": "How many countries border France?",
+    "answer": ["8"],
+    "facts": [" <France> <shares border with> <Belgium> .", " ..."]
   },
   "questions": {
-    "behavior": {
-      "type": "choice",
-      "instructions": "Classify how the model produced its final answer...",
-      "criteria": {"best": "...", "acceptable": "...", "bad": "...", "error": "..."}
-    },
-    "answer_supported_by_facts": {"type": "noul", "instructions": "..."},
-    "derived_from_facts": {"type": "noul", "instructions": "..."}
+    "answer_supported": {
+      "type": "noul",
+      "instructions": "Consider the question and these facts. Is the answer supported by these facts? Do not use additional knowledge to decide whether the answer is true or not. Limit to simply decide whether the answer is supported by the given facts or not.",
+      "criteria": {
+        "true": "The provided facts contain enough information to support the answer.",
+        "false": "The provided facts do not support the answer, even if the answer may be true in reality."
+      }
+    }
   }
 }
 ```
@@ -194,35 +189,31 @@ Selection rules:
 1. **Positives**: `evaluation.correct == 1` (or `--verified`), `triples > 0`, not
    truncated.
 2. **All non-2Wiki positives** are kept; 2Wiki is capped at `--two-wiki-cap`.
-3. **Behaviour-aware caps**: when a cap applies (2Wiki, `--max-per-type`,
-   `--max-per-dataset`), `best` and `acceptable` are sampled at
-   `--best-ratio` (default 75/25), with `--min-acceptable` as a floor. The
-   allocation is per question type, proportional to available data.
-4. `bad` traces are dropped unless `--include-bad`; positives mislabelled
-   `error` by Jev are dropped unless `--keep-error-labeled`.
-5. **Synthetic count traces** are added as `best` (they are count-grounded and
+3. **Support filter**: `unsupported` traces are dropped unless `--include-bad`.
+   Positives mislabelled `error` in legacy logs are dropped unless
+   `--keep-error-labeled`.
+4. **Legacy `best`/`acceptable` logs**: when a cap applies, the 75/25 ratio and
+   `--min-acceptable` are still honoured. Support-labelled logs have no
+   `acceptable` class, so an applied cap keeps all `supported` traces and the
+   manifest reports the ratio (100/0).
+5. **Synthetic count traces** are added as `supported` (count-grounded and
    verified).
 6. **Deduplicate by question**; synthetic wins over a duplicate natural trace.
 7. Shuffle with `--seed` for reproducibility.
 
-Use `--enforce-best-ratio` to globally downsample `acceptable` so the overall
-best:acceptable ratio approaches 75/25. Without it, uncapped datasets keep all
-their positives and the achieved ratio is reported in the manifest.
+`--enforce-best-ratio` only affects legacy `acceptable` traces; it is a no-op
+for support-labelled logs. Uncapped datasets keep all their supported positives.
 
-### Does 75/25 make sense?
+### Why the 4-way split was dropped
 
-Yes as a starting point, with two caveats:
+The old `best`/`acceptable`/`bad`/`error` classification put 98.4% of the
+verified positives in `best`, with almost no `acceptable` (0 in 2Wiki), so the
+75/25 target was unattainable. The support question is the part that mattered
+(keeping grounded answers, dropping unsupported ones), so the classifier now
+returns a single `supported`/`unsupported` decision and the builder keeps
+`supported` (dropping `unsupported` unless `--include-bad`).
 
-- `best` is the behaviour we want to teach (ground the answer in retrieved
-  facts), so a 3:1 bias is defensible; `acceptable` still teaches verification,
-  which is useful for questions where parametric knowledge is legitimate.
-- Do not let `acceptable` collapse: keep a floor (the default 15%) and apply the
-  ratio **per question type**, not only globally, so weak types do not lose
-  their verification traces. Run an ablation (75/25 vs 50/50 vs 90/10) and watch
-  `bad` (correct-but-unsupported) and tool-use precision.
-
-Synthetic count traces count as `best`, so they push the achieved ratio above
-75/25; the manifest reports the actual value.
+`unsupported` traces are a natural DPO rejected pool (`utils/select_dpo_data.py`).
 
 ### Output
 
@@ -233,12 +224,12 @@ Synthetic count traces count as `best`, so they push the achieved ratio above
   "counts": {
     "total": 7180,
     "by_dataset": {"mintaka": 3446, "webqsp": 554, "cwq": 1180, "2wiki": 2000},
-    "by_behavior": {"best": 5450, "acceptable": 730},
+    "by_behavior": {"supported": 6180, "unsupported": 160},
     "by_provenance": {"natural": 6180, "synthetic": 1000}
   }
 }
 {"question": "...", "prompt": "...", "full_prediction": "...", "triples": [...],
- "dataset": "mintaka", "behavior": "best", "provenance": "natural", ...}
+ "dataset": "mintaka", "behavior": "supported", "provenance": "natural", ...}
 ```
 
 The sample fields match `utils/filter_positive_training_samples.py` plus
@@ -253,8 +244,10 @@ parameters.
 
 ## 5. Cost
 
-Measured judge inputs (300 records/dataset, trace capped at 8k chars) and the
-official prices:
+Measured judge inputs for the earlier trace-based classifier (300
+records/dataset, trace capped at 8k chars). The support classifier sends only the
+question, the answer and the `triples` field (no trace), so these are an **upper
+bound**; measure the support run with a pilot.
 
 | Scope | Calls | DeepSeek Flash off-peak | DeepSeek peak | Jev 1.14 |
 |---|---:|---:|---:|---:|

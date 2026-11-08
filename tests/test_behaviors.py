@@ -1,4 +1,4 @@
-"""Tests for utils/behaviors.py."""
+"""Tests for utils/behaviors.py (answer-support classifier)."""
 import unittest
 
 from utils.behaviors import (
@@ -53,63 +53,51 @@ class TestParsingAndMetrics(unittest.TestCase):
         self.assertEqual(answer_shape(["a", "b"]), "list")
 
 
-class TestJevContract(unittest.TestCase):
+class TestSupportContract(unittest.TestCase):
 
-    def test_questions_have_four_labels_and_nouls(self):
+    def test_question_is_a_support_noul(self):
         questions = build_questions()
-        self.assertEqual(set(questions["behavior"]["criteria"]),
-                         {"best", "acceptable", "bad", "error"})
-        self.assertEqual(questions["answer_supported_by_facts"]["type"], "noul")
-        self.assertEqual(questions["derived_from_facts"]["type"], "noul")
+        self.assertEqual(set(questions), {"answer_supported"})
+        question = questions["answer_supported"]
+        self.assertEqual(question["type"], "noul")
+        self.assertIn("supported by these facts", question["instructions"])
+        self.assertIn("Do not use additional knowledge", question["instructions"])
 
-    def test_state_uses_verified_correctness(self):
-        state = build_state(_record(evaluation={"correct": 0}), "mintaka")
-        # The strict evaluator said wrong, but the answers are identical.
-        self.assertTrue(state["answer_is_correct"])
-        self.assertFalse(state["evaluator_correct"])
-        self.assertIn("retrieved_facts", state)
-        self.assertIn("model_trace", state)
+    def test_state_uses_the_log_triples_field(self):
+        triples = [" <A> <r> <B> .", " <B> <r2> <C> ."]
+        state = build_state(_record(triples=triples), "mintaka")
+        self.assertEqual(state["facts"], triples)  # verbatim, no regex
+        self.assertEqual(state["answer"], ["Paris"])
+        self.assertEqual(state["question"], "What is the capital of France?")
+        self.assertNotIn("model_trace", state)
 
-    def test_parse_response(self):
-        response = {
-            "model": "jev-1.14.0",
-            "answers": {
-                "behavior": {"type": "choice", "choice": "best", "confidence": 0.9,
-                             "probabilities": {"best": 0.9, "acceptable": 0.1}},
-                "answer_supported_by_facts": {"type": "noul", "noul": 0.95},
-                "derived_from_facts": {"type": "noul", "noul": 0.9},
-            },
-            "usage": {"input_tokens": 100, "output_tokens": 0},
-        }
+    def test_parse_supported(self):
+        response = {"model": "jev-1.14.0",
+                    "answers": {"answer_supported": {"type": "noul", "noul": 0.93}},
+                    "usage": {"input_tokens": 100, "output_tokens": 0}}
         parsed = parse_jev_response(response)
-        self.assertEqual(parsed["label"], "best")
-        self.assertEqual(parsed["diagnostic"], "best")
-        self.assertAlmostEqual(parsed["supported_probability"], 0.95)
+        self.assertEqual(parsed["label"], "supported")
+        self.assertAlmostEqual(parsed["probability"], 0.93)
+        self.assertAlmostEqual(parsed["confidence"], 0.93)
 
-    def test_wrong_with_facts_is_flagged(self):
-        response = {"answers": {
-            "behavior": {"type": "choice", "choice": "error", "confidence": 0.8, "probabilities": {}},
-            "answer_supported_by_facts": {"type": "noul", "noul": 0.9},
-            "derived_from_facts": {"type": "noul", "noul": 0.1},
-        }}
-        self.assertEqual(parse_jev_response(response)["diagnostic"], "wrong_with_facts")
+    def test_parse_unsupported_and_threshold(self):
+        response = {"answers": {"answer_supported": {"type": "noul", "noul": 0.2}}}
+        self.assertEqual(parse_jev_response(response)["label"], "unsupported")
+        self.assertEqual(parse_jev_response(response, threshold=0.1)["label"], "supported")
 
 
 class TestHeuristic(unittest.TestCase):
 
-    def test_grounded_correct_is_best(self):
-        self.assertEqual(heuristic_behavior(_record(), "mintaka")["label"], "best")
+    def test_answer_in_facts_is_supported(self):
+        self.assertEqual(heuristic_behavior(_record(), "mintaka")["label"], "supported")
 
-    def test_correct_without_support_is_bad(self):
-        rec = _record(gt_answer="Berlin", prediction=["Berlin"],
-                      triples=[" <France> <capital> <Paris> ."],
-                      full_prediction="Berlin")
-        self.assertEqual(heuristic_behavior(rec, "mintaka")["label"], "bad")
+    def test_answer_not_in_facts_is_unsupported(self):
+        rec = _record(prediction=["Berlin"])
+        self.assertEqual(heuristic_behavior(rec, "mintaka")["label"], "unsupported")
 
-    def test_wrong_is_error(self):
-        rec = _record(gt_answer="London", prediction=["Paris"],
-                      evaluation={"correct": 0})
-        self.assertEqual(heuristic_behavior(rec, "mintaka")["label"], "error")
+    def test_missing_answer_is_unsupported(self):
+        self.assertEqual(heuristic_behavior(_record(prediction=None), "mintaka")["label"],
+                         "unsupported")
 
 
 if __name__ == "__main__":
