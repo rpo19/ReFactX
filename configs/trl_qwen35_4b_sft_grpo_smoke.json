@@ -1,7 +1,7 @@
 {
-  "experiment_name": "trl_qwen35_4b_sft_grpo_smoke",
+  "experiment_name": "trl_qwen35_4b_sft_supported_mix_grpo_smoke",
   "model": "Qwen/Qwen3.5-4B",
-  "adapter": null,
+  "adapter": "/data/horse/ws/ripo631h-quokka/sft_output_supported_mix",
   "dataset": "rpozzi/mintaka",
   "sentinel": true,
   "count_pattern": "<count>",

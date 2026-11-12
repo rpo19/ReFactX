@@ -63,14 +63,16 @@ export INDEX="$POSTGRES_CONNECTION"
 
 echo "Postgres index: $INDEX"
 
-if [ ! -d "/data/horse/ws/ripo631h-quokka/sft_output_qwen35_4b" ]; then
-    echo "SFT adapter directory is missing" >&2
+# Must match the `adapter` path in configs/trl_qwen35_4b_sft_grpo.json.
+SFT_ADAPTER="$WS_PATH/sft_output_supported_mix"
+if [ ! -f "$SFT_ADAPTER/adapter_config.json" ]; then
+    echo "SFT adapter missing at $SFT_ADAPTER" >&2
     exit 1
 fi
 
 mkdir -p logs
 
-echo "Starting GRPO from the Qwen3.5-4B SFT adapter at $(date)"
+echo "Starting GSPO from $SFT_ADAPTER at $(date)"
 echo "SLURM_JOB_ID=$SLURM_JOB_ID"
 echo "Node: $(hostname)"
 echo "GPUs: ${CUDA_VISIBLE_DEVICES:-not set}"

@@ -78,6 +78,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fact-pattern", default=None)
     parser.add_argument("--answer-pattern", default=None)
     parser.add_argument(
+        "--count-pattern",
+        default=None,
+        help="Marker that triggers the constrained count tool (default: <count>)",
+    )
+    parser.add_argument(
         "--sentinel",
         action="store_true",
         default=None,

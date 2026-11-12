@@ -28,12 +28,7 @@ if [ -f "$SHARED_POSTGRES" ]; then
     export BASE_INDEX_PATH="$INDEX_PATH"
 fi
 
-MERGE_DIR=/data/horse/ws/ripo631h-quokka/sft_merged
-if [ ! -d "$MERGE_DIR" ]; then
-    echo "Merging LoRA adapters..."
-    python -m utils.merge_lora
-fi
-
+# The config loads the adapter directly via `adapter_path`; no merge step.
 echo "Starting SFT Mintaka test eval at $(date)"
 python -m utils.eval --config configs/config_mintaka_sft_test.json
 echo "SFT Mintaka test eval finished at $(date)"
