@@ -28,6 +28,8 @@ We present ReFactX, a scalable method that enables LLMs to access external knowl
 
 This repository contains the source code for using ReFactX and reproducing our work accepted at ISWC 2025.
 
+The [Nemo rule-generation extension](ReFactX-with-Rules/README.md) adds a synthetic ownership graph, a reasoner adapter, and a benchmark for model-generated Datalog rules. See the [pilot milestone](ReFactX-with-Rules/MILESTONE_NEMO_RULE_GENERATION.md) for the server results and their scope.
+
 ## Install ReFactX
 Create a virtualenv or conda environment, then
 ```

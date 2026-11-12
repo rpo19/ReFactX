@@ -38,6 +38,9 @@ refactx-debug-postgres = "refactx.cli.debug_postgres:main"
 [tool.setuptools.packages.find]
 include = ["refactx*"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [project.urls]
 Homepage = "https://github.com/rpo19/ReFactX"
 Repository = "https://github.com/rpo19/ReFactX"
