@@ -250,5 +250,127 @@ class TestGrpoConfigsSentinel(unittest.TestCase):
                 self.assertIs(config["sentinel"], True, f"{path.name} disables sentinel")
 
 
+class TestDetailsOutput(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ns = _load_module()
+
+    def test_details_capture_correctness_and_tool_use(self):
+        details = []
+        completion = _completion(["8"], facts=1, count=8)
+        self.ns["exact_reward"](
+            [completion],
+            [["8"]],
+            question_type=["count"],
+            count_pattern="<count>",
+            alpha=0.1,
+            beta=0.0,
+            details=details,
+        )
+        self.assertEqual(len(details), 1)
+        info = details[0]
+        self.assertTrue(info["correct"])
+        self.assertTrue(info["is_count_question"])
+        self.assertTrue(info["used_count"])
+        self.assertTrue(info["answered"])
+        self.assertFalse(info["dont_know"])
+        self.assertEqual(info["question_type"], "count")
+        self.assertEqual(info["fact_calls"], 1)
+        self.assertAlmostEqual(info["answer_credit"], 1.0)
+
+    def test_details_mark_dont_know(self):
+        details = []
+        completion = _completion(["I don't know."], facts=1)
+        self.ns["exact_reward"]([completion], [["Paris"]], details=details)
+        self.assertTrue(details[0]["dont_know"])
+        self.assertFalse(details[0]["correct"])
+
+
+class TestWindowHelpers(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ns = _load_module()
+
+    def test_stats_delta(self):
+        delta = self.ns["_stats_delta"](
+            {"n": 5, "total": 10.0}, {"n": 2, "total": 4.0}
+        )
+        self.assertEqual(delta["n"], 3)
+        self.assertAlmostEqual(delta["total"], 6.0)
+
+    def test_percentile(self):
+        perc = self.ns["_percentile"]
+        self.assertAlmostEqual(perc([0, 10, 20, 30], 0.5), 15.0)
+        self.assertAlmostEqual(perc([0, 10, 20, 30], 0.0), 0.0)
+        self.assertAlmostEqual(perc([0, 10, 20, 30], 1.0), 30.0)
+        self.assertEqual(perc([], 0.5), 0.0)
+
+
+class TestGroupAndBehaviorMetrics(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ns = _load_module()
+
+    def _detail(self, correct, used_count, **overrides):
+        detail = {
+            "correct": correct,
+            "used_count": used_count,
+            "used_sentinel": False,
+            "answered": True,
+            "dont_know": False,
+            "normalized_match": False,
+            "answer_credit": 1.0 if correct else 0.0,
+            "structure": 0.6,
+            "json": 0.5,
+            "is_count_question": False,
+        }
+        detail.update(overrides)
+        return detail
+
+    def test_group_diagnostics(self):
+        stats = {}
+        details = [
+            self._detail(False, False),
+            self._detail(True, True),
+            self._detail(False, False),
+            self._detail(False, False),
+        ]
+        self.ns["_accumulate_group_metrics"]([1.0, 2.0, 0.0, 0.0], details, 2, stats)
+        metrics = self.ns["_group_metrics"](stats)
+        self.assertEqual(metrics["train/group/groups"], 2)
+        self.assertAlmostEqual(metrics["train/group/zero_advantage_frac"], 0.5)
+        self.assertAlmostEqual(metrics["train/group/reward_std"], 0.25)
+        self.assertAlmostEqual(metrics["train/group/all_wrong_frac"], 0.5)
+        self.assertAlmostEqual(metrics["train/group/all_correct_frac"], 0.0)
+        self.assertAlmostEqual(metrics["train/group/pass_at_k"], 0.5)
+        self.assertAlmostEqual(metrics["train/group/tool_diverse_frac"], 0.5)
+
+    def test_behavior_and_conditional_tool_metrics(self):
+        stats = {}
+        details = [
+            self._detail(True, True, is_count_question=True),
+            self._detail(False, False, is_count_question=True),
+        ]
+        self.ns["_accumulate_group_metrics"]([2.1, 1.1], details, 2, stats)
+        metrics = self.ns["_behavior_metrics"](stats)
+        self.assertAlmostEqual(metrics["train/tool/count_type_rate"], 1.0)
+        self.assertAlmostEqual(metrics["train/tool/count_usage_on_count_type"], 0.5)
+        self.assertAlmostEqual(metrics["train/tool/count_accuracy_used"], 1.0)
+        self.assertAlmostEqual(metrics["train/tool/count_accuracy_unused"], 0.0)
+        self.assertAlmostEqual(metrics["train/window/confident_wrong_rate"], 0.5)
+        self.assertAlmostEqual(metrics["train/window/format_saturation"], 1.0)
+        self.assertAlmostEqual(metrics["train/window/answer_vs_correct_gap"], 0.0)
+
+    def test_tool_counter_metrics_include_gaps(self):
+        metrics = self.ns["_tool_counter_metrics"](
+            {"count_uses": 3, "sentinel_uses": 1},
+            {"count_calls": 2, "sentinel_calls": 1},
+        )
+        self.assertEqual(metrics["train/tool/count_uses"], 3)
+        self.assertEqual(metrics["train/tool/count_calls"], 2)
+        self.assertEqual(metrics["train/tool/count_text_decoder_gap"], 1)
+        self.assertEqual(metrics["train/tool/sentinel_text_decoder_gap"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

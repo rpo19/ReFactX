@@ -455,6 +455,7 @@ def exact_reward(
     max_fact_penalty: float = 0.2,
     use_normalized: bool = True,
     stats: dict | None = None,
+    details: list | None = None,
     **kwargs: Any,
 ) -> list[float]:
     """Score structure, correctness, retrieval efficiency and gated tool use.
@@ -483,6 +484,7 @@ def exact_reward(
         text = _text(completion)
         normalized = text.lower()
         reference = _at(answer, index)
+        qtype = _at(question_type, index)
 
         # Encourage the configured output markers. These are soft incentives
         # and do not require a complete proof.
@@ -503,6 +505,7 @@ def exact_reward(
         answer_credit = 0.0
         normalized_match = False
         is_correct = False
+        predicted_values = []
         try:
             # Only the text inside the configured answer section is evaluated.
             # This prevents facts or reasoning from counting as answers.
@@ -535,6 +538,13 @@ def exact_reward(
             # whole batch fail; keep the structural reward accumulated above.
             pass
 
+        used_count = _marker_count(normalized, count_pattern) > 0
+        used_sentinel = SENTINEL_MARKER in normalized
+        if qtype:
+            is_count_question = str(qtype).strip().lower() == count_type.lower()
+        else:
+            is_count_question = _is_count_question_text(_at(question, index))
+
         score = structure + json_score + answer_credit - penalty
 
         # Tool use is rewarded only when it coincides with a correct answer and
@@ -542,14 +552,9 @@ def exact_reward(
         # an additive bonus) keeps the incentive modest.
         tool_bonus = 0.0
         if is_correct and score > 0:
-            qtype = _at(question_type, index)
-            if qtype:
-                is_count_question = str(qtype).strip().lower() == count_type.lower()
-            else:
-                is_count_question = _is_count_question_text(_at(question, index))
-            if is_count_question and _marker_count(normalized, count_pattern) > 0:
+            if is_count_question and used_count:
                 tool_bonus += score * alpha
-            if bool(_at(requires_enumeration, index)) and SENTINEL_MARKER in normalized:
+            if bool(_at(requires_enumeration, index)) and used_sentinel:
                 tool_bonus += score * beta
         score += tool_bonus
 
@@ -567,6 +572,23 @@ def exact_reward(
             stats["correct"] = stats.get("correct", 0) + int(is_correct)
             if normalized_match:
                 stats["normalized_matches"] = stats.get("normalized_matches", 0) + 1
+
+        if details is not None:
+            details.append({
+                "score": score,
+                "correct": is_correct,
+                "normalized_match": normalized_match,
+                "fact_calls": fact_calls,
+                "used_count": used_count,
+                "used_sentinel": used_sentinel,
+                "question_type": None if qtype is None else str(qtype),
+                "is_count_question": is_count_question,
+                "answered": bool(predicted_values),
+                "dont_know": bool(predicted_values and "i don't know" in predicted_values[0]),
+                "answer_credit": answer_credit,
+                "structure": structure,
+                "json": json_score,
+            })
     return rewards
 
 
@@ -612,6 +634,23 @@ def evaluate_policy(
     count_tool_examples = 0
     sentinel_uses = 0
     sentinel_examples = 0
+    normalized_matches = 0
+    dont_know_total = 0
+    confident_wrong = 0
+    answered = 0
+    answered_without_triples = 0
+    fact_calls_values = []
+    completion_lengths = []
+    truncated = 0
+    type_total = {}
+    type_correct = {}
+    count_used = 0
+    count_used_correct = 0
+    count_unused = 0
+    count_unused_correct = 0
+    count_type_total = 0
+    reward_config = reward_options or {}
+    fact_soft_cap = int(reward_config.get("fact_soft_cap", 20))
 
     if generation_output:
         output_parent = os.path.dirname(generation_output)
@@ -692,6 +731,7 @@ def evaluate_policy(
             count_tool_examples += usage["count_examples"]
             sentinel_uses += usage["sentinel_uses"]
             sentinel_examples += usage["sentinel_examples"]
+            detail = []
             sample_reward = exact_reward(
                 [completion],
                 [reference],
@@ -705,8 +745,10 @@ def evaluate_policy(
                 ],
                 requires_enumeration=[example.get("requires_full_enumeration")],
                 stats=reward_stats,
+                details=detail,
                 **(reward_options or {}),
             )[0]
+            info = detail[0] if detail else {}
             rewards.append(sample_reward)
 
             triples = []
@@ -719,6 +761,31 @@ def evaluate_policy(
                     ]
                 except (AttributeError, IndexError, TypeError, RuntimeError):
                     triples = []
+
+            normalized_matches += int(bool(info.get("normalized_match")))
+            answered += int(bool(info.get("answered")))
+            dont_know_total += int(bool(info.get("dont_know")))
+            confident_wrong += int(
+                bool(info.get("answered")) and not info.get("correct") and not info.get("dont_know")
+            )
+            fact_calls_values.append(int(info.get("fact_calls", 0)))
+            completion_lengths.append(new_tokens_generated)
+            if len(completion_ids) >= max_completion_length:
+                truncated += 1
+            if info.get("answered") and not triples:
+                answered_without_triples += 1
+            qtype = info.get("question_type")
+            if qtype:
+                type_total[qtype] = type_total.get(qtype, 0) + 1
+                type_correct[qtype] = type_correct.get(qtype, 0) + int(bool(info.get("correct")))
+            if info.get("is_count_question"):
+                count_type_total += 1
+                if info.get("used_count"):
+                    count_used += 1
+                    count_used_correct += int(bool(info.get("correct")))
+                else:
+                    count_unused += 1
+                    count_unused_correct += int(bool(info.get("correct")))
 
             if generation_output:
                 sample = {
@@ -754,21 +821,46 @@ def evaluate_policy(
             total += 1
 
     metrics = {
-        "eval_answer_accuracy": exact_matches / total,
-        "eval_valid_answer_rate": valid_answers / total,
-        "eval_format_accuracy": formatted / total,
-        "eval_mean_reward": sum(rewards) / total,
-        "eval_count_tool_uses": count_tool_uses,
-        "eval_count_tool_rate": count_tool_examples / total,
-        "eval_count_tool_mean": count_tool_uses / total,
-        "eval_sentinel_uses": sentinel_uses,
-        "eval_sentinel_rate": sentinel_examples / total,
-        "eval_sentinel_mean": sentinel_uses / total,
+        "eval/answer_accuracy": exact_matches / total,
+        "eval/normalized_accuracy": normalized_matches / total,
+        "eval/valid_answer_rate": valid_answers / total,
+        "eval/format_accuracy": formatted / total,
+        "eval/mean_reward": sum(rewards) / total,
+        "eval/answered_rate": answered / total,
+        "eval/abstention_rate": dont_know_total / total,
+        "eval/confident_wrong_rate": confident_wrong / total,
+        "eval/answered_without_triples_rate": answered_without_triples / total,
+        "eval/fact_calls_mean": sum(fact_calls_values) / total,
+        "eval/fact_calls_p50": _percentile(fact_calls_values, 0.50),
+        "eval/fact_calls_p90": _percentile(fact_calls_values, 0.90),
+        "eval/fact_calls_p99": _percentile(fact_calls_values, 0.99),
+        "eval/fact_calls_over_cap_frac": (
+            sum(1 for value in fact_calls_values if value > fact_soft_cap) / total
+        ),
+        "eval/completion_len_mean": sum(completion_lengths) / total,
+        "eval/completion_len_p90": _percentile(completion_lengths, 0.90),
+        "eval/truncation_rate": truncated / total,
+        "eval/count_tool_uses": count_tool_uses,
+        "eval/count_tool_rate": count_tool_examples / total,
+        "eval/count_tool_mean": count_tool_uses / total,
+        "eval/sentinel_uses": sentinel_uses,
+        "eval/sentinel_rate": sentinel_examples / total,
+        "eval/sentinel_mean": sentinel_uses / total,
     }
-    metrics.update(_reward_component_metrics(reward_stats, prefix="eval_"))
+    if count_type_total:
+        metrics["eval/tool/count_usage_on_count_type"] = count_used / count_type_total
+    if count_used:
+        metrics["eval/tool/count_accuracy_used"] = count_used_correct / count_used
+    if count_unused:
+        metrics["eval/tool/count_accuracy_unused"] = count_unused_correct / count_unused
+    for qtype, count in type_total.items():
+        safe = str(qtype).replace(" ", "_").replace("/", "_")
+        metrics[f"eval/per_type/{safe}/accuracy"] = type_correct.get(qtype, 0) / count
+        metrics[f"eval/per_type/{safe}/n"] = count
+    metrics.update(_reward_component_metrics(reward_stats, prefix="eval/"))
     if decoder_before is not None and decoder_counter is not None:
-        metrics["eval_count_tool_calls"] = decoder_counter["count_calls"] - decoder_before["count_calls"]
-        metrics["eval_sentinel_calls"] = decoder_counter["sentinel_calls"] - decoder_before["sentinel_calls"]
+        metrics["eval/count_tool_calls"] = decoder_counter["count_calls"] - decoder_before["count_calls"]
+        metrics["eval/sentinel_calls"] = decoder_counter["sentinel_calls"] - decoder_before["sentinel_calls"]
     return metrics
 
 
@@ -792,13 +884,152 @@ def _reward_component_metrics(stats: dict | None, prefix: str = "") -> dict[str,
     }
 
 
+def _stats_delta(current: dict, previous: dict) -> dict:
+    """Per-key difference between two running accumulators (window = now - then)."""
+    keys = set(current) | set(previous)
+    return {key: current.get(key, 0) - previous.get(key, 0) for key in keys}
+
+
+def _percentile(values, q: float) -> float:
+    """Linear-interpolated percentile without pulling in numpy."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return float(ordered[0])
+    position = (len(ordered) - 1) * q
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = position - lower
+    return float(ordered[lower] + (ordered[upper] - ordered[lower]) * fraction)
+
+
+def _tool_counter_metrics(tool_counter: dict, decoder_counter: dict, prefix: str = "train/tool/") -> dict:
+    """Aggregate tool usage from the exact decoder counters plus text gaps."""
+    gaps = _tool_counter_gaps(tool_counter, decoder_counter)
+    return {
+        f"{prefix}count_uses": tool_counter.get("count_uses", 0),
+        f"{prefix}count_examples": tool_counter.get("count_examples", 0),
+        f"{prefix}sentinel_uses": tool_counter.get("sentinel_uses", 0),
+        f"{prefix}sentinel_examples": tool_counter.get("sentinel_examples", 0),
+        f"{prefix}count_calls": decoder_counter.get("count_calls", 0),
+        f"{prefix}sentinel_calls": decoder_counter.get("sentinel_calls", 0),
+        f"{prefix}count_text_decoder_gap": gaps["count"],
+        f"{prefix}sentinel_text_decoder_gap": gaps["sentinel"],
+    }
+
+
+def _accumulate_group_metrics(rewards, details, num_generations, stats: dict) -> None:
+    """Accumulate GRPO/GSPO group signal and per-example behavior counts.
+
+    Groups are consecutive chunks of ``num_generations`` completions (TRL emits
+    each prompt's generations contiguously). If the batch does not divide evenly
+    the group portion is skipped and counted instead of silently mis-grouped.
+    """
+    total = len(rewards)
+    if num_generations and num_generations > 1 and total and total % num_generations == 0:
+        for start in range(0, total, num_generations):
+            group = rewards[start:start + num_generations]
+            group_details = details[start:start + num_generations]
+            mean = sum(group) / len(group)
+            std = (sum((value - mean) ** 2 for value in group) / len(group)) ** 0.5
+            stats["groups"] = stats.get("groups", 0) + 1
+            stats["group_std_sum"] = stats.get("group_std_sum", 0.0) + std
+            if max(group) == min(group):
+                stats["zero_adv_groups"] = stats.get("zero_adv_groups", 0) + 1
+            corrects = [bool(d.get("correct")) for d in group_details]
+            if corrects and all(corrects):
+                stats["all_correct_groups"] = stats.get("all_correct_groups", 0) + 1
+            if not any(corrects):
+                stats["all_wrong_groups"] = stats.get("all_wrong_groups", 0) + 1
+            if any(corrects):
+                stats["pass_groups"] = stats.get("pass_groups", 0) + 1
+            tools = [bool(d.get("used_count") or d.get("used_sentinel")) for d in group_details]
+            if len(set(tools)) > 1:
+                stats["tool_diverse_groups"] = stats.get("tool_diverse_groups", 0) + 1
+    else:
+        stats["groups_skipped"] = stats.get("groups_skipped", 0) + 1
+
+    for detail in details:
+        stats["examples"] = stats.get("examples", 0) + 1
+        stats["answered"] = stats.get("answered", 0) + int(bool(detail.get("answered")))
+        stats["dont_know"] = stats.get("dont_know", 0) + int(bool(detail.get("dont_know")))
+        stats["correct"] = stats.get("correct", 0) + int(bool(detail.get("correct")))
+        stats["confident_wrong"] = stats.get("confident_wrong", 0) + int(
+            bool(detail.get("answered")) and not detail.get("correct") and not detail.get("dont_know")
+        )
+        stats["normalized_correct"] = stats.get("normalized_correct", 0) + int(bool(detail.get("normalized_match")))
+        stats["sum_answer_credit"] = stats.get("sum_answer_credit", 0.0) + float(detail.get("answer_credit", 0.0))
+        stats["sum_structure"] = stats.get("sum_structure", 0.0) + float(detail.get("structure", 0.0))
+        stats["sum_json"] = stats.get("sum_json", 0.0) + float(detail.get("json", 0.0))
+        stats["used_sentinel"] = stats.get("used_sentinel", 0) + int(bool(detail.get("used_sentinel")))
+        is_count = bool(detail.get("is_count_question"))
+        used_count = bool(detail.get("used_count"))
+        stats["count_type"] = stats.get("count_type", 0) + int(is_count)
+        stats["count_used"] = stats.get("count_used", 0) + int(is_count and used_count)
+        stats["count_used_correct"] = stats.get("count_used_correct", 0) + int(
+            is_count and used_count and detail.get("correct")
+        )
+        stats["count_unused"] = stats.get("count_unused", 0) + int(is_count and not used_count)
+        stats["count_unused_correct"] = stats.get("count_unused_correct", 0) + int(
+            is_count and not used_count and detail.get("correct")
+        )
+
+
+def _group_metrics(stats: dict) -> dict:
+    """Group-relative diagnostics (does the rollout group carry a gradient?)."""
+    groups = stats.get("groups", 0)
+    metrics = {
+        "train/group/groups": groups,
+        "train/group/groups_skipped": stats.get("groups_skipped", 0),
+    }
+    if groups:
+        metrics.update({
+            "train/group/zero_advantage_frac": stats.get("zero_adv_groups", 0) / groups,
+            "train/group/reward_std": stats.get("group_std_sum", 0.0) / groups,
+            "train/group/all_correct_frac": stats.get("all_correct_groups", 0) / groups,
+            "train/group/all_wrong_frac": stats.get("all_wrong_groups", 0) / groups,
+            "train/group/pass_at_k": stats.get("pass_groups", 0) / groups,
+            "train/group/tool_diverse_frac": stats.get("tool_diverse_groups", 0) / groups,
+        })
+    return metrics
+
+
+def _behavior_metrics(stats: dict) -> dict:
+    """Per-window behavior and alignment metrics from per-example details."""
+    examples = stats.get("examples", 0)
+    if not examples:
+        return {}
+    count_type = stats.get("count_type", 0)
+    count_used = stats.get("count_used", 0)
+    count_unused = stats.get("count_unused", 0)
+    metrics = {
+        "train/window/abstention_rate": stats.get("dont_know", 0) / examples,
+        "train/window/confident_wrong_rate": stats.get("confident_wrong", 0) / examples,
+        "train/window/normalized_match_frac": stats.get("normalized_correct", 0) / examples,
+        "train/window/answer_vs_correct_gap": (
+            stats.get("sum_answer_credit", 0.0) - stats.get("correct", 0)
+        ) / examples,
+        "train/window/format_saturation": (stats.get("sum_structure", 0.0) / examples) / 0.6,
+        "train/tool/count_type_rate": count_type / examples,
+        "train/tool/sentinel_usage_rate": stats.get("used_sentinel", 0) / examples,
+    }
+    if count_type:
+        metrics["train/tool/count_usage_on_count_type"] = count_used / count_type
+    if count_used:
+        metrics["train/tool/count_accuracy_used"] = stats.get("count_used_correct", 0) / count_used
+    if count_unused:
+        metrics["train/tool/count_accuracy_unused"] = stats.get("count_unused_correct", 0) / count_unused
+    return metrics
+
+
 class CustomMetricsCallback:
     """Log deterministic validation metrics during long GRPO runs."""
 
     def __init__(self, tokenizer, dataset, max_completion_length, fact_pattern,
                  answer_pattern, eval_batch_size, every_steps, triple_counter,
                  generation_output, model, tool_counter=None, decoder_counter=None,
-                 reward_options=None, train_reward_stats=None):
+                 reward_options=None, train_reward_stats=None, train_group_stats=None):
         self.tokenizer = tokenizer
         self.dataset = dataset
         self.max_completion_length = max_completion_length
@@ -813,9 +1044,12 @@ class CustomMetricsCallback:
         self.model = model
         self.reward_options = reward_options or {}
         self.train_reward_stats = train_reward_stats or {}
+        self.train_group_stats = train_group_stats or {}
         self.trainer = None
         self.pending_metrics = None
         self._tool_gap_warned = {}
+        self._reward_snapshot = {}
+        self._group_snapshot = {}
 
     def __getattr__(self, name):
         # TrainerCallbackHandler invokes every lifecycle event directly.
@@ -850,22 +1084,15 @@ class CustomMetricsCallback:
             reward_stats=eval_reward_stats,
         )
         self.pending_metrics["constrained_triples_generated"] = self.triple_counter["count"]
-        self._add_tool_counters(self.pending_metrics)
+        self.pending_metrics.update(
+            _tool_counter_metrics(self.tool_counter, self.decoder_counter)
+        )
         if self.trainer is not None:
             self.trainer.log(self.pending_metrics)
             self.pending_metrics = None
         if was_training:
             model.train()
         return control
-
-    def _add_tool_counters(self, metrics):
-        """Attach cumulative constrained-tool usage counters to a metrics dict."""
-        metrics["count_tool_uses"] = self.tool_counter.get("count_uses", 0)
-        metrics["count_tool_examples"] = self.tool_counter.get("count_examples", 0)
-        metrics["sentinel_uses"] = self.tool_counter.get("sentinel_uses", 0)
-        metrics["sentinel_examples"] = self.tool_counter.get("sentinel_examples", 0)
-        metrics["count_tool_calls"] = self.decoder_counter.get("count_calls", 0)
-        metrics["sentinel_calls"] = self.decoder_counter.get("sentinel_calls", 0)
 
     def _warn_on_tool_gap(self, gaps):
         """Warn when text-detected usage drifts from the decoder counter.
@@ -891,12 +1118,23 @@ class CustomMetricsCallback:
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs is not None:
             logs["constrained_triples_generated"] = self.triple_counter["count"]
-            self._add_tool_counters(logs)
+            logs.update(_tool_counter_metrics(self.tool_counter, self.decoder_counter))
             gaps = _tool_counter_gaps(self.tool_counter, self.decoder_counter)
-            logs["count_tool_text_decoder_gap"] = gaps["count"]
-            logs["sentinel_text_decoder_gap"] = gaps["sentinel"]
             self._warn_on_tool_gap(gaps)
-            logs.update(_reward_component_metrics(self.train_reward_stats, prefix="train_"))
+
+            # Cumulative reward components and the delta since the last log, so
+            # a late-phase change is not hidden by the whole-run average.
+            logs.update(_reward_component_metrics(self.train_reward_stats, prefix="train/cumulative/"))
+            reward_window = _stats_delta(self.train_reward_stats, self._reward_snapshot)
+            logs.update(_reward_component_metrics(reward_window, prefix="train/window/"))
+
+            # Group signal and behavior metrics are naturally windowed.
+            group_window = _stats_delta(self.train_group_stats, self._group_snapshot)
+            logs.update(_group_metrics(group_window))
+            logs.update(_behavior_metrics(group_window))
+
+            self._reward_snapshot = dict(self.train_reward_stats)
+            self._group_snapshot = dict(self.train_group_stats)
         if logs is not None and self.pending_metrics:
             logs.update(self.pending_metrics)
             self.pending_metrics = None
@@ -1055,6 +1293,8 @@ def main() -> None:
     }
     # Cumulative component sums so on_log can report each reward term separately.
     train_reward_stats = {}
+    # Cumulative group/behavior sums; on_log derives per-window deltas from these.
+    train_group_stats = {}
     # Keep a named function here: TRL 1.0 records reward names from
     # ``__name__`` and does not handle callable objects or partials.
     triple_counter = {"count": 0}
@@ -1084,7 +1324,8 @@ def main() -> None:
         _accumulate_tool_usage(tool_counter, completions)
         if judge is not None:
             return judge(completions, question=question, **kwargs)
-        return exact_reward(
+        details = []
+        rewards = exact_reward(
             completions,
             answer,
             fact_pattern=args.fact_pattern,
@@ -1093,8 +1334,12 @@ def main() -> None:
             question_type=kwargs.get("question_type") or kwargs.get("complexityType") or kwargs.get("type"),
             requires_enumeration=kwargs.get("requires_full_enumeration"),
             stats=train_reward_stats,
+            details=details,
             **reward_options,
         )
+        # GRPO/GSPO group diagnostics and conditional tool/behavior metrics.
+        _accumulate_group_metrics(rewards, details, args.num_generations, train_group_stats)
+        return rewards
 
     def on_triple_generated(_sequence):
         triple_counter["count"] += 1
@@ -1182,10 +1427,7 @@ def main() -> None:
 
     trainer.log({
         "constrained_triples_generated": triple_counter["count"],
-        "count_tool_uses": tool_counter["count_uses"],
-        "sentinel_uses": tool_counter["sentinel_uses"],
-        "count_tool_calls": decoder_counter["count_calls"],
-        "sentinel_calls": decoder_counter["sentinel_calls"],
+        **_tool_counter_metrics(tool_counter, decoder_counter),
         "custom_metrics_ready": 0,
     })
 
@@ -1199,6 +1441,7 @@ def main() -> None:
         decoder_counter=decoder_counter,
         reward_options=reward_options,
         train_reward_stats=train_reward_stats,
+        train_group_stats=train_group_stats,
     )
     trainer.add_callback(metrics_callback)
     metrics_callback.trainer = trainer
@@ -1215,10 +1458,7 @@ def main() -> None:
             reward_stats=initial_reward_stats,
         )
         initial_metrics["constrained_triples_generated"] = triple_counter["count"]
-        initial_metrics["count_tool_uses"] = tool_counter["count_uses"]
-        initial_metrics["sentinel_uses"] = tool_counter["sentinel_uses"]
-        initial_metrics["count_tool_calls"] = decoder_counter["count_calls"]
-        initial_metrics["sentinel_calls"] = decoder_counter["sentinel_calls"]
+        initial_metrics.update(_tool_counter_metrics(tool_counter, decoder_counter))
         initial_metrics["custom_metrics_ready"] = 1
         trainer.log(initial_metrics)
         print("Initial validation metrics:", json.dumps(initial_metrics, sort_keys=True))
@@ -1226,18 +1466,18 @@ def main() -> None:
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     if evaluation is not None:
+        final_reward_stats = {}
         eval_metrics = evaluate_policy(
             model, tokenizer, evaluation, args.max_completion_length,
             args.fact_pattern, args.answer_pattern, args.eval_batch_size,
             generation_output=args.generation_output,
             evaluation_label="final",
             decoder_counter=decoder_counter,
+            reward_options=reward_options,
+            reward_stats=final_reward_stats,
         )
         eval_metrics["constrained_triples_generated"] = triple_counter["count"]
-        eval_metrics["count_tool_uses"] = tool_counter["count_uses"]
-        eval_metrics["sentinel_uses"] = tool_counter["sentinel_uses"]
-        eval_metrics["count_tool_calls"] = decoder_counter["count_calls"]
-        eval_metrics["sentinel_calls"] = decoder_counter["sentinel_calls"]
+        eval_metrics.update(_tool_counter_metrics(tool_counter, decoder_counter))
         trainer.log(eval_metrics)
         print("Validation metrics:", json.dumps(eval_metrics, sort_keys=True))
 
