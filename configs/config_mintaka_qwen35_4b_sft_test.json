@@ -1,11 +1,11 @@
 {
-    "experiment_name": "mintaka_test_eval_qwen35_4b_sft",
+    "experiment_name": "mintaka_test_eval_qwen35_4b_sft_supported_mix",
     "output": null,
     "log_dir": "logs",
     "tablename": "qwen36",
     "model_name": "Qwen/Qwen3.5-4B",
     "model_dtype": "bfloat16",
-    "adapter_path": "/data/horse/ws/ripo631h-quokka/sft_output_qwen35_4b",
+    "adapter_path": "/data/horse/ws/ripo631h-quokka/sft_output_supported_mix",
     "dataset": "rpozzi/mintaka",
     "dataset_config": "default",
     "dataset_split": "test",
