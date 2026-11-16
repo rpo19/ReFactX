@@ -23,10 +23,10 @@ fi
 source "$SLURM_SUBMIT_DIR/hpc/env.sh"
 
 # Per-job disposable PostgreSQL on a read-only copy-on-write view of the
-# shared PGDATA. Replaces the old shared-server/addr-file/watchdog logic;
-# see hpc/postgres_overlay.sh for the mechanism and workarounds.
+# shared PGDATA. Each submitted task gets its own instance; see
+# hpc/postgres_overlay.sh for the mechanism and workarounds.
 source "$SLURM_SUBMIT_DIR/hpc/postgres_overlay.sh"
-# Each attempt gets a fresh instance: a crashed server cannot poison a retry.
+pg_overlay_start ro
 pg_overlay_install_traps
 
 cd "$SLURM_SUBMIT_DIR"
@@ -34,27 +34,15 @@ cd "$SLURM_SUBMIT_DIR"
 echo "Starting $CFG at $(date)"
 echo "SLURM_JOB_ID=$SLURM_JOB_ID  Node: $(hostname)"
 echo "GPU: ${CUDA_VISIBLE_DEVICES:-not set}"
+echo "Postgres socket: $PGHOST"
 
 EXP=$(basename "$CFG" .json)
-attempt=1
-max_attempts=3
-while true; do
-    pg_overlay_start ro
-    if python -m utils.eval --config "$CFG"; then
-        pg_overlay_stop
-        teleclinotify "finish experiment $EXP"
-        break
-    else
-        status=$?
-        pg_overlay_stop
-        if [ "$attempt" -ge "$max_attempts" ]; then
-            teleclinotify "experiment $EXP failed"
-            exit "$status"
-        fi
-        echo "Attempt $attempt failed (exit $status); retrying in 60s..." >&2
-        attempt=$((attempt + 1))
-        sleep 60
-    fi
-done
+if python -m utils.eval --config "$CFG"; then
+    teleclinotify "finish experiment $EXP"
+else
+    status=$?
+    teleclinotify "experiment $EXP failed"
+    exit "$status"
+fi
 
 echo "Finished $CFG at $(date)"
