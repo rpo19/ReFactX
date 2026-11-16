@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import warnings
 from typing import Any, Iterable
 
 from dotenv import load_dotenv
@@ -88,6 +89,38 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Enable the exhausted-retrieval '<no further records>' sentinel during generation",
     )
+    parser.add_argument(
+        "--reward-alpha", type=float, default=None,
+        help="Gated multiplier paid when a count question uses <count> and is correct",
+    )
+    parser.add_argument(
+        "--reward-beta", type=float, default=None,
+        help="Gated multiplier paid when an enumeration question uses the sentinel and is correct",
+    )
+    parser.add_argument(
+        "--fact-soft-cap", type=int, default=None,
+        help="Fact calls allowed before the retrieval-loop penalty applies",
+    )
+    parser.add_argument(
+        "--fact-penalty", type=float, default=None,
+        help="Penalty per fact call beyond the soft cap",
+    )
+    parser.add_argument(
+        "--max-fact-penalty", type=float, default=None,
+        help="Upper bound on the fact-count penalty",
+    )
+    parser.add_argument(
+        "--count-type", default=None,
+        help="Question-type value that marks a counting question (default: count)",
+    )
+    parser.add_argument(
+        "--enumeration-datasets", nargs="+", default=None,
+        help="List-answer datasets whose multi-item answers gate the sentinel bonus (default: webqsp)",
+    )
+    parser.add_argument(
+        "--no-normalized-reward", action="store_true", default=None,
+        help="Disable semantically-normalized answer credit in the reward",
+    )
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--report-to", default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -145,6 +178,14 @@ def parse_args() -> argparse.Namespace:
         "answer_pattern": config.get("answer_pattern", "<answer>"),
         "sentinel": config.get("sentinel", True),
         "count_pattern": config.get("count_pattern", "<count>"),
+        "reward_alpha": config.get("reward_alpha", 0.1),
+        "reward_beta": config.get("reward_beta", 0.05),
+        "fact_soft_cap": config.get("fact_soft_cap", 20),
+        "fact_penalty": config.get("fact_penalty", 0.01),
+        "max_fact_penalty": config.get("max_fact_penalty", 0.2),
+        "count_type": config.get("count_type", "count"),
+        "enumeration_datasets": config.get("enumeration_datasets", ["webqsp"]),
+        "use_normalized_reward": config.get("use_normalized_reward", True),
         "learning_rate": config.get("learning_rate", 5e-6),
         # Default to wandb; an explicit "report_to" still wins, and an
         # explicit "wandb": false opts out.
@@ -156,6 +197,8 @@ def parse_args() -> argparse.Namespace:
     for name, default in defaults.items():
         if getattr(args, name) is None:
             setattr(args, name, default)
+    if args.no_normalized_reward:
+        args.use_normalized_reward = False
     return args
 
 
@@ -211,6 +254,9 @@ def _parsed_answer(text: str, answer_pattern: str = "<answer>") -> list[str] | N
 
 COUNT_MARKER = "<count>"
 SENTINEL_MARKER = "no further records"
+# Warn when the text-based usage counter drifts from the exact decoder counter
+# by more than this many calls (prevents one-off noise from spamming logs).
+TOOL_COUNTER_GAP_THRESHOLD = 5
 
 
 def _tool_usage_stats(completions: Iterable[Any]) -> dict[str, int]:
@@ -246,39 +292,217 @@ def _accumulate_tool_usage(counter: dict[str, int], completions: Iterable[Any]) 
         counter[key] = counter.get(key, 0) + value
 
 
+def _at(values: Any, index: int) -> Any:
+    """Index a per-example column that TRL passes as a list (or a scalar)."""
+    if values is None:
+        return None
+    if isinstance(values, (list, tuple)):
+        return values[index] if index < len(values) else None
+    return values
+
+
+def _as_list_raw(value: Any) -> list[str]:
+    """Like :func:`_as_list` but preserves case for the normalizer."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value]
+    return [str(value).strip()]
+
+
+def _dataset_tag(name: Any) -> str:
+    """Map a dataset identifier onto the tags used by the normalizer."""
+    lowered = str(name or "").lower()
+    if "mintaka" in lowered:
+        return "mintaka"
+    if "2wiki" in lowered or "twowiki" in lowered:
+        return "2wiki"
+    if "webqsp" in lowered:
+        return "webqsp"
+    if "cwq" in lowered:
+        return "cwq"
+    return lowered
+
+
+def _is_count_question_text(question: Any) -> bool:
+    """Fallback count-question detector when no type column is available."""
+    if not question:
+        return False
+    return bool(re.search(
+        r"\bhow many\b|\bhow much\b|\bnumber of\b|\bcount\b",
+        str(question), flags=re.IGNORECASE,
+    ))
+
+
+def _processor_kwargs(fact_pattern: str, count_pattern: str, sentinel: bool) -> dict:
+    """Static kwargs forwarded to the constrained logits processor.
+
+    Centralised so the training and validation construction sites forward
+    ``sentinel`` and ``count_pattern`` identically; tests assert the forwarding
+    (a previously silent bug was that ``sentinel`` was never forwarded).
+    """
+    return {
+        "num_beams": 1,
+        "fact_pattern": fact_pattern,
+        "count_pattern": count_pattern,
+        "sentinel": bool(sentinel),
+        "return_list": True,
+        "avoid_duplicates": True,
+        "reinit_states": True,
+    }
+
+
+def _tool_counter_gaps(text_counter: dict, decoder_counter: dict) -> dict:
+    """Text-detected usage minus exact decoder-side calls, per tool.
+
+    The reward has to gate per example on the generated text, but the decoder
+    counter is ground truth for aggregate usage. A persistent non-zero gap means
+    the text heuristic is drifting (e.g. echoed or hallucinated markers).
+    """
+    return {
+        "count": int(text_counter.get("count_uses", 0)) - int(decoder_counter.get("count_calls", 0)),
+        "sentinel": int(text_counter.get("sentinel_uses", 0)) - int(decoder_counter.get("sentinel_calls", 0)),
+    }
+
+
+def _derive_question_type(example: dict) -> Any:
+    """Resolve the question-type column across dataset schemas.
+
+    Mintaka exposes ``complexityType`` (top level; nested under ``input_sample``
+    in tooling output), 2Wiki uses ``type``, and some datasets nest either one.
+    """
+    for key in ("complexityType", "type", "question_type"):
+        value = example.get(key)
+        if value is not None:
+            return value
+    nested = example.get("input_sample")
+    if isinstance(nested, dict):
+        for key in ("complexityType", "type", "question_type"):
+            value = nested.get(key)
+            if value is not None:
+                return value
+    return None
+
+
+def _derive_requires_enumeration(answer: Any, dataset: str, enumeration_datasets: Iterable[Any]) -> bool:
+    """Flag multi-item answers on configured list-answer datasets.
+
+    Conservative proxy for the report's "single-relation fan-out equals answer
+    cardinality" heuristic: it only applies to the configured list-answer
+    datasets (default WebQSP) and only for answers with two or more items, so it
+    never turns a generic multi-answer Mintaka question into a sentinel target.
+    """
+    allowed = {_dataset_tag(name) for name in (enumeration_datasets or [])}
+    if _dataset_tag(dataset) not in allowed:
+        return False
+    values = answer if isinstance(answer, (list, tuple)) else [answer]
+    return sum(1 for v in values if v not in (None, "")) >= 2
+
+
+# Cached import probe for the conservative answer normalizer. ``None`` means
+# "not yet attempted"; ``False`` records that the module is unavailable.
+_COMPARE_ANSWERS = None
+
+
+def _get_compare_answers():
+    global _COMPARE_ANSWERS
+    if _COMPARE_ANSWERS is None:
+        try:
+            from utils.answer_normalization import compare_answers
+        except ImportError:
+            try:
+                from answer_normalization import compare_answers
+            except ImportError:
+                compare_answers = None
+        _COMPARE_ANSWERS = compare_answers if compare_answers is not None else False
+    return _COMPARE_ANSWERS or None
+
+
+def _answers_normalized_match(prediction, reference, dataset="", question=None, input_sample=None):
+    """True when the predicted answer is semantically equivalent to the gold."""
+    compare_answers = _get_compare_answers()
+    if compare_answers is None:
+        return False
+    try:
+        result = compare_answers(
+            _as_list_raw(prediction),
+            _as_list_raw(reference),
+            dataset=dataset,
+            question=question if isinstance(question, str) else None,
+            input_sample=input_sample if isinstance(input_sample, dict) else None,
+        )
+    except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError):
+        # Reward computation must never crash a training batch.
+        return False
+    return bool(result.normalized_match)
+
+
 def exact_reward(
     completions: Iterable[Any],
     answer: Iterable[Any],
     fact_pattern: str = "<fact>",
     answer_pattern: str = "<answer>",
-    **_: Any,
+    question: Any = None,
+    question_type: Any = None,
+    requires_enumeration: Any = None,
+    dataset: str = "",
+    count_pattern: str = "<count>",
+    count_type: str = "count",
+    alpha: float = 0.1,
+    beta: float = 0.05,
+    fact_soft_cap: int = 20,
+    fact_penalty: float = 0.01,
+    max_fact_penalty: float = 0.2,
+    use_normalized: bool = True,
+    stats: dict | None = None,
+    **kwargs: Any,
 ) -> list[float]:
-    """Score structure and answer overlap without loading a second model.
+    """Score structure, correctness, retrieval efficiency and gated tool use.
 
     The reward is deliberately made up of small, interpretable terms:
 
     * ``0.3`` for using at least one configured fact section;
     * ``0.3`` for having exactly one configured answer section;
     * ``0.5`` for producing a JSON answer;
-    * ``0..1`` for answer-set intersection-over-union (IoU).
+    * ``0..1`` for answer credit: full credit for a semantically equivalent
+      answer (via ``utils/answer_normalization.py``), otherwise the strict
+      answer-set intersection-over-union (IoU);
+    * a small penalty for fact calls beyond ``fact_soft_cap`` (loop breaker);
+    * a correct-answer-gated multiplier: ``alpha`` for count questions that
+      used ``<count>``, ``beta`` for enumeration questions that used the
+      exhausted-retrieval sentinel.
 
     A malformed answer still receives the formatting points, but no answer
-    correctness points.  This gives the policy a learning signal before it
-    consistently emits valid JSON.
+    credit. When ``stats`` is given it is updated in place with component sums
+    so each term can be logged separately and reward hacking is visible.
     """
+    dataset_tag = _dataset_tag(dataset)
+    input_samples = kwargs.get("input_sample")
     rewards = []
-    for completion, reference in zip(completions, answer):
+    for index, completion in enumerate(completions):
         text = _text(completion)
         normalized = text.lower()
-        score = 0.0
+        reference = _at(answer, index)
 
         # Encourage the configured output markers. These are soft incentives
         # and do not require a complete proof.
+        structure = 0.0
         if _marker_count(normalized, fact_pattern) > 0:
-            score += 0.3
+            structure += 0.3
         if _marker_count(normalized, answer_pattern) == 1:
-            score += 0.3
+            structure += 0.3
 
+        # Retrieval-loop breaker: examples needing more than ~20 fact calls are
+        # essentially never answered correctly, so stop the policy inflating
+        # the trace. Bounded so it cannot dominate the correctness term.
+        fact_calls = _marker_count(normalized, fact_pattern)
+        excess = max(0, fact_calls - fact_soft_cap)
+        penalty = min(max_fact_penalty, fact_penalty * excess)
+
+        json_score = 0.0
+        answer_credit = 0.0
+        normalized_match = False
+        is_correct = False
         try:
             # Only the text inside the configured answer section is evaluated.
             # This prevents facts or reasoning from counting as answers.
@@ -290,14 +514,59 @@ def exact_reward(
             # with some correct entities is better than an entirely wrong one.
             intersection = set(predicted_values) & set(reference_values)
             union = set(predicted_values) | set(reference_values)
-            iou = len(intersection) / len(union) if union else 0.0
-            score += 0.5 + iou
+            strict_iou = len(intersection) / len(union) if union else 0.0
+            is_correct = bool(predicted_values) and set(predicted_values) == set(reference_values)
+
+            json_score = 0.5
+            # A semantically equivalent answer (same date, quantity, alias or
+            # entity under folding) should not be punished for formatting.
+            if use_normalized:
+                normalized_match = _answers_normalized_match(
+                    predicted,
+                    reference,
+                    dataset=dataset_tag,
+                    question=_at(question, index),
+                    input_sample=_at(input_samples, index),
+                )
+            answer_credit = 1.0 if normalized_match else strict_iou
+            is_correct = is_correct or normalized_match
         except (TypeError, ValueError, json.JSONDecodeError):
             # Invalid JSON is common early in RL training. Do not make the
             # whole batch fail; keep the structural reward accumulated above.
             pass
 
+        score = structure + json_score + answer_credit - penalty
+
+        # Tool use is rewarded only when it coincides with a correct answer and
+        # a question type where the tool is designed to help. A multiplier (not
+        # an additive bonus) keeps the incentive modest.
+        tool_bonus = 0.0
+        if is_correct and score > 0:
+            qtype = _at(question_type, index)
+            if qtype:
+                is_count_question = str(qtype).strip().lower() == count_type.lower()
+            else:
+                is_count_question = _is_count_question_text(_at(question, index))
+            if is_count_question and _marker_count(normalized, count_pattern) > 0:
+                tool_bonus += score * alpha
+            if bool(_at(requires_enumeration, index)) and SENTINEL_MARKER in normalized:
+                tool_bonus += score * beta
+        score += tool_bonus
+
         rewards.append(score)
+
+        if stats is not None:
+            stats["n"] = stats.get("n", 0) + 1
+            stats["total"] = stats.get("total", 0.0) + score
+            stats["structure"] = stats.get("structure", 0.0) + structure
+            stats["json"] = stats.get("json", 0.0) + json_score
+            stats["answer"] = stats.get("answer", 0.0) + answer_credit
+            stats["fact_penalty"] = stats.get("fact_penalty", 0.0) + penalty
+            stats["tool_bonus"] = stats.get("tool_bonus", 0.0) + tool_bonus
+            stats["fact_calls"] = stats.get("fact_calls", 0) + fact_calls
+            stats["correct"] = stats.get("correct", 0) + int(is_correct)
+            if normalized_match:
+                stats["normalized_matches"] = stats.get("normalized_matches", 0) + 1
     return rewards
 
 
@@ -312,6 +581,8 @@ def evaluate_policy(
     generation_output: str | None = None,
     evaluation_label: str = "evaluation",
     decoder_counter: dict[str, int] | None = None,
+    reward_options: dict | None = None,
+    reward_stats: dict | None = None,
 ) -> dict[str, float]:
     """Evaluate deterministic completions against the dataset answer column.
 
@@ -422,9 +693,19 @@ def evaluate_policy(
             sentinel_uses += usage["sentinel_uses"]
             sentinel_examples += usage["sentinel_examples"]
             sample_reward = exact_reward(
-                [completion], [reference],
+                [completion],
+                [reference],
                 fact_pattern=fact_pattern,
                 answer_pattern=answer_pattern,
+                question=[example.get("question")],
+                question_type=[
+                    example.get("question_type")
+                    or example.get("complexityType")
+                    or example.get("type")
+                ],
+                requires_enumeration=[example.get("requires_full_enumeration")],
+                stats=reward_stats,
+                **(reward_options or {}),
             )[0]
             rewards.append(sample_reward)
 
@@ -472,7 +753,7 @@ def evaluate_policy(
                     output_file.write(json.dumps(sample, ensure_ascii=False) + "\n")
             total += 1
 
-    return {
+    metrics = {
         "eval_answer_accuracy": exact_matches / total,
         "eval_valid_answer_rate": valid_answers / total,
         "eval_format_accuracy": formatted / total,
@@ -483,10 +764,31 @@ def evaluate_policy(
         "eval_sentinel_uses": sentinel_uses,
         "eval_sentinel_rate": sentinel_examples / total,
         "eval_sentinel_mean": sentinel_uses / total,
-        **({
-            "eval_count_tool_calls": decoder_counter["count_calls"] - decoder_before["count_calls"],
-            "eval_sentinel_calls": decoder_counter["sentinel_calls"] - decoder_before["sentinel_calls"],
-        } if decoder_before is not None and decoder_counter is not None else {}),
+    }
+    metrics.update(_reward_component_metrics(reward_stats, prefix="eval_"))
+    if decoder_before is not None and decoder_counter is not None:
+        metrics["eval_count_tool_calls"] = decoder_counter["count_calls"] - decoder_before["count_calls"]
+        metrics["eval_sentinel_calls"] = decoder_counter["sentinel_calls"] - decoder_before["sentinel_calls"]
+    return metrics
+
+
+def _reward_component_metrics(stats: dict | None, prefix: str = "") -> dict[str, float]:
+    """Convert accumulated reward component sums into per-example means."""
+    if not stats:
+        return {}
+    n = stats.get("n", 0)
+    if not n:
+        return {}
+    return {
+        f"{prefix}reward_mean": stats.get("total", 0.0) / n,
+        f"{prefix}reward_structure": stats.get("structure", 0.0) / n,
+        f"{prefix}reward_json": stats.get("json", 0.0) / n,
+        f"{prefix}reward_answer": stats.get("answer", 0.0) / n,
+        f"{prefix}reward_fact_penalty": stats.get("fact_penalty", 0.0) / n,
+        f"{prefix}reward_tool_bonus": stats.get("tool_bonus", 0.0) / n,
+        f"{prefix}reward_fact_calls": stats.get("fact_calls", 0) / n,
+        f"{prefix}reward_correct_rate": stats.get("correct", 0) / n,
+        f"{prefix}reward_normalized_matches": stats.get("normalized_matches", 0) / n,
     }
 
 
@@ -495,7 +797,8 @@ class CustomMetricsCallback:
 
     def __init__(self, tokenizer, dataset, max_completion_length, fact_pattern,
                  answer_pattern, eval_batch_size, every_steps, triple_counter,
-                 generation_output, model, tool_counter=None, decoder_counter=None):
+                 generation_output, model, tool_counter=None, decoder_counter=None,
+                 reward_options=None, train_reward_stats=None):
         self.tokenizer = tokenizer
         self.dataset = dataset
         self.max_completion_length = max_completion_length
@@ -508,8 +811,11 @@ class CustomMetricsCallback:
         self.decoder_counter = decoder_counter or {}
         self.generation_output = generation_output
         self.model = model
+        self.reward_options = reward_options or {}
+        self.train_reward_stats = train_reward_stats or {}
         self.trainer = None
         self.pending_metrics = None
+        self._tool_gap_warned = {}
 
     def __getattr__(self, name):
         # TrainerCallbackHandler invokes every lifecycle event directly.
@@ -533,12 +839,15 @@ class CustomMetricsCallback:
         ):
             return control
         was_training = model.training
+        eval_reward_stats = {}
         self.pending_metrics = evaluate_policy(
             model, self.tokenizer, self.dataset, self.max_completion_length,
             self.fact_pattern, self.answer_pattern, self.eval_batch_size,
             generation_output=self.generation_output,
             evaluation_label=f"step_{state.global_step}",
             decoder_counter=self.decoder_counter,
+            reward_options=self.reward_options,
+            reward_stats=eval_reward_stats,
         )
         self.pending_metrics["constrained_triples_generated"] = self.triple_counter["count"]
         self._add_tool_counters(self.pending_metrics)
@@ -558,10 +867,36 @@ class CustomMetricsCallback:
         metrics["count_tool_calls"] = self.decoder_counter.get("count_calls", 0)
         metrics["sentinel_calls"] = self.decoder_counter.get("sentinel_calls", 0)
 
+    def _warn_on_tool_gap(self, gaps):
+        """Warn when text-detected usage drifts from the decoder counter.
+
+        Only warns when a gap grows past the threshold, so a persistent small
+        offset does not spam every logging step.
+        """
+        for name, gap in gaps.items():
+            if abs(gap) <= TOOL_COUNTER_GAP_THRESHOLD:
+                continue
+            previous = self._tool_gap_warned.get(name, 0)
+            if abs(gap) <= abs(previous):
+                continue
+            self._tool_gap_warned[name] = gap
+            warnings.warn(
+                f"{name} tool text/decoder mismatch is {gap} "
+                f"(text counter {name}_uses vs decoder {name}_calls); "
+                f"check for echoed or hallucinated tool markers.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs is not None:
             logs["constrained_triples_generated"] = self.triple_counter["count"]
             self._add_tool_counters(logs)
+            gaps = _tool_counter_gaps(self.tool_counter, self.decoder_counter)
+            logs["count_tool_text_decoder_gap"] = gaps["count"]
+            logs["sentinel_text_decoder_gap"] = gaps["sentinel"]
+            self._warn_on_tool_gap(gaps)
+            logs.update(_reward_component_metrics(self.train_reward_stats, prefix="train_"))
         if logs is not None and self.pending_metrics:
             logs.update(self.pending_metrics)
             self.pending_metrics = None
@@ -684,12 +1019,19 @@ def main() -> None:
 
     def format_example(example):
         question = example[args.question_key]
+        answer = example[args.answer_key]
         return {
             "prompt": refactx.apply_prompt_template(
                 tokenizer, prompt_template=prompt_template, question=question
             ),
             "question": question,
-            "answer": example[args.answer_key],
+            "answer": answer,
+            # Normalized across datasets so the reward does not have to guess
+            # whether the type lives in complexityType, type, or input_sample.
+            "question_type": _derive_question_type(example),
+            "requires_full_enumeration": _derive_requires_enumeration(
+                answer, args.dataset or "", args.enumeration_datasets
+            ),
         }
 
     train = train.map(format_example)
@@ -699,6 +1041,20 @@ def main() -> None:
     judge = JudgeReward(args.judge_model, torch, type("Transformers", (), {
         "AutoTokenizer": AutoTokenizer, "AutoModelForCausalLM": AutoModelForCausalLM,
     }), use_cuda=use_cuda) if args.judge_model else None
+    # Reward configuration shared by the training reward and the validation pass.
+    reward_options = {
+        "dataset": args.dataset or "",
+        "count_pattern": args.count_pattern,
+        "count_type": args.count_type,
+        "alpha": args.reward_alpha,
+        "beta": args.reward_beta,
+        "fact_soft_cap": args.fact_soft_cap,
+        "fact_penalty": args.fact_penalty,
+        "max_fact_penalty": args.max_fact_penalty,
+        "use_normalized": args.use_normalized_reward,
+    }
+    # Cumulative component sums so on_log can report each reward term separately.
+    train_reward_stats = {}
     # Keep a named function here: TRL 1.0 records reward names from
     # ``__name__`` and does not handle callable objects or partials.
     triple_counter = {"count": 0}
@@ -733,7 +1089,11 @@ def main() -> None:
             answer,
             fact_pattern=args.fact_pattern,
             answer_pattern=args.answer_pattern,
-            **kwargs,
+            question=question,
+            question_type=kwargs.get("question_type") or kwargs.get("complexityType") or kwargs.get("type"),
+            requires_enumeration=kwargs.get("requires_full_enumeration"),
+            stats=train_reward_stats,
+            **reward_options,
         )
 
     def on_triple_generated(_sequence):
@@ -744,17 +1104,12 @@ def main() -> None:
             args.index, tokenizer=tokenizer, tablename=args.tablename
         )
         processor = refactx.get_constrained_logits_processor(
-            tokenizer, index, num_beams=1,
+            tokenizer, index,
             num_batches=args.batch_size * args.num_generations,
-            fact_pattern=args.fact_pattern,
-            count_pattern=args.count_pattern,
-            sentinel=args.sentinel,
-            return_list=True,
-            avoid_duplicates=True,
-            reinit_states=True,
             on_triple_generated=on_triple_generated,
             on_count_generated=on_count_generated,
             on_sentinel_generated=on_sentinel_generated,
+            **_processor_kwargs(args.fact_pattern, args.count_pattern, args.sentinel),
         )
         original_generate = model.generate
 
@@ -769,16 +1124,11 @@ def main() -> None:
             active_processor = processor
             if batch_size is not None and batch_size != args.batch_size * args.num_generations:
                 active_processor = refactx.get_constrained_logits_processor(
-                    tokenizer, index, num_beams=1, num_batches=batch_size,
-                    fact_pattern=args.fact_pattern,
-                    count_pattern=args.count_pattern,
-                    sentinel=args.sentinel,
-                    return_list=True,
-                    avoid_duplicates=True,
-                    reinit_states=True,
+                    tokenizer, index, num_batches=batch_size,
                     on_triple_generated=on_triple_generated,
                     on_count_generated=on_count_generated,
                     on_sentinel_generated=on_sentinel_generated,
+                    **_processor_kwargs(args.fact_pattern, args.count_pattern, args.sentinel),
                 )
             call_kwargs.setdefault("logits_processor", active_processor)
             return original_generate(*call_args, **call_kwargs)
@@ -847,17 +1197,22 @@ def main() -> None:
         args.custom_eval_steps, triple_counter, args.generation_output, model,
         tool_counter=tool_counter,
         decoder_counter=decoder_counter,
+        reward_options=reward_options,
+        train_reward_stats=train_reward_stats,
     )
     trainer.add_callback(metrics_callback)
     metrics_callback.trainer = trainer
 
     if evaluation is not None:
+        initial_reward_stats = {}
         initial_metrics = evaluate_policy(
             model, tokenizer, evaluation, args.max_completion_length,
             args.fact_pattern, args.answer_pattern, args.eval_batch_size,
             generation_output=args.generation_output,
             evaluation_label="initial",
             decoder_counter=decoder_counter,
+            reward_options=reward_options,
+            reward_stats=initial_reward_stats,
         )
         initial_metrics["constrained_triples_generated"] = triple_counter["count"]
         initial_metrics["count_tool_uses"] = tool_counter["count_uses"]
