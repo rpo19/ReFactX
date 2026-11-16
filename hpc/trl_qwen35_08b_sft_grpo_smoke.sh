@@ -11,37 +11,13 @@
 set -euo pipefail
 
 source "$SLURM_SUBMIT_DIR/hpc/env.sh"
-export PGDATA="$WS_PATH/pgdata"
-export SHARED_POSTGRES="$WS_PATH/postgres.addr"
-source "$SLURM_SUBMIT_DIR/hpc/postgres_utils.sh"
 
-# Reuse the shared PostgreSQL service, or start one and publish its address.
-ensure_postgres
-export POSTGRES_ADDR_FILE="$SHARED_POSTGRES"
-
-postgres_watchdog() {
-    while true; do
-        if [ -f "$SHARED_POSTGRES" ]; then
-            # shellcheck disable=SC1090
-            source "$SHARED_POSTGRES"
-        fi
-        if [ -n "${PG_IP:-}" ] && [ -n "${PG_PORT:-}" ] \
-            && timeout 2 bash -c "echo >/dev/tcp/$PG_IP/$PG_PORT" 2>/dev/null; then
-            sleep 10
-            continue
-        fi
-        echo "Postgres is unavailable; attempting recovery at $(date)" >&2
-        ensure_postgres || echo "Postgres recovery attempt failed" >&2
-    done
-}
-
-postgres_watchdog &
-POSTGRES_WATCHDOG_PID=$!
-cleanup_postgres_watchdog() {
-    kill "$POSTGRES_WATCHDOG_PID" 2>/dev/null || true
-    wait "$POSTGRES_WATCHDOG_PID" 2>/dev/null || true
-}
-trap cleanup_postgres_watchdog EXIT INT TERM
+# Per-job disposable PostgreSQL on a read-only copy-on-write view of the
+# shared PGDATA. Replaces the old shared-server/addr-file/watchdog logic;
+# see hpc/postgres_overlay.sh for the mechanism and workarounds.
+source "$SLURM_SUBMIT_DIR/hpc/postgres_overlay.sh"
+pg_overlay_start ro
+pg_overlay_install_traps
 
 # Pin the base Miniconda interpreter. `python` resolves differently across
 # compute nodes and may not contain the installed training dependencies.
@@ -57,8 +33,6 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 cd "$SLURM_SUBMIT_DIR"
 
-# run_trl reads INDEX from .env by default. Override it with the live service
-# discovered by ensure_postgres so localhost is not used on another node.
 export INDEX="$POSTGRES_CONNECTION"
 
 echo "Postgres index: $INDEX"

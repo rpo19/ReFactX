@@ -11,12 +11,13 @@
 set -euo pipefail
 
 source "$SLURM_SUBMIT_DIR/hpc/env.sh"
-export PGDATA=$WS_PATH/pgdata
-source "$SLURM_SUBMIT_DIR/hpc/postgres_utils.sh"
 
-ensure_postgres
-start_postgres_watchdog
-trap stop_postgres_watchdog EXIT INT TERM
+# Per-job disposable PostgreSQL on a read-only copy-on-write view of the
+# shared PGDATA. Replaces the old shared-server/addr-file/watchdog logic;
+# see hpc/postgres_overlay.sh for the mechanism and workarounds.
+source "$SLURM_SUBMIT_DIR/hpc/postgres_overlay.sh"
+pg_overlay_start ro
+pg_overlay_install_traps
 
 cd /home/ripo631h/ReFactX
 

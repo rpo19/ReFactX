@@ -1,4 +1,10 @@
 #!/bin/bash
+# One-time bootstrap of the shared seed at $WS_PATH/pgdata: pulls the image,
+# initdb, sets the postgres password and the local-trust pg_hba.conf. Run it
+# once on a fresh workspace. Evaluation and populate tasks never call this;
+# they use hpc/postgres_overlay.sh (per-job read-only overlay or exclusive
+# writer). The seed must be left cleanly shut down, because every reader
+# overlays it as an immutable lower layer.
 #SBATCH --output=logs/refactx_postgres_init_%j.out
 #SBATCH --job-name=refactx_pg
 #SBATCH -N 1
@@ -11,7 +17,11 @@ exec 2>&1
 
 set -euo pipefail
 
-source env.sh
+if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    source "$SLURM_SUBMIT_DIR/hpc/env.sh"
+else
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
+fi
 
 # -----------------------
 # CONFIG
@@ -42,7 +52,6 @@ if [ ! -f "$PGDATA/PG_VERSION" ]; then
         -B "$PGDATA:/var/lib/postgresql/data" \
         "$IMG" \
         initdb -D /var/lib/postgresql/data --username=postgres
-
 
     #echo "listen_addresses='*'" >> "$PGDATA/postgresql.conf"
 
@@ -129,7 +138,6 @@ if [ ! -f "$PGDATA/PG_VERSION" ]; then
    #         -U postgres \
    #         -d postgres \
    #         -c "SELECT version();"
-
 
 fi
 

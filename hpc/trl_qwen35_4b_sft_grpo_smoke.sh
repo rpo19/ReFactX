@@ -11,36 +11,13 @@
 set -euo pipefail
 
 source "$SLURM_SUBMIT_DIR/hpc/env.sh"
-export PGDATA="$WS_PATH/pgdata"
-export SHARED_POSTGRES="$WS_PATH/postgres.addr"
-source "$SLURM_SUBMIT_DIR/hpc/postgres_utils.sh"
 
-ensure_postgres
-export POSTGRES_ADDR_FILE="$SHARED_POSTGRES"
-
-postgres_watchdog() {
-    while true; do
-        if [ -f "$SHARED_POSTGRES" ]; then
-            # shellcheck disable=SC1090
-            source "$SHARED_POSTGRES"
-        fi
-        if [ -n "${PG_IP:-}" ] && [ -n "${PG_PORT:-}" ] \
-            && timeout 2 bash -c "echo >/dev/tcp/$PG_IP/$PG_PORT" 2>/dev/null; then
-            sleep 10
-            continue
-        fi
-        echo "Postgres is unavailable; attempting recovery at $(date)" >&2
-        ensure_postgres || echo "Postgres recovery attempt failed" >&2
-    done
-}
-
-postgres_watchdog &
-POSTGRES_WATCHDOG_PID=$!
-cleanup_postgres_watchdog() {
-    kill "$POSTGRES_WATCHDOG_PID" 2>/dev/null || true
-    wait "$POSTGRES_WATCHDOG_PID" 2>/dev/null || true
-}
-trap cleanup_postgres_watchdog EXIT INT TERM
+# Per-job disposable PostgreSQL on a read-only copy-on-write view of the
+# shared PGDATA. Replaces the old shared-server/addr-file/watchdog logic;
+# see hpc/postgres_overlay.sh for the mechanism and workarounds.
+source "$SLURM_SUBMIT_DIR/hpc/postgres_overlay.sh"
+pg_overlay_start ro
+pg_overlay_install_traps
 
 PYTHON=/software/rome/r24.04/Miniconda3/24.7.1-0/bin/python
 

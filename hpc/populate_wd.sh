@@ -7,57 +7,25 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --gres=gpu:1
 
+# Populate the Wikidata table into the shared seed. This is a WRITER: the
+# helper takes an exclusive lock and runs Postgres directly on $WS_PATH/pgdata.
+# Do not run readers while this job is alive. See hpc/postgres_overlay.sh.
+
 exec 2>&1
 
 set -euo pipefail
 
-source env.sh
+source "$SLURM_SUBMIT_DIR/hpc/env.sh"
+source "$SLURM_SUBMIT_DIR/hpc/postgres_overlay.sh"
 
-# -----------------------
-# CONFIG
-# -----------------------
-IMG=$WS_PATH/postgres.sif
-WORKDIR=$PWD
-PGDATA=$WS_PATH/pgdata
-PGSOCK=$WS_PATH/pgsocket
-PORT=5432
-DB=postgres
+pg_overlay_start rw
+pg_overlay_install_traps
 
-# -----------------------
-# 3. START POSTGRES
-# -----------------------
-
-singularity exec \
-  -B "$PGDATA:/var/lib/postgresql/data" \
-  -B "$PGSOCK:/pgsocket" \
-  "$IMG" \
-  postgres \
-    -D /var/lib/postgresql/data \
-    -p "$PORT" \
-    -k /pgsocket \
-  > "$PGDATA/logfile" 2>&1 &
-
-PG_PID=$!
-echo "Postgres PID: $PG_PID"
-
-
-# ---- cleanup function ----
-cleanup() {
-  echo "Stopping Postgres (PID $PG_PID)..."
-  kill "$PG_PID" 2>/dev/null || true
-  wait "$PG_PID" 2>/dev/null || true
-}
-
-trap cleanup EXIT INT TERM
-
-# -----------------------
-# 4. RUN YOUR PIPELINE
-# -----------------------
-echo "Running populate_postgres..."
+echo "Running populate_postgres (POSTGRES_CONNECTION=$POSTGRES_CONNECTION)..."
 
 cd /home/ripo631h/ReFactX
 python -m utils.populate_postgres \
-  $WS_PATH/ReFactX_wikidata_facts.bz2 \
+  "$WS_PATH/ReFactX_wikidata_facts.bz2" \
   --model-name Qwen/Qwen3.6-27B \
   --prefix " " \
   --end-of-triple ' .' \
@@ -68,4 +36,3 @@ python -m utils.populate_postgres \
   --switch-parameter 7 \
   --total-number-of-triples 921000000 \
   --count-leaves && teleclinotify success || teleclinotify fail
-

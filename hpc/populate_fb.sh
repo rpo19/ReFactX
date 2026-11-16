@@ -11,22 +11,14 @@
 set -euo pipefail
 
 source /home/h7/ripo631h/ReFactX/hpc/env.sh
-export PGDATA=$WS_PATH/pgdata
-export SHARED_POSTGRES=$WS_PATH/postgres.addr
-source /home/h7/ripo631h/ReFactX/hpc/postgres_utils.sh
 
-ensure_postgres
-start_postgres_watchdog
-trap stop_postgres_watchdog EXIT INT TERM
+# Exclusive writer: PostgreSQL runs directly on the shared PGDATA under
+# a lock; do not run readers while this is active. See hpc/postgres_overlay.sh.
+source "$SLURM_SUBMIT_DIR/hpc/postgres_overlay.sh"
+pg_overlay_start rw
+pg_overlay_install_traps
 
 cd /home/ripo631h/ReFactX
-
-if [ -f "$SHARED_POSTGRES" ]; then
-    source "$SHARED_POSTGRES"
-    export INDEX_PATH="postgres://postgres:${PGPASSWORD:-postgres}@${PG_IP:-127.0.0.1}:${PG_PORT:-5432}/postgres"
-    export POSTGRES_CONNECTION="$INDEX_PATH"
-    export BASE_INDEX_PATH="$INDEX_PATH"
-fi
 
 echo "Running populate_postgres (POSTGRES_CONNECTION=$POSTGRES_CONNECTION)..."
 

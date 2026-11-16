@@ -13,22 +13,15 @@ set -euo pipefail
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 source "$SLURM_SUBMIT_DIR/hpc/env.sh"
-export PGDATA=$WS_PATH/pgdata
-export SHARED_POSTGRES=$WS_PATH/postgres.addr
-source "$SLURM_SUBMIT_DIR/hpc/postgres_utils.sh"
 
-ensure_postgres
-start_postgres_watchdog
-trap stop_postgres_watchdog EXIT INT TERM
+# Per-job disposable PostgreSQL on a read-only copy-on-write view of the
+# shared PGDATA. Replaces the old shared-server/addr-file/watchdog logic;
+# see hpc/postgres_overlay.sh for the mechanism and workarounds.
+source "$SLURM_SUBMIT_DIR/hpc/postgres_overlay.sh"
+pg_overlay_start ro
+pg_overlay_install_traps
 
 cd /home/h7/ripo631h/ReFactX
-
-if [ -f "$SHARED_POSTGRES" ]; then
-    source "$SHARED_POSTGRES"
-    export INDEX_PATH="postgres://postgres:${PGPASSWORD:-postgres}@${PG_IP:-127.0.0.1}:${PG_PORT:-5432}/postgres"
-    export POSTGRES_CONNECTION="$INDEX_PATH"
-    export BASE_INDEX_PATH="$INDEX_PATH"
-fi
 
 python -m utils.eval --config configs/config_cwq_qwen38_27b_train.json
 
