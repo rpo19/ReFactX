@@ -9,17 +9,39 @@ if not ps1login:
 
 print(ps1login)
 
+user = os.environ.get("USER", "unknown")
+
 # --- case matching logic
+# $HOME is shared between the two clusters, but each node only mounts/writes
+# one of these workspace paths. The hostname is only a hint, so prefer whichever
+# path actually exists AND is writable, else fall back to the other one.
 if "capella" in ps1login:
-    ws_path = Path(f"/data/cat/ws/{os.environ.get('USER','unknown')}-horse")
+    preferred = Path(f"/data/cat/ws/{user}-horse")
+    fallback = Path(f"/data/horse/ws/{user}-quokka")
     print("capella")
 
 elif "alpha" in ps1login:
-    ws_path = Path(f"/data/horse/ws/{os.environ.get('USER','unknown')}-quokka")
+    preferred = Path(f"/data/horse/ws/{user}-quokka")
+    fallback = Path(f"/data/cat/ws/{user}-horse")
     print("alpha")
 
 else:
     raise RuntimeError("ERROR: unrecognized host.")
+
+
+def _usable(path: Path) -> bool:
+    return path.is_dir() and os.access(path, os.W_OK)
+
+
+if _usable(preferred):
+    ws_path = preferred
+elif _usable(fallback):
+    print(f"workspace fallback: {fallback}")
+    ws_path = fallback
+else:
+    raise RuntimeError(
+        f"ERROR: no writable workspace found (tried {preferred} and {fallback})."
+    )
 
 # --- export-like behavior (Python process environment)
 os.environ["WS_PATH"] = str(ws_path)
@@ -37,10 +59,19 @@ paths = [
     hf_home / "hub",
     hf_home / "transformers",
     hf_home / "datasets",
-    ws_path / ".cache",
 ]
 
 for p in paths:
     p.mkdir(parents=True, exist_ok=True)
 
-os.environ["XDG_CACHE_HOME"] = str(ws_path / ".cache")
+# opencode (and other XDG-aware tools) create $XDG_CACHE_HOME/opencode at
+# startup and abort if that path is not writable. Only redirect the cache into
+# the workspace when the mkdir succeeds; otherwise leave XDG_CACHE_HOME unset
+# so tools fall back to the default ~/.cache.
+cache_home = ws_path / ".cache"
+try:
+    cache_home.mkdir(parents=True, exist_ok=True)
+except OSError as exc:
+    print(f"WARNING: cannot create {cache_home}; leaving XDG_CACHE_HOME unset: {exc}")
+else:
+    os.environ["XDG_CACHE_HOME"] = str(cache_home)
