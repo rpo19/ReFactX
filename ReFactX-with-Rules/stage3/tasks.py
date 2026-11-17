@@ -82,6 +82,44 @@ TASKS = [
 ]
 
 
+NAMED_OWNER = "Ronaldo Tomaselli"
+NAMED_COMPANY = "Bellocchio-Peruzzi Group"
+CHALLENGE_TASKS = [
+    {
+        "id": "direct_majority_stake",
+        "head": "direct_majority_stake",
+        "instruction": ("Define direct_majority_stake(owner, company) for direct stakes "
+                        "strictly above 50%. An earlier schema called the stake relation "
+                        "HOLDS_STAKE(owner, company, stake_percent). Use the available schema."),
+        "gold_rule": "direct_majority_stake(?x, ?y) :- OWN(?x, ?y, ?p), ?p > 50 .",
+        "context": [],
+        "predicate_foils": {"HOLDS_STAKE": 3},
+    },
+    {
+        "id": "named_owner_stakes",
+        "head": "named_owner_stakes",
+        "instruction": (f'Define named_owner_stakes(company, stake_percent) for direct holdings '
+                        f'of "{NAMED_OWNER}". A source record uses "Tomaselli Ronaldo". '
+                        'Use the exact KG name in the rule.'),
+        "gold_rule": f'named_owner_stakes(?y, ?p) :- OWN("{NAMED_OWNER}", ?y, ?p) .',
+        "context": [],
+        "predicate_foils": {},
+        "entity_foils": ("Tomaselli Ronaldo",),
+    },
+    {
+        "id": "named_company_owners",
+        "head": "named_company_owners",
+        "instruction": (f'Define named_company_owners(owner, stake_percent) for direct owners '
+                        f'of "{NAMED_COMPANY}". A source record omits the hyphen and uses '
+                        '"Bellocchio Peruzzi Group". Use the exact KG name in the rule.'),
+        "gold_rule": f'named_company_owners(?x, ?p) :- OWN(?x, "{NAMED_COMPANY}", ?p) .',
+        "context": [],
+        "predicate_foils": {},
+        "entity_foils": ("Bellocchio Peruzzi Group",),
+    },
+]
+
+
 def _own(t=None):
     if t is None:
         t = pd.read_csv(f"{DATA}/triples.csv", keep_default_na=False,
@@ -89,6 +127,22 @@ def _own(t=None):
     own = t[t.predicate == "OWN"][["subject", "object", "value"]].copy()
     own["value"] = own.value.astype(float)
     return own
+
+
+def compute_challenge_gold(triples):
+    own = _own(triples)
+    majority = own[own.value > 50]
+    owner = own[own.subject == NAMED_OWNER]
+    company = own[own.object == NAMED_COMPANY]
+    golds = {
+        "direct_majority_stake": set(zip(majority.subject, majority.object)),
+        "named_owner_stakes": set(zip(owner.object, owner.value)),
+        "named_company_owners": set(zip(company.subject, company.value)),
+    }
+    for task, rows in golds.items():
+        if not rows:
+            raise ValueError(f"challenge task {task} has no gold rows on this graph")
+    return golds
 
 
 def compute_gold(triples=None, *, write=True):

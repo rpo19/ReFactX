@@ -56,6 +56,21 @@ def build_trie(names):
     return root
 
 
+def extend_trie(root, names):
+    """Add a small set of aliases while sharing the untouched entity branches."""
+    for name in names:
+        old = root
+        root = {"next": old["next"].copy(), "end": old["end"]}
+        node = root
+        for ch in name.replace("\\", "\\\\").replace('"', '\\"'):
+            old = old["next"].get(ch, {"next": {}, "end": None})
+            child = {"next": old["next"].copy(), "end": old["end"]}
+            node["next"][ch] = child
+            node = child
+        node["end"] = name
+    return root
+
+
 class TrieSpec:
     __slots__ = ("node",)
 
@@ -124,7 +139,6 @@ class RuleConstraint:
         self.alphabet = tuple(alphabet)
         self.max_number_digits = max_number_digits
         self.entity_trie = build_trie(entities) if entity_trie is None else entity_trie
-        self._ent_marker = EntitySpec(self.entity_trie)
         self._num_marker = NumSpec("0", False)
         # fixed alphabet vars as one-char-per-step specs
         self._spec_cache = {}
@@ -499,16 +513,10 @@ class RuleConstraint:
         return memo[subset]
 
     def _canon(self, subset):
-        """Canonicalize a subset for memoization: any entity-trie position is
-        equivalent for completability (the continuation after ANY entity is
-        the same), and likewise any started number.  This collapses the
-        100k-entity / 10-digit branching in the completion search."""
-        ent_ok = bool(self.entity_trie["next"])
+        """Use the same cache entry for numbers that can end here."""
         out = set()
         for frame, bound, spec in subset:
-            if isinstance(spec, EntitySpec) and ent_ok:
-                spec = self._ent_marker
-            elif isinstance(spec, NumSpec) and spec.can_end():
+            if isinstance(spec, NumSpec) and spec.can_end():
                 spec = self._num_marker
             out.add((frame, bound, spec))
         return frozenset(out)
@@ -523,9 +531,19 @@ class RuleConstraint:
             done = {}
         if visiting is None:
             visiting = set()
-        raw = self._eps(subset, {})
-        key = self._canon(raw)         # memo key (exact: continuation after
-        if self.accepting(raw):        #   any entity / number is identical)
+        # Each nonempty trie node has a terminal descendant. For an existence
+        # check, skip directly to the state after completing that quoted name.
+        # Token consumption still checks every character against the actual trie.
+        completed = set()
+        for frame, bound, spec in subset:
+            if (isinstance(spec, EntitySpec) and spec.node is not None
+                    and (spec.node["next"] or spec.node["end"] is not None)):
+                completed.update((f, b, None) for f, b in self._token(frame, bound, spec))
+            else:
+                completed.add((frame, bound, spec))
+        raw = self._eps(frozenset(completed), {})
+        key = self._canon(raw)
+        if self.accepting(raw):
             done[key] = True
             return True
         if key in done:

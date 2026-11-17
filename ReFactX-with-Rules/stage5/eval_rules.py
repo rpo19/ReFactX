@@ -17,11 +17,12 @@ from logits_processor import (RuleDecodingError, RuleLogitsProcessor,  # noqa: E
                               RuleTokenIndex)
 from nemo_rule import (COMPARISONS, atom_signature, body_has_aggregate,  # noqa: E402
                        rule_parts, split_top_level)
-from rule_constraint import RuleConstraint, build_trie  # noqa: E402
+from rule_constraint import RuleConstraint, build_trie, extend_trie  # noqa: E402
 from rule_harness import RuleBench  # noqa: E402
-from tasks import SCHEMA, TASKS, compute_gold  # noqa: E402
+from tasks import SCHEMA, TASKS, compute_challenge_gold, compute_gold  # noqa: E402
 
 ABLATIONS = ("unconstrained", "grammar_distractors", "full")
+CHALLENGE_ABLATIONS = (*ABLATIONS, "entity_distractors")
 OUTCOMES = ("generation_error", "invalid", "engine_error", "valid_wrong", "correct")
 DISTRACTORS = {"parent": 2, "grandparent": 2, "shareholder": 2,
                "holds": 3, "has_role": 3, "buys": 3}
@@ -91,8 +92,8 @@ def build_constraint(task, ablation, entity_trie):
         return None
     schema = task_schema(task)
     if ablation == "grammar_distractors":
-        schema.update(DISTRACTORS)
-    elif ablation != "full":
+        schema.update(task.get("predicate_foils", DISTRACTORS))
+    elif ablation not in ("full", "entity_distractors"):
         raise ValueError(f"unknown ablation {ablation!r}")
     return RuleConstraint(task["head"], 2, schema, entity_trie=entity_trie)
 
@@ -122,7 +123,7 @@ def generate(model, tok, prompt, constraint=None, token_index=None,
             token_index = RuleTokenIndex(tok)
         processor = RuleLogitsProcessor(token_index, constraint, generation_start)
     sampling = (dict(temperature=temperature, top_p=top_p, top_k=top_k) if do_sample
-                else dict(temperature=1.0, top_p=1.0, top_k=50))
+                else {})
     t0 = time.perf_counter()
     error = ""
     try:
@@ -181,25 +182,40 @@ def validate_candidate(head, arity, body, task):
 
 
 class Eval:
-    def __init__(self):
-        triples = pd.read_csv(f"{ROOT}/data/triples.csv", keep_default_na=False,
-                              low_memory=False)
+    def __init__(self, *, challenge=False, triples=None, entity_names=None, golds=None):
+        if triples is None:
+            triples = pd.read_csv(f"{ROOT}/data/triples.csv", keep_default_na=False,
+                                  low_memory=False)
         self.bench = RuleBench(triples)
-        self.golds = compute_gold(triples, write=False)
+        if golds is None:
+            golds = compute_challenge_gold(triples) if challenge else compute_gold(triples, write=False)
+        self.golds = golds
         self._entity_trie = None
+        self._foil_tries = {}
+        self._entities = set(entity_names) if entity_names is not None else None
         self._token_index = None
 
     def decoding_inputs(self, tok, task, ablation):
         if ablation == "unconstrained":
             return None, None
         if self._entity_trie is None:
-            entities = pd.read_csv(f"{ROOT}/data/entities.csv", keep_default_na=False)
-            self._entity_trie = build_trie(entities.entity)
+            if self._entities is None:
+                entities = pd.read_csv(f"{ROOT}/data/entities.csv", keep_default_na=False)
+                self._entities = set(entities.entity)
+            self._entity_trie = build_trie(self._entities)
         if self._token_index is None or self._token_index.tokenizer is not tok:
             self._token_index = RuleTokenIndex(tok)
-        return build_constraint(task, ablation, self._entity_trie), self._token_index
+        entity_trie = self._entity_trie
+        foils = task.get("entity_foils", ()) if ablation == "entity_distractors" else ()
+        if foils:
+            if self._entities.intersection(foils):
+                raise ValueError(f"{task['id']}: an entity foil is present in the KG")
+            if foils not in self._foil_tries:
+                self._foil_tries[foils] = extend_trie(self._entity_trie, foils)
+            entity_trie = self._foil_tries[foils]
+        return build_constraint(task, ablation, entity_trie), self._token_index
 
-    def score(self, text, task):
+    def score(self, text, task, *, include_tuples=False):
         rule = text.strip()
         try:
             head, arity, body = rule_parts(rule)
@@ -210,7 +226,8 @@ class Eval:
         except ValueError as error:
             return {"outcome": "invalid", "failure_stage": "validation",
                     "error": str(error), "rule_text": rule}
-        result = self.bench.check(rule, head, task["context"], self.golds[task["id"]])
+        result = self.bench.check(rule, head, task["context"], self.golds[task["id"]],
+                                  include_tuples=include_tuples)
         return dict(result, rule_text=rule)
 
     def run_one(self, model, tok, task, ablation, cfg, seed):

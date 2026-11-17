@@ -108,7 +108,7 @@ class RuleBench:
         result = self.check(rule, head)
         return result.get("failure_stage"), result.get("error")
 
-    def check(self, rule, head, context=(), gold=None):
+    def check(self, rule, head, context=(), gold=None, *, include_tuples=False):
         """Full pipeline: validate, execute, compare against gold.
 
         Note: Nemo computes only predicates reachable from @output / @export
@@ -130,6 +130,8 @@ class RuleBench:
                     "failure_stage": stage, "error": str(error),
                     "nemo_s": time.perf_counter() - t0}
         result = {"nemo_s": time.perf_counter() - t0, "rows": len(got)}
+        if include_tuples:
+            result["tuples"] = got
         if gold is None:
             return dict(result, outcome="valid")
         gold = {tuple(_norm(v) for v in r) for r in gold}
