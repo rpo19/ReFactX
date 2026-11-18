@@ -40,6 +40,16 @@ if [ -z "$WS_PATH" ]; then
 fi
 
 export WS_PATH
+
+# Prefer the workspace venv built by hpc/setup_venv.sh (reads torch and the
+# other deps from $WS_PATH/Lustre instead of the slow NFS home). Fall back to
+# the pinned Miniconda interpreter when the venv has not been built yet.
+REFACTX_PYTHON="$WS_PATH/venvs/refactx/bin/python"
+if [ ! -x "$REFACTX_PYTHON" ]; then
+    REFACTX_PYTHON=/software/rome/r24.04/Miniconda3/24.7.1-0/bin/python
+fi
+export REFACTX_PYTHON
+
 export HF_HOME="$WS_PATH/huggingface"
 export HF_HUB_CACHE="$HF_HOME/hub"
 export TRANSFORMERS_CACHE="$HF_HOME/transformers"

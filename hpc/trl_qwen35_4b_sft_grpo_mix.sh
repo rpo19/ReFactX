@@ -32,7 +32,7 @@ pg_overlay_install_traps
 # Chain the overlay's EXIT cleanup with the outcome notification.
 trap 'rl_notify $?' EXIT
 
-PYTHON=/software/rome/r24.04/Miniconda3/24.7.1-0/bin/python
+PYTHON="$REFACTX_PYTHON"
 
 if ! "$PYTHON" -c "import datasets, peft, trl"; then
     echo "The pinned training Python is missing datasets/peft/trl" >&2

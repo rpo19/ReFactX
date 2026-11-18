@@ -35,7 +35,7 @@ trap 'rl_notify $?' EXIT
 
 # Pin the base Miniconda interpreter. `python` resolves differently across
 # compute nodes and may not contain the installed training dependencies.
-PYTHON=/software/rome/r24.04/Miniconda3/24.7.1-0/bin/python
+PYTHON="$REFACTX_PYTHON"
 
 if ! "$PYTHON" -c "import datasets, peft, trl"; then
     echo "The pinned training Python is missing datasets/peft/trl" >&2
