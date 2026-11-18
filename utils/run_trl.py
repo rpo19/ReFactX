@@ -28,6 +28,26 @@ from typing import Any, Iterable
 from dotenv import load_dotenv
 
 
+# Config values that name filesystem locations. They may use ${WS_PATH} and
+# friends so one config works on both cluster workspaces (capella and alpha)
+# and locally, where WS_PATH is simply not set.
+PATH_FIELDS = (
+    "adapter",
+    "dataset",
+    "prompt",
+    "generation_output",
+    "output_dir",
+    "resume_from_checkpoint",
+)
+
+
+def _expand_path(value: Any) -> Any:
+    """Expand ~ and $VARS in a path-like config value."""
+    if not isinstance(value, str):
+        return value
+    return os.path.expanduser(os.path.expandvars(value))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=None, help="JSON config file; CLI options override config values")
@@ -214,6 +234,14 @@ def parse_args() -> argparse.Namespace:
     for name, default in defaults.items():
         if getattr(args, name, None) is None:
             setattr(args, name, default)
+    for name in PATH_FIELDS:
+        value = _expand_path(getattr(args, name, None))
+        if isinstance(value, str) and "${" in value:
+            warnings.warn(
+                f"{name} still contains an unexpanded variable: {value} "
+                f"(is the environment variable set for this job?)"
+            )
+        setattr(args, name, value)
     if args.no_normalized_reward:
         args.use_normalized_reward = False
     return args

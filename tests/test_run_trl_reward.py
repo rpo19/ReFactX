@@ -18,6 +18,17 @@ def _load_module():
     return namespace
 
 
+def _load_path_helpers():
+    """Load PATH_FIELDS/_expand_path without importing trl/torch."""
+    path = Path(__file__).resolve().parents[1] / "utils" / "run_trl.py"
+    lines = path.read_text().splitlines()
+    start = next(i for i, l in enumerate(lines) if l.startswith("PATH_FIELDS ="))
+    end = next(i for i, l in enumerate(lines) if l.startswith("def parse_args"))
+    namespace = {}
+    exec("from typing import Any\nimport os\n" + "\n".join(lines[start:end]), namespace)
+    return namespace
+
+
 def _completion(answer, facts=0, extra="", count=None, sentinel=False):
     parts = []
     if count is not None:
@@ -269,6 +280,52 @@ class TestGrpoConfigsSentinel(unittest.TestCase):
             config = json.loads(path.read_text())
             if "sentinel" in config:
                 self.assertIs(config["sentinel"], True, f"{path.name} disables sentinel")
+
+
+class TestClusterConfig(unittest.TestCase):
+    """The cluster config must be workspace-relative, not host-pinned."""
+
+    def setUp(self):
+        self.path = (
+            Path(__file__).resolve().parents[1]
+            / "configs"
+            / "trl_qwen35_4b_sft_grpo_mix_cluster.json"
+        )
+        self.config = json.loads(self.path.read_text())
+
+    def test_paths_use_workspace_variable(self):
+        for key in ("adapter", "dataset", "output_dir", "generation_output"):
+            self.assertTrue(
+                self.config[key].startswith("${WS_PATH}/"),
+                f"{key} should be relative to $WS_PATH: {self.config[key]}",
+            )
+
+    def test_mixed_dataset_columns(self):
+        self.assertEqual(self.config["dataset_column"], "dataset")
+        self.assertEqual(self.config["index_table_column"], "index_table")
+        self.assertEqual(self.config["split_column"], "split")
+        self.assertEqual(self.config["train_split"], "train")
+        self.assertEqual(self.config["eval_split"], "validation")
+        self.assertNotIn("index_tables", self.config)
+
+    def test_path_expansion(self):
+        helpers = _load_path_helpers()
+        os_env = {"WS_PATH": "/data/horse/ws/someone-quokka"}
+        import os as _os
+
+        old = {k: _os.environ.get(k) for k in os_env}
+        _os.environ.update(os_env)
+        try:
+            expanded = helpers["_expand_path"](self.config["dataset"])
+        finally:
+            for key, value in old.items():
+                if value is None:
+                    _os.environ.pop(key, None)
+                else:
+                    _os.environ[key] = value
+        self.assertEqual(
+            expanded, "/data/horse/ws/someone-quokka/datasets/rl_train_mix.jsonl"
+        )
 
 
 class TestDetailsOutput(unittest.TestCase):

@@ -83,11 +83,20 @@ Local smoke (0.8B, both tables, one step):
 python -m utils.run_trl --config configs/trl_mix_smoke.json
 ```
 
-Production config: `configs/trl_qwen35_4b_sft_grpo_mix.json`.
+Production config: `configs/trl_qwen35_4b_sft_grpo_mix.json` (absolute alpha
+paths).
 
 ```bash
 python utils/run_trl.py --config configs/trl_qwen35_4b_sft_grpo_mix.json
 ```
+
+Cluster config: `configs/trl_qwen35_4b_sft_grpo_mix_cluster.json`. It is the same
+run with every location rooted at `${WS_PATH}`, which `utils/run_trl.py` expands
+for `adapter`, `dataset`, `prompt`, `output_dir`, `generation_output` and
+`resume_from_checkpoint`. `hpc/env.sh` already exports `WS_PATH` for the current
+cluster, so the same file works on capella (`/data/cat/ws/...`) and alpha
+(`/data/horse/ws/...`). If a variable is missing, `run_trl.py` warns and leaves
+the literal `${...}` in the path.
 
 Locally (the extracted adapter is under `logs/`):
 
@@ -103,33 +112,74 @@ still covers all four datasets rather than only the first one in file order.
 
 Cluster:
 
+The job reads the mixture from `${WS_PATH}/datasets/rl_train_mix.jsonl`. Upload
+the locally built file once instead of rebuilding on the cluster, so the run uses
+exactly the validated 8,200 records (the script rebuilds only when the file is
+absent or `REBUILD=1`).
+
+```bash
+# from the local repo root (pick the login node and the workspace that the
+# cluster actually mounts; $WS_PATH is printed by hpc/env.sh)
+scp logs/rl_train_mix.jsonl \
+  ripo631h@<LOGIN_NODE>:/data/horse/ws/ripo631h-quokka/datasets/rl_train_mix.jsonl
+# capella workspace instead of alpha:
+# /data/cat/ws/ripo631h-horse/datasets/rl_train_mix.jsonl
+
+# optional, only for provenance
+scp logs/rl_train_mix.jsonl.manifest.json \
+  ripo631h@<LOGIN_NODE>:/data/horse/ws/ripo631h-quokka/datasets/rl_train_mix.jsonl.manifest.json
+```
+
+Create the directory first if it does not exist:
+
+```bash
+ssh ripo631h@<LOGIN_NODE> 'mkdir -p /data/horse/ws/ripo631h-quokka/datasets'
+```
+
+Then submit:
+
 ```bash
 cd /home/ripo631h/ReFactX
+
+# uses configs/trl_qwen35_4b_sft_grpo_mix_cluster.json and the uploaded dataset
 sbatch hpc/trl_qwen35_4b_sft_grpo_mix.sh
+
+# rebuild the mixture on the cluster instead of reusing the uploaded one
+REBUILD=1 sbatch hpc/trl_qwen35_4b_sft_grpo_mix.sh
+
+# the SFT mixture is still needed when rebuilding (--exclude-from)
+scp sft_training_mix_supported.jsonl.gz ripo631h@<LOGIN_NODE>:/home/ripo631h/ReFactX/
 
 # If the cluster Freebase table has the "r":
 FREEBASE_TABLE=qwen36fbwikiprops sbatch hpc/trl_qwen35_4b_sft_grpo_mix.sh
 
 # Strict SFT-disjoint mixture (drops count coverage to ~61):
-COUNT_TARGET=0 sbatch hpc/trl_qwen35_4b_sft_grpo_mix.sh
+COUNT_TARGET=0 REBUILD=1 sbatch hpc/trl_qwen35_4b_sft_grpo_mix.sh
+
+# different config for a one-off run:
+RL_CONFIG=configs/trl_qwen35_4b_sft_grpo_mix.json sbatch hpc/trl_qwen35_4b_sft_grpo_mix.sh
 ```
 
-The job builds `logs/rl_train_mix.jsonl` first, checks the SFT adapter, then
-runs GRPO/GSPO. It uses the same per-job PostgreSQL overlay as the other HPC
-scripts. SLURM logs are `logs/trl_qwen35_4b_sft_mix_<jobid>.{out,err}`.
+The job reuses `${WS_PATH}/datasets/rl_train_mix.jsonl` when present (or builds
+it), checks the SFT adapter, then runs GRPO/GSPO. It uses the same per-job
+PostgreSQL overlay as the other HPC scripts. SLURM logs are
+`logs/trl_qwen35_4b_sft_mix_<jobid>.{out,err}`; checkpoints and generations go to
+`${WS_PATH}/grpo_output_supported_mix_all4`.
 
 ## HPC submission checklist
 
 1. `hpc/env.sh` provides `$WS_PATH`, `$POSTGRES_CONNECTION`, and the overlay.
 2. `$WS_PATH/sft_output_supported_mix/adapter_config.json` exists and matches
-   the adapter path in `configs/trl_qwen35_4b_sft_grpo_mix.json`.
-3. The Freebase table exists; use `FREEBASE_TABLE` to override the default
+   the adapter path in `configs/trl_qwen35_4b_sft_grpo_mix_cluster.json`.
+3. `$WS_PATH/datasets/rl_train_mix.jsonl` is uploaded (or `REBUILD=1` is used so
+   the builder creates it).
+4. The Freebase table exists; use `FREEBASE_TABLE` to override the default
    (`qwen36fbwikipops`).
-4. The SFT mixture is visible as
+5. The SFT mixture is visible as
    `logs/sft_training_mix_supported.jsonl[.gz]` or
    `sft_training_mix_supported.jsonl.gz` in the repo root, so the builder can
    subtract it (counts are allowed to overlap).
-5. Submit with `sbatch hpc/trl_qwen35_4b_sft_grpo_mix.sh`.
+6. Submit with `sbatch hpc/trl_qwen35_4b_sft_grpo_mix.sh`.
 
 ## What changed
 
@@ -146,14 +196,22 @@ scripts. SLURM logs are `logs/trl_qwen35_4b_sft_mix_<jobid>.{out,err}`.
   - per-example `dataset` tag for normalized reward and enumeration gating;
   - `eval/dataset/<name>/accuracy` metrics;
   - T4-safe fp16 fallback and `remove_unused_columns=False`;
-  - fixed a `parse_args` crash for config-only keys.
+  - fixed a `parse_args` crash for config-only keys;
+  - expands `${VAR}`/`~` in path-valued config keys, so the cluster config only
+    needs `WS_PATH`.
+- `configs/trl_qwen35_4b_sft_grpo_mix_cluster.json`: the production run with
+  `${WS_PATH}` paths for capella/alpha and the dataset under
+  `$WS_PATH/datasets`.
+- `hpc/trl_qwen35_4b_sft_grpo_mix.sh`: reuses an uploaded dataset instead of
+  always rebuilding (`REBUILD=1` forces a rebuild) and defaults to the cluster
+  config (`RL_CONFIG` overrides).
 
 ## Tests run
 
 ```bash
 python tests/test_routed_index.py      # 6 passed
 python tests/test_build_rl_dataset.py  # 9 passed
-python tests/test_run_trl_reward.py    # 30 passed
+python tests/test_run_trl_reward.py  # 33 passed
 python tests/test_run_trl_tool_metrics.py  # 7 passed
 python tests/test_features.py          # 45 passed
 python tests/test_tool_callbacks.py    # 4 passed
