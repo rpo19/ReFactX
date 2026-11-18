@@ -237,6 +237,18 @@ class TestCountBranchesGeneration(unittest.TestCase):
         self.assertEqual(gen.mode, CountBranchesGeneration.MODE_COLLECTING)
         self.assertEqual(gen.prefix_tokens, [])
 
+    def test_rejects_multi_token_delimiter(self):
+        state = PatternConstrainedState(
+            tokenizer=self.tokenizer,
+            cache_index=DictIndex(),
+            subtree_cache=DictIndex(),
+        )
+        with self.assertRaises(ValueError):
+            CountBranchesGeneration(
+                state=state, tokenizer=self.tokenizer, start_idx=0,
+                kb_index=self.kb, delimiter="a b c",
+            )
+
     def test_collecting_appends_tokens(self):
         gen = self._make_gen()
         mask = _negative_inf_mask(1, len(self.tokenizer))
@@ -264,6 +276,43 @@ class TestCountBranchesGeneration(unittest.TestCase):
             gen.constrain([tid], mask, 0)
         gen.constrain([self.delimiter_id], mask, 0)
         self.assertEqual(gen.calls[0][1], 1)  # 1 leaf: <Paris> <country> <France> .
+
+    def _feed_and_get_allowed(self, gen, token_ids):
+        """Feed tokens one at a time and return the tokens allowed after the last."""
+        allowed = None
+        for tid in token_ids:
+            mask = _negative_inf_mask(1, len(self.tokenizer))
+            gen.constrain([tid], mask, 0)
+            allowed = (mask[0] == 0).nonzero(as_tuple=False).squeeze(-1).tolist()
+        return allowed
+
+    def test_delimiter_not_offered_mid_subject(self):
+        gen = self._make_gen()
+        allowed = self._feed_and_get_allowed(
+            gen, self.tokenizer.encode("<Paris", add_special_tokens=False))
+        self.assertGreater(len(allowed), 0)
+        self.assertNotIn(self.delimiter_id, allowed)
+
+    def test_delimiter_not_offered_mid_relation(self):
+        gen = self._make_gen()
+        allowed = self._feed_and_get_allowed(
+            gen, self.tokenizer.encode("<Paris> <capital", add_special_tokens=False))
+        self.assertGreater(len(allowed), 0)
+        self.assertNotIn(self.delimiter_id, allowed)
+
+    def test_delimiter_forced_at_subject_relation_boundary(self):
+        gen = self._make_gen()
+        allowed = self._feed_and_get_allowed(
+            gen, self.tokenizer.encode("<Paris> <capital of>", add_special_tokens=False))
+        self.assertEqual(allowed, [self.delimiter_id])
+
+    def test_object_tokens_not_offered_at_boundary(self):
+        gen = self._make_gen()
+        object_ids = set(self.tokenizer.encode("<France>", add_special_tokens=False))
+        allowed = set(self._feed_and_get_allowed(
+            gen, self.tokenizer.encode("<Paris> <country>", add_special_tokens=False)))
+        self.assertEqual(allowed, {self.delimiter_id})
+        self.assertFalse(object_ids & allowed)
 
     def test_emitting_forces_tokens(self):
         gen = self._make_gen()

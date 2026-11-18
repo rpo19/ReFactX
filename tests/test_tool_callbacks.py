@@ -46,14 +46,14 @@ class TestDecoderToolCallbacks(unittest.TestCase):
         state = self._state()
         calls = []
         state.on_count_generated = lambda prefix, count: calls.append((prefix, count))
+        # BERT strips whitespace, so use "." as the single-token delimiter.
         gen = CountBranchesGeneration(
             state=state, tokenizer=self.tokenizer, start_idx=0, kb_index=self.kb,
+            delimiter=".",
         )
-        if gen.delimiter_token is None:
-            self.skipTest("tokenizer produced no delimiter token for newline")
-        # Simulate a completed `<count> <Paris> <country>` prefix at the newline.
+        # Simulate a completed `<count> <Paris> <country>` prefix at the delimiter.
         gen.prefix_tokens = self.tokenizer.encode(
-            " <Paris> <country>", add_special_tokens=False)
+            "<Paris> <country>", add_special_tokens=False)
         gen.constrain([gen.delimiter_token], self._mask(), 0)
         self.assertEqual(len(calls), 1)
         self.assertIsInstance(calls[0][1], int)

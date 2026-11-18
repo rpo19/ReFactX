@@ -35,7 +35,7 @@ def get_count_branches_logits_processor(tokenizer, kb_index, **kwargs):
     import warnings
     warnings.warn(
         "get_count_branches_logits_processor is deprecated. Use "
-        "processor.add_pattern('count_branches: ', CountBranchesGeneration, kb_index=kb_index) "
+        "processor.add_pattern('<count>', CountBranchesGeneration, kb_index=kb_index) "
         "instead.", DeprecationWarning, stacklevel=2)
     from refactx.count_branches import CountBranchesLogitsProcessor
     return CountBranchesLogitsProcessor(tokenizer, kb_index, **kwargs)

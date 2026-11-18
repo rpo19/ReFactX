@@ -293,14 +293,34 @@ class FactGeneration(PatternConstrainedGeneration):
 
 
 # ---------------------------------------------------------------------------
-# CountBranchesGeneration — count_branches: <S> <R> tool call
+# CountBranchesGeneration — <count> <S> <R> tool call
 # ---------------------------------------------------------------------------
 
-class CountBranchesGeneration(PatternConstrainedGeneration):
-    """Handles ``count_branches: <Subject> <Relation>`` tool calls.
+def _count_completed_angle_groups(text: str) -> tuple[int, bool]:
+    """Count completed ``<...>`` groups in *text*.
 
-    Triggered when the state detects ``count_branches: ``.  Collects prefix
-    tokens until a newline, counts KB leaves, then forces ``= <count>``.
+    Returns ``(groups, inside_group)``.  The count tool uses this to find the
+    ``<Subject> <Relation>`` boundary: the count must be taken after exactly
+    two completed groups, never mid-entity/mid-relation and never after the
+    object has started.
+    """
+    groups = 0
+    inside_group = False
+    for char in text:
+        if char == '<':
+            inside_group = True
+        elif char == '>' and inside_group:
+            groups += 1
+            inside_group = False
+    return groups, inside_group
+
+
+class CountBranchesGeneration(PatternConstrainedGeneration):
+    """Handles ``<count> <Subject> <Relation>`` tool calls.
+
+    Triggered when the state detects ``<count>``.  Collects prefix tokens
+    until the model emits a newline at the ``<Subject> <Relation>`` boundary,
+    counts KB leaves, then forces ``= <count>\\n</count>``.
     """
 
     MODE_COLLECTING = 0
@@ -314,7 +334,12 @@ class CountBranchesGeneration(PatternConstrainedGeneration):
         self.count_tokens: list[int] = []
         self.calls: list[tuple[str, int]] = []
         encoded_delim = self._encode(delimiter)
-        self.delimiter_token = encoded_delim[0] if encoded_delim else None
+        if len(encoded_delim) != 1:
+            raise ValueError(
+                "CountBranchesGeneration requires a single-token delimiter; "
+                f"{delimiter!r} encodes to {encoded_delim}"
+            )
+        self.delimiter_token = encoded_delim[0]
         self.eot = eot
 
     def _encode(self, text: str) -> list[int]:
@@ -355,30 +380,53 @@ class CountBranchesGeneration(PatternConstrainedGeneration):
             return 0
         return sum(next_tokens.values())
 
+    def _finish_collecting(self, mask, mask_idx):
+        count = self._count_at_prefix(self.prefix_tokens)
+        prefix_text = self._decode(self.prefix_tokens).strip()
+        self.calls.append((prefix_text, count))
+        if self.state.on_count_generated is not None:
+            self.state.on_count_generated(prefix_text, count)
+        count_str = f"= {count}\n{self.eot}"
+        self.count_tokens = self._encode(count_str)
+        self.mode = self.MODE_EMITTING
+        self._emit_count(mask, mask_idx)
+
     def constrain(self, sequence, mask, mask_idx):
         last_token = sequence[-1] if sequence else None
 
         if self.mode == self.MODE_COLLECTING:
-            if self.delimiter_token is not None and last_token == self.delimiter_token:
-                count = self._count_at_prefix(self.prefix_tokens)
-                prefix_text = self._decode(self.prefix_tokens).strip()
-                self.calls.append((prefix_text, count))
-                if self.state.on_count_generated is not None:
-                    self.state.on_count_generated(prefix_text, count)
-                count_str = f"= {count}\n{self.eot}"
-                self.count_tokens = self._encode(count_str)
-                self.mode = self.MODE_EMITTING
-                self._emit_count(mask, mask_idx)
-            else:
-                if last_token is not None:
-                    self.prefix_tokens.append(last_token)
-                possible_tokens, _ = self.kb_index.next_tokens(self.prefix_tokens, state=self.state)
-                # allow the delimiter token to be generated
-                possible_tokens[self.delimiter_token] = 1
+            if last_token == self.delimiter_token:
+                self._finish_collecting(mask, mask_idx)
+                return
 
-                possible_tokens = list(possible_tokens.keys())
+            if last_token is not None:
+                self.prefix_tokens.append(last_token)
 
+            # Only offer the delimiter once the model has completed a subject
+            # and a relation (two balanced ``<...>`` groups).  Offering it at
+            # every step lets the model stop mid-entity/mid-relation, which
+            # counts leaves of a partial prefix, or run past the relation into
+            # the object, which degenerates to counting the single terminator
+            # leaf.  Once the boundary is reached, force the delimiter and do
+            # not offer any object tokens.
+            groups, inside_group = _count_completed_angle_groups(
+                self._decode(self.prefix_tokens))
+            if groups >= 2 and not inside_group:
+                mask[mask_idx, self.delimiter_token] = 0
+                return
+
+            possible_tokens, _ = self.kb_index.next_tokens(
+                self.prefix_tokens, state=self.state)
+            possible_tokens = [
+                token for token in possible_tokens
+                if isinstance(token, int) and 0 <= token < mask.shape[-1]
+            ]
+            if possible_tokens:
                 mask[mask_idx, possible_tokens] = 0
+            else:
+                # Dead end before the <Subject> <Relation> boundary: the only
+                # escape is to finish the call (the count will be 0).
+                mask[mask_idx, self.delimiter_token] = 0
 
         elif self.mode == self.MODE_EMITTING:
             self._emit_count(mask, mask_idx)
@@ -551,7 +599,11 @@ class PatternConstrainedState():
             else:
                 return
 
-        # No active generation: check patterns
+        # No active generation: check patterns.  Activation is anchored to the
+        # end of the recent decode window, so the marker must be emitted as its
+        # own token(s) at the end of the stream.  A prose mention such as
+        # "`<count>`" or "<count> tool" therefore does not activate the tool;
+        # this is intentional.
         text = self._decode_recent()
         for config in self.patterns:
             pattern = config.pattern.lower() if self.ignore_case else config.pattern

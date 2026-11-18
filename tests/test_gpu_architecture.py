@@ -22,10 +22,10 @@ SYSTEM_PROMPT = (
     "Facts are always reliable. You must support all your claims with facts.\n"
     "\n"
     "## Counting tool\n"
-    "When you need to count how many objects exist for a subject-relation prefix, use the count_branches tool.\n"
-    "Write exactly: count_branches: <Subject> <relation>\n"
+    "When you need to count how many objects exist for a subject-relation prefix, use the <count> tool.\n"
+    "Write exactly: <count> <Subject> <relation>\n"
     "The system will reply with = <number>. Use that number in your answer.\n"
-    "Example: count_branches: <Spain> <shares border with> -> the system replies = 5\n"
+    "Example: <count> <Spain> <shares border with> -> the system replies = 5\n"
     "\n"
     "## Reasoning\n"
     "You may think step by step before answering. Keep your reasoning concise.\n"
@@ -123,7 +123,7 @@ def test_count_branches_via_add_pattern():
         states=CONSTRAINED_STATES, tokenizer=tokenizer
     )
     processor.add_pattern(
-        "count_branches:",
+        "<count>",
         CountBranchesGeneration,
         kb_index=idx,
     )
@@ -131,7 +131,7 @@ def test_count_branches_via_add_pattern():
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": "How many countries share a border with France? Use the count_branches tool."},
+        {"role": "user", "content": "How many countries share a border with France? Use the <count> tool."},
     ]
     full_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = _tokenize(tokenizer, full_prompt).to(model.device)
@@ -184,7 +184,7 @@ def test_combined_patterns():
         index=idx, sentinel=True, eot=None,
     )
     processor.add_pattern(
-        "count_branches:",
+        "<count>",
         CountBranchesGeneration,
         kb_index=idx,
     )
