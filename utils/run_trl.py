@@ -17,10 +17,12 @@ config (or pass ``--report-to none``) to disable reporting.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
 import warnings
+from collections import Counter
 from typing import Any, Iterable
 
 from dotenv import load_dotenv
@@ -59,6 +61,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--index", default=None, help="Optional ReFactX prefix-tree index URL (defaults to INDEX in .env)")
     parser.add_argument("--tablename", default=None, help="PostgreSQL index table name")
+    parser.add_argument("--index-tables", nargs="+", default=None,
+                        help="KB tables to preload for per-example routing (e.g. qwen36 qwen36fbwikipops)")
+    parser.add_argument("--default-index-table", default=None,
+                        help="Fallback KB table when a sample has no usable index_table")
+    parser.add_argument("--index-table-column", default=None,
+                        help="Dataset column naming the KB table (default: index_table)")
+    parser.add_argument("--dataset-column", default=None,
+                        help="Dataset column carrying the dataset tag (default: dataset)")
+    parser.add_argument("--split-column", default=None,
+                        help="Dataset column carrying train/validation (default: split)")
     parser.add_argument("--no-cuda", action="store_true", help="Allow running without CUDA (default: require CUDA)")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--generation-output", default=None, help="Append validation generations as JSONL")
@@ -155,6 +167,11 @@ def parse_args() -> argparse.Namespace:
         "custom_eval_steps": config.get("custom_eval_steps", 100),
         "index": config.get("index") or os.getenv("INDEX") or os.getenv("BASE_INDEX_PATH"),
         "tablename": config.get("tablename"),
+        "index_tables": config.get("index_tables"),
+        "default_index_table": config.get("default_index_table"),
+        "index_table_column": config.get("index_table_column", "index_table"),
+        "dataset_column": config.get("dataset_column", "dataset"),
+        "split_column": config.get("split_column", "split"),
         "output_dir": config.get("output_dir", "./grpo-output"),
         "save_steps": config.get("save_steps", 100),
         "save_total_limit": config.get("save_total_limit", 2),
@@ -195,7 +212,7 @@ def parse_args() -> argparse.Namespace:
         "seed": config.get("seed", 42),
     }
     for name, default in defaults.items():
-        if getattr(args, name) is None:
+        if getattr(args, name, None) is None:
             setattr(args, name, default)
     if args.no_normalized_reward:
         args.use_normalized_reward = False
@@ -243,6 +260,29 @@ def _as_list(value: Any) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(v).strip().lower() for v in value]
     return [str(value).strip().lower()]
+
+
+def _coerce_answer_value(value: Any) -> Any:
+    """Parse the string-list answers used by the RoG Freebase datasets.
+
+    Mintaka/2Wiki answers are plain strings and are returned unchanged.  A
+    value such as ``"['A', 'B']"`` becomes ``['A', 'B']`` so enumeration and
+    multi-answer scoring behave the same as for a native list column.
+    """
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value]
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return value
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return value
+    if isinstance(parsed, (list, tuple)):
+        return [str(v) for v in parsed]
+    return value
 
 
 def _parsed_answer(text: str, answer_pattern: str = "<answer>") -> list[str] | None:
@@ -477,7 +517,7 @@ def exact_reward(
     credit. When ``stats`` is given it is updated in place with component sums
     so each term can be logged separately and reward hacking is visible.
     """
-    dataset_tag = _dataset_tag(dataset)
+    datasets = dataset if isinstance(dataset, (list, tuple)) else None
     input_samples = kwargs.get("input_sample")
     rewards = []
     for index, completion in enumerate(completions):
@@ -485,6 +525,7 @@ def exact_reward(
         normalized = text.lower()
         reference = _at(answer, index)
         qtype = _at(question_type, index)
+        dataset_tag = _dataset_tag(_at(datasets, index) if datasets is not None else dataset)
 
         # Encourage the configured output markers. These are soft incentives
         # and do not require a complete proof.
@@ -644,6 +685,8 @@ def evaluate_policy(
     truncated = 0
     type_total = {}
     type_correct = {}
+    dataset_total = {}
+    dataset_correct = {}
     count_used = 0
     count_used_correct = 0
     count_unused = 0
@@ -744,6 +787,8 @@ def evaluate_policy(
                     or example.get("type")
                 ],
                 requires_enumeration=[example.get("requires_full_enumeration")],
+                dataset=[example.get("dataset")],
+                input_sample=[dict(example)],
                 stats=reward_stats,
                 details=detail,
                 **(reward_options or {}),
@@ -778,6 +823,9 @@ def evaluate_policy(
             if qtype:
                 type_total[qtype] = type_total.get(qtype, 0) + 1
                 type_correct[qtype] = type_correct.get(qtype, 0) + int(bool(info.get("correct")))
+            dataset_tag = _dataset_tag(example.get("dataset") or "unknown")
+            dataset_total[dataset_tag] = dataset_total.get(dataset_tag, 0) + 1
+            dataset_correct[dataset_tag] = dataset_correct.get(dataset_tag, 0) + int(bool(info.get("correct")))
             if info.get("is_count_question"):
                 count_type_total += 1
                 if info.get("used_count"):
@@ -857,6 +905,10 @@ def evaluate_policy(
         safe = str(qtype).replace(" ", "_").replace("/", "_")
         metrics[f"eval/per_type/{safe}/accuracy"] = type_correct.get(qtype, 0) / count
         metrics[f"eval/per_type/{safe}/n"] = count
+    for dataset_tag, count in dataset_total.items():
+        safe = str(dataset_tag).replace(" ", "_").replace("/", "_")
+        metrics[f"eval/dataset/{safe}/accuracy"] = dataset_correct.get(dataset_tag, 0) / count
+        metrics[f"eval/dataset/{safe}/n"] = count
     metrics.update(_reward_component_metrics(reward_stats, prefix="eval/"))
     if decoder_before is not None and decoder_counter is not None:
         metrics["eval/count_tool_calls"] = decoder_counter["count_calls"] - decoder_before["count_calls"]
@@ -1230,9 +1282,16 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # T4/Turing does not support native bfloat16; use fp16 for local smoke runs
+    # while keeping bf16 on Ampere+ hardware.
+    supports_bf16 = bool(use_cuda and torch.cuda.get_device_capability()[0] >= 8)
+    model_dtype = (
+        torch.bfloat16 if supports_bf16
+        else (torch.float16 if use_cuda else torch.float32)
+    )
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        dtype=torch.bfloat16 if use_cuda else torch.float32,
+        dtype=model_dtype,
         device_map="auto",
     )
     model.config.use_cache = False
@@ -1247,9 +1306,31 @@ def main() -> None:
         ))
     model.print_trainable_parameters()
 
-    raw = load_dataset(args.dataset)
-    train = raw[args.train_split]
-    evaluation = raw.get(args.eval_split, None)
+    def _load_training_dataset(path, split_column, train_split, eval_split):
+        """Load a HF dataset or a local JSONL with a split column."""
+        if os.path.isfile(path) and path.lower().endswith((".jsonl", ".json", ".parquet")):
+            data_format = "parquet" if path.lower().endswith(".parquet") else "json"
+            loaded = load_dataset(data_format, data_files=path, split="train")
+            if split_column and split_column in loaded.column_names:
+                train_split_ds = loaded.filter(
+                    lambda example: str(example[split_column]) == str(train_split)
+                )
+                eval_split_ds = loaded.filter(
+                    lambda example: str(example[split_column]) == str(eval_split)
+                )
+            else:
+                train_split_ds, eval_split_ds = loaded, None
+        else:
+            raw = load_dataset(path)
+            train_split_ds = raw[train_split]
+            eval_split_ds = raw.get(eval_split, None)
+        return train_split_ds, eval_split_ds
+
+    train, evaluation = _load_training_dataset(
+        args.dataset, args.split_column, args.train_split, args.eval_split
+    )
+    if evaluation is not None and len(evaluation) == 0:
+        evaluation = None
     if evaluation is not None and args.max_eval_samples is not None:
         evaluation = evaluation.select(
             range(min(args.max_eval_samples, len(evaluation)))
@@ -1257,19 +1338,39 @@ def main() -> None:
 
     def format_example(example):
         question = example[args.question_key]
-        answer = example[args.answer_key]
+        answer = _coerce_answer_value(example[args.answer_key])
+        dataset_name = example.get(args.dataset_column) or args.dataset or ""
+        index_table = (
+            example.get(args.index_table_column)
+            or args.default_index_table
+            or args.tablename
+        )
+        question_type = example.get("question_type")
+        if question_type is None:
+            question_type = _derive_question_type(example)
+        requires_enumeration = example.get("requires_full_enumeration")
+        if requires_enumeration is None:
+            requires_enumeration = _derive_requires_enumeration(
+                answer, dataset_name, args.enumeration_datasets
+            )
+        prompt = refactx.apply_prompt_template(
+            tokenizer, prompt_template=prompt_template, question=question
+        )
+        prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
         return {
-            "prompt": refactx.apply_prompt_template(
-                tokenizer, prompt_template=prompt_template, question=question
-            ),
+            "prompt": prompt,
+            # Stable key used by the multi-index generation wrapper to recover
+            # this example's KB table from the padded input ids.
+            "prompt_key": tokenizer.decode(prompt_ids, skip_special_tokens=True).strip(),
             "question": question,
             "answer": answer,
+            # Per-example metadata used for reward normalization and KB routing.
+            "dataset": dataset_name,
+            "index_table": index_table,
             # Normalized across datasets so the reward does not have to guess
             # whether the type lives in complexityType, type, or input_sample.
-            "question_type": _derive_question_type(example),
-            "requires_full_enumeration": _derive_requires_enumeration(
-                answer, args.dataset or "", args.enumeration_datasets
-            ),
+            "question_type": question_type,
+            "requires_full_enumeration": bool(requires_enumeration),
         }
 
     train = train.map(format_example)
@@ -1281,7 +1382,6 @@ def main() -> None:
     }), use_cuda=use_cuda) if args.judge_model else None
     # Reward configuration shared by the training reward and the validation pass.
     reward_options = {
-        "dataset": args.dataset or "",
         "count_pattern": args.count_pattern,
         "count_type": args.count_type,
         "alpha": args.reward_alpha,
@@ -1297,6 +1397,7 @@ def main() -> None:
     train_group_stats = {}
     # Keep a named function here: TRL 1.0 records reward names from
     # ``__name__`` and does not handle callable objects or partials.
+    reward_debug = {"done": False}
     triple_counter = {"count": 0}
     tool_counter = {
         "count_uses": 0,
@@ -1322,6 +1423,10 @@ def main() -> None:
         # Track which constrained tools the policy actually used on this rollout
         # batch. This runs on generated text only, never on the prompt.
         _accumulate_tool_usage(tool_counter, completions)
+        if os.getenv("REFACTX_DEBUG_REWARD_COLUMNS") and not reward_debug["done"]:
+            reward_debug["done"] = True
+            print("reward kwargs:", sorted(kwargs))
+            print("reward datasets:", kwargs.get("dataset"))
         if judge is not None:
             return judge(completions, question=question, **kwargs)
         details = []
@@ -1333,6 +1438,7 @@ def main() -> None:
             question=question,
             question_type=kwargs.get("question_type") or kwargs.get("complexityType") or kwargs.get("type"),
             requires_enumeration=kwargs.get("requires_full_enumeration"),
+            dataset=kwargs.get("dataset") or args.dataset or "",
             stats=train_reward_stats,
             details=details,
             **reward_options,
@@ -1345,36 +1451,132 @@ def main() -> None:
         triple_counter["count"] += 1
 
     if args.index:
-        index = refactx.load_index(
-            args.index, tokenizer=tokenizer, tablename=args.tablename
-        )
-        processor = refactx.get_constrained_logits_processor(
-            tokenizer, index,
-            num_batches=args.batch_size * args.num_generations,
-            on_triple_generated=on_triple_generated,
-            on_count_generated=on_count_generated,
-            on_sentinel_generated=on_sentinel_generated,
-            **_processor_kwargs(args.fact_pattern, args.count_pattern, args.sentinel),
-        )
+        table_names = args.index_tables
+        table_urls = {}
+        if isinstance(table_names, dict):
+            table_urls = {str(name): url for name, url in table_names.items()}
+            table_names = list(table_urls)
+        elif table_names:
+            table_names = [str(name) for name in table_names]
+            table_urls = {name: args.index for name in table_names}
+        elif args.tablename:
+            table_names = [args.tablename]
+            table_urls = {args.tablename: args.index}
+        else:
+            # A mixed JSONL can declare the tables itself; preload exactly the
+            # tables it references.
+            table_names = sorted({
+                example.get(args.index_table_column)
+                for example in list(train) + ([] if evaluation is None else list(evaluation))
+                if example.get(args.index_table_column)
+            })
+            table_urls = {name: args.index for name in table_names}
+
+        if not table_names:
+            raise ValueError(
+                "--index was given but no table names were configured; pass "
+                "--index-tables/--tablename or include an index_table column"
+            )
+        registry = {
+            name: refactx.load_index(
+                table_urls.get(name) or args.index,
+                tokenizer=tokenizer,
+                tablename=name,
+            )
+            for name in table_names
+        }
+        default_table = args.default_index_table or table_names[0]
+        index = refactx.RoutedIndex(registry, default=default_table)
+        print(f"Loaded indexes: {sorted(registry)} (default: {default_table})")
+
+        # Map the prompt (without special tokens) to its KB table so the wrapper
+        # can assign the right index to every row of a mixed generation batch.
+        prompt_tables = {}
+        ambiguous_prompts = set()
+        for example in list(train) + ([] if evaluation is None else list(evaluation)):
+            key = example.get("prompt_key")
+            table = example.get(args.index_table_column) or default_table
+            if not key:
+                continue
+            previous = prompt_tables.get(key)
+            if previous is not None and previous != table:
+                ambiguous_prompts.add(key)
+            else:
+                prompt_tables[key] = table
+        if ambiguous_prompts:
+            warnings.warn(
+                f"{len(ambiguous_prompts)} prompt(s) map to multiple KB tables; "
+                f"using {default_table!r} for those rows",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
         original_generate = model.generate
+        routing_stats = {"misses": 0, "calls": 0, "tables": Counter(), "logged": False}
+
+        def _row_table(input_ids, row):
+            key = tokenizer.decode(input_ids[row].tolist(), skip_special_tokens=True).strip()
+            table = prompt_tables.get(key)
+            if table is None:
+                routing_stats["misses"] += 1
+                table = default_table
+            if key in ambiguous_prompts:
+                table = default_table
+            return table
 
         def constrained_generate(*call_args, **call_kwargs):
             # GRPO generation uses the expanded training batch, while the
-            # validation pass generates one prompt at a time. The constrained
-            # processor must be initialized for the actual generation batch.
+            # validation pass generates its own batch. Build a processor for
+            # the actual batch and attach one KB table per row.
             input_ids = call_kwargs.get("input_ids")
             if input_ids is None and call_args:
                 input_ids = call_args[0]
-            batch_size = input_ids.shape[0] if input_ids is not None else None
-            active_processor = processor
-            if batch_size is not None and batch_size != args.batch_size * args.num_generations:
-                active_processor = refactx.get_constrained_logits_processor(
-                    tokenizer, index, num_batches=batch_size,
-                    on_triple_generated=on_triple_generated,
-                    on_count_generated=on_count_generated,
-                    on_sentinel_generated=on_sentinel_generated,
-                    **_processor_kwargs(args.fact_pattern, args.count_pattern, args.sentinel),
+            if input_ids is None:
+                return original_generate(*call_args, **call_kwargs)
+            batch_size = input_ids.shape[0]
+            num_return_sequences = int(call_kwargs.get("num_return_sequences") or 1)
+            expanded_batch = batch_size * num_return_sequences
+            if not routing_stats["logged"]:
+                generation_config = call_kwargs.get("generation_config")
+                print(
+                    "routing debug: input_ids shape=",
+                    tuple(input_ids.shape) if input_ids is not None else None,
+                    "num_return_sequences=",
+                    num_return_sequences,
+                    "config_num_return_sequences=",
+                    getattr(generation_config, "num_return_sequences", None),
                 )
+            active_processor = refactx.get_constrained_logits_processor(
+                tokenizer, index,
+                num_batches=expanded_batch,
+                on_triple_generated=on_triple_generated,
+                on_count_generated=on_count_generated,
+                on_sentinel_generated=on_sentinel_generated,
+                **_processor_kwargs(args.fact_pattern, args.count_pattern, args.sentinel),
+            )
+            if batch_size is not None:
+                row_tables = []
+                for row in range(batch_size):
+                    table = _row_table(input_ids, row)
+                    row_tables.append(table)
+                    # transformers expands prompts with repeat_interleave for
+                    # num_return_sequences; mirror that order when attaching
+                    # the KB table to the constrained states.
+                    for replica in range(num_return_sequences):
+                        state_index = row * num_return_sequences + replica
+                        try:
+                            active_processor.states.states[state_index][0].index_table = table
+                        except (AttributeError, IndexError):
+                            break
+                routing_stats["calls"] += 1
+                routing_stats["tables"].update(table for table in row_tables for _ in range(num_return_sequences))
+                if not routing_stats["logged"]:
+                    routing_stats["logged"] = True
+                    print(
+                        "index routing (first generation batch): "
+                        f"{dict(Counter(table for table in row_tables for _ in range(num_return_sequences)))} "
+                        f"misses={routing_stats['misses']}"
+                    )
             call_kwargs.setdefault("logits_processor", active_processor)
             return original_generate(*call_args, **call_kwargs)
 
@@ -1382,6 +1584,9 @@ def main() -> None:
 
     config = GRPOConfig(
         output_dir=args.output_dir,
+        # Keep dataset/index_table/dataset columns so the reward and the
+        # multi-index generation wrapper receive per-example metadata.
+        remove_unused_columns=False,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -1412,7 +1617,8 @@ def main() -> None:
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
         gradient_checkpointing=True,
-        bf16=use_cuda,
+        bf16=supports_bf16,
+        fp16=bool(use_cuda and not supports_bf16),
         report_to=args.report_to,
         seed=args.seed,
     )
@@ -1483,6 +1689,12 @@ def main() -> None:
 
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
+    if args.index:
+        print(
+            "index routing totals: "
+            f"calls={routing_stats['calls']} tables={dict(routing_stats['tables'])} "
+            f"misses={routing_stats['misses']}"
+        )
 
 
 if __name__ == "__main__":

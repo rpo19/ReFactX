@@ -51,6 +51,27 @@ class TestExactRewardComponents(unittest.TestCase):
         score = self.reward_one(_completion(["Paris", "Lyon"], facts=1), ["Paris"])
         self.assertAlmostEqual(score, 0.6 + 0.5 + 0.5)
 
+    def test_dataset_is_resolved_per_example(self):
+        seen = []
+        original = self.ns["_answers_normalized_match"]
+
+        def fake(prediction, reference, dataset="", **kwargs):
+            seen.append(dataset)
+            return dataset == "webqsp"
+
+        self.ns["_answers_normalized_match"] = fake
+        try:
+            rewards = self.ns["exact_reward"](
+                ["<answer>[\"A\"]</answer>"] * 2,
+                [["X"], ["X"]],
+                dataset=["webqsp", "mintaka"],
+                use_normalized=True,
+            )
+        finally:
+            self.ns["_answers_normalized_match"] = original
+        self.assertEqual(seen, ["webqsp", "mintaka"])
+        self.assertGreater(rewards[0], rewards[1])
+
 
 class TestFactCountPenalty(unittest.TestCase):
     @classmethod

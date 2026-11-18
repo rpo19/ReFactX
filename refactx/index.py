@@ -2,6 +2,7 @@ import pickle
 from psycopg import sql
 from copy import deepcopy
 import requests
+import warnings
 from requests.adapters import HTTPAdapter, Retry
 import os
 import gzip
@@ -290,6 +291,92 @@ class Index():
 
     def clean(self):
         del self.verbalized_triples
+
+
+class RoutedIndex(Index):
+    """Dispatch ``next_tokens`` to one of several indexes per decode state.
+
+    A constrained decode state may come from any dataset in a mixed training
+    batch.  The caller stores the KB table name on the state (by default in
+    ``state.index_table``); every lookup is then routed to the matching index.
+    This keeps a single constrained processor usable across Wikidata and
+    Freebase batches instead of requiring one generation call per index.
+
+    The indexes must share the tokenizer and the PostgreSQL trie settings
+    (``switch_parameter``, ``rootkey``), which is the case for the ``qwen36``
+    and ``qwen36fb*`` tables populated with the same tokenizer.
+    """
+
+    def __init__(self, indexes: dict, default: str | None = None,
+                 key_attr: str = "index_table"):
+        super().__init__()
+        if not indexes:
+            raise ValueError("RoutedIndex requires at least one index")
+        self.indexes = dict(indexes)
+        self.default = default or next(iter(self.indexes))
+        if self.default not in self.indexes:
+            raise ValueError(
+                f"RoutedIndex default {self.default!r} is not one of "
+                f"{sorted(self.indexes)}"
+            )
+        self.key_attr = key_attr
+
+        switch_parameters = {
+            getattr(index, "switch_parameter", None)
+            for index in self.indexes.values()
+        }
+        switch_parameters.discard(None)
+        if len(switch_parameters) > 1:
+            raise ValueError(
+                "RoutedIndex requires the same switch_parameter for all "
+                f"indexes, got {sorted(switch_parameters)}"
+            )
+        self.switch_parameter = next(iter(switch_parameters), None)
+
+        rootkeys = {getattr(index, "rootkey", None) for index in self.indexes.values()}
+        rootkeys.discard(None)
+        if len(rootkeys) > 1:
+            raise ValueError(
+                f"RoutedIndex requires the same rootkey for all indexes, got {sorted(rootkeys)}"
+            )
+        self.rootkey = next(iter(rootkeys), None)
+        self.tokenizer_name = getattr(self.default_index, "tokenizer_name", None)
+        self._missing_warned = set()
+
+    @property
+    def default_index(self):
+        return self.indexes[self.default]
+
+    def set_tokenizer(self, tokenizer):
+        super().set_tokenizer(tokenizer)
+        for index in self.indexes.values():
+            index.set_tokenizer(tokenizer)
+
+    def resolve(self, state=None):
+        """Return the index selected by ``state``, falling back to the default."""
+        name = getattr(state, self.key_attr, None) if state is not None else None
+        index = self.indexes.get(name)
+        if index is not None:
+            return index
+        if name is not None and name not in self._missing_warned:
+            self._missing_warned.add(name)
+            warnings.warn(
+                f"RoutedIndex has no index for {name!r}; using {self.default!r}. "
+                f"Available: {sorted(self.indexes)}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return self.default_index
+
+    def next_tokens(self, sequence, **kwargs):
+        return self.resolve(kwargs.get("state")).next_tokens(sequence, **kwargs)
+
+    def flush_cache(self):
+        for index in self.indexes.values():
+            flush = getattr(index, "flush_cache", None)
+            if callable(flush):
+                flush()
+
 
 class DictIndex(Index):
     def __init__(self, tree = None):

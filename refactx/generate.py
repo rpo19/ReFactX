@@ -469,6 +469,8 @@ class PatternConstrainedState():
 
         self.state = state
         self.cursor = 0
+        # KB table used by RoutedIndex for this decode row (set by the caller).
+        self.index_table = None
 
         self.cache_index = cache_index
         self.on_triple_generated: Callable[[list[int]], None] | None = None
@@ -544,6 +546,7 @@ class PatternConstrainedState():
         self.state = other.state
         self.tokenizer = other.tokenizer
         self.regex_window = other.regex_window
+        self.index_table = other.index_table
         self.token_ids = deepcopy(other.token_ids)
         self.input_ids = deepcopy(other.input_ids)
 
