@@ -171,6 +171,9 @@ def parse_args() -> argparse.Namespace:
     # Config files use the same names as the CLI, except that model_name is
     # also accepted for consistency with the other repository configs.
     defaults = {
+        "experiment_name": config.get("experiment_name", "trl"),
+        "wandb_project": config.get("wandb_project", "refactx_grpo"),
+        "wandb_run_name": config.get("wandb_run_name", config.get("experiment_name")),
         "model": config.get("model", config.get("model_name", "Qwen/Qwen2.5-0.5B-Instruct")),
         "adapter": config.get("adapter"),
         "judge_model": config.get("judge_model"),
@@ -1289,6 +1292,12 @@ Use 1 when true and 0 when false. Do not include markdown.
 def main() -> None:
     args = parse_args()
 
+    # W&B picks its project from WANDB_PROJECT; without it runs land in the
+    # generic "huggingface" project. Set it before the Trainer builds its
+    # integration callbacks. An explicit environment value still wins.
+    if args.report_to != "none":
+        os.environ.setdefault("WANDB_PROJECT", args.wandb_project)
+
     import torch
     if not args.no_cuda and not torch.cuda.is_available():
         raise RuntimeError(
@@ -1648,6 +1657,7 @@ def main() -> None:
         bf16=supports_bf16,
         fp16=bool(use_cuda and not supports_bf16),
         report_to=args.report_to,
+        run_name=args.wandb_run_name,
         seed=args.seed,
     )
     trainer = GRPOTrainer(

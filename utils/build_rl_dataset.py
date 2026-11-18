@@ -3,8 +3,8 @@
 Each output record carries the KB table it must be decoded against:
 
 * Mintaka and 2Wiki -> ``qwen36`` (Wikidata)
-* WebQSP and CWQ    -> ``qwen36fbwikipops`` (Freebase; the cluster table is
-  often named ``qwen36fbwikiprops``, so the name is configurable)
+* WebQSP and CWQ    -> ``qwen36fbwikiprops`` (Freebase; the table name is
+  cluster-specific, so it stays configurable via ``--freebase-table``)
 
 The builder only uses training/validation splits, deduplicates questions
 globally, and can subtract the questions already used by SFT so RL sees a
@@ -361,8 +361,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-default-exclude", action="store_true",
                         help="Do not auto-use logs/sft_training_mix*.jsonl")
     parser.add_argument("--wikidata-table", default="qwen36")
-    parser.add_argument("--freebase-table", default="qwen36fbwikipops",
-                        help="Freebase table; use qwen36fbwikiprops on the cluster if that is its name")
+    parser.add_argument("--freebase-table", default="qwen36fbwikiprops",
+                        help="Freebase table; use qwen36fbwikipops on databases that name it without the r")
     parser.add_argument("--count-target", type=int, default=0,
                         help="Number of count-type training questions to keep (Mintaka)")
     parser.add_argument("--allow-overlap-types", nargs="*", default=[],

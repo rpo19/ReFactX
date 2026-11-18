@@ -10,6 +10,18 @@
 
 set -euo pipefail
 
+# Report the job outcome to Telegram. Installed after the Postgres overlay so
+# it can stop that overlay too (see the trap below).
+rl_notify() {
+    local status=$1
+    if [ "$status" -eq 0 ]; then
+        teleclinotify "rl success | SLURM_JOB_ID=${SLURM_JOB_ID:-unknown}" || true
+    else
+        teleclinotify "rl error | SLURM_JOB_ID=${SLURM_JOB_ID:-unknown} exit=$status" || true
+    fi
+    pg_overlay_stop || true
+}
+
 source "$SLURM_SUBMIT_DIR/hpc/env.sh"
 
 # Per-job disposable PostgreSQL on a read-only copy-on-write view of the
@@ -17,6 +29,8 @@ source "$SLURM_SUBMIT_DIR/hpc/env.sh"
 source "$SLURM_SUBMIT_DIR/hpc/postgres_overlay.sh"
 pg_overlay_start ro
 pg_overlay_install_traps
+# Chain the overlay's EXIT cleanup with the outcome notification.
+trap 'rl_notify $?' EXIT
 
 PYTHON=/software/rome/r24.04/Miniconda3/24.7.1-0/bin/python
 
@@ -29,10 +43,10 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 cd "$SLURM_SUBMIT_DIR"
 
-# The shared DB here has qwen36fbwikipops. Some configs/scripts use
-# qwen36fbwikiprops (with an r); override when that is the real table:
-#   FREEBASE_TABLE=qwen36fbwikiprops sbatch ...
-FREEBASE_TABLE="${FREEBASE_TABLE:-qwen36fbwikipops}"
+# The shared DB on this cluster exposes the Freebase table as
+# qwen36fbwikiprops (with an r); override when the target DB differs:
+#   FREEBASE_TABLE=qwen36fbwikipops sbatch ...
+FREEBASE_TABLE="${FREEBASE_TABLE:-qwen36fbwikiprops}"
 
 export INDEX="$POSTGRES_CONNECTION"
 
