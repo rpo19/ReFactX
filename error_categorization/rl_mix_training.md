@@ -166,6 +166,36 @@ PostgreSQL overlay as the other HPC scripts. SLURM logs are
 `logs/trl_qwen35_4b_sft_mix_<jobid>.{out,err}`; checkpoints and generations go to
 `${WS_PATH}/grpo_output_supported_mix_all4`.
 
+## GSPO loss type
+
+`"gspo": true` sets `importance_sampling_level="sequence"` in `GRPOConfig` but
+leaves `loss_type` at TRL's default. TRL warns that with sequence-level
+importance sampling the default `dapo` loss sums per-token contributions, which
+weights each sequence by its completion length instead of optimizing the
+per-sequence objective. To reproduce the GSPO paper's objective, pass
+`loss_type="grpo"` to `GRPOConfig` (the config does not expose it yet). This is
+intentionally left unchanged for now; decide before comparing runs against the
+paper.
+
+## Throughput notes
+
+The constrained decoder is the bottleneck: every generated token goes through a
+Python trie/logits processor, and the SFT policy emits long tool chains. On the
+first mixed 4B run (`4605057`) completions averaged ~1,300 tokens with 53-56%
+clipped at `max_completion_length=2048` and ~35 fact calls per sample; logged
+`step_time` was 90-310 s, which projects well beyond the 72 h limit. Levers,
+cheapest first:
+
+- lower `max_completion_length` (successfully terminated completions averaged
+  ~390 tokens, so most of the clipped ones waste generation);
+- lower `num_generations` (8 -> 4) and cut validation cost
+  (`custom_eval_steps`, `max_eval_samples`);
+- use both GPUs: the script starts a single `python utils/run_trl.py` process,
+  so one H100 is idle; `accelerate launch --num_processes 2` would double
+  throughput if the per-rank index/DB setup is acceptable;
+- a vLLM rollout is much faster but bypasses the patched `model.generate`, so
+  the per-row index routing would need a vLLM-side hook.
+
 ## HPC submission checklist
 
 1. `hpc/env.sh` provides `$WS_PATH`, `$POSTGRES_CONNECTION`, and the overlay.
@@ -174,7 +204,7 @@ PostgreSQL overlay as the other HPC scripts. SLURM logs are
 3. `$WS_PATH/datasets/rl_train_mix.jsonl` is uploaded (or `REBUILD=1` is used so
    the builder creates it).
 4. The Freebase table exists; use `FREEBASE_TABLE` to override the default
-   (`qwen36fbwikipops`).
+   (`qwen36fbwikiprops`).
 5. The SFT mixture is visible as
    `logs/sft_training_mix_supported.jsonl[.gz]` or
    `sft_training_mix_supported.jsonl.gz` in the repo root, so the builder can
