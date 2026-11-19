@@ -31,6 +31,9 @@ httpindex = [
 	"flask",
 	"gunicorn",
 ]
+vllm = [
+	"vllm>=0.12",
+]
 viewer = [
 	"streamlit",
 ]

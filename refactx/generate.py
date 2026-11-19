@@ -8,6 +8,7 @@ import math
 import types
 from dataclasses import dataclass, field
 from typing import Callable, Type
+from concurrent.futures import ThreadPoolExecutor
 
 from refactx.index import EmptyIndexException, TripleNotFoundException
 
@@ -95,6 +96,12 @@ class FactGeneration(PatternConstrainedGeneration):
         self.completed_with_sentinel = False
         self.prev_exhausted = set()
 
+        # Structural decoding flags.  Both transitions are monotonic within a
+        # triple, so once they become true we no longer need to decode the
+        # whole generated prefix on every token.
+        self._at_or_past_object = False
+        self._in_object = False
+
     def _sentinel_ids(self):
         if self._sentinel_ids_cache is None:
             if isinstance(self.tokenizer, ProcessorMixin):
@@ -166,6 +173,22 @@ class FactGeneration(PatternConstrainedGeneration):
         self.state.state = 0
         self.done = True
 
+    def _structural_flags(self, sequence):
+        """Return ``(at_or_past_object, in_object)`` for the generated prefix.
+
+        The condition is monotonic: once a triple has reached the object level
+        (or entered an object entity) it never goes back.  Re-decoding the full
+        prefix on every token made object generation O(T^2) in tokenizer work.
+        """
+        if self._at_or_past_object and self._in_object:
+            return True, True
+        decoded = (self.tokenizer or self.state.tokenizer).decode(sequence)
+        if not self._at_or_past_object:
+            self._at_or_past_object = decoded.count('>') >= 2
+        if not self._in_object:
+            self._in_object = decoded.count('> <') >= 2
+        return self._at_or_past_object, self._in_object
+
     def constrain(self, sequence, mask, mask_idx):
         state = self.state
 
@@ -219,8 +242,7 @@ class FactGeneration(PatternConstrainedGeneration):
         # on the previous step, fire the sentinel — there are no valid
         # children left down this branch.
         if sequence and sequence[-1] in self.prev_exhausted:
-            in_object = (self.tokenizer or state.tokenizer).decode(
-                sequence).count('> <') >= 2
+            _, in_object = self._structural_flags(sequence)
             if in_object:
                 self._begin_sentinel(mask, mask_idx, sequence=sequence)
             else:
@@ -268,8 +290,7 @@ class FactGeneration(PatternConstrainedGeneration):
         # model can explore exhausted branches (prev_exhausted catches
         # it on the next call).  At object+ levels only live tokens
         # are offered — exhausted objects must not be re-chosen.
-        _decoded = (self.tokenizer or state.tokenizer).decode(sequence)
-        at_or_past_object = _decoded.count('>') >= 2
+        at_or_past_object, _ = self._structural_flags(sequence)
 
         if at_or_past_object:
             offer_keys = list(live.keys())
@@ -282,8 +303,7 @@ class FactGeneration(PatternConstrainedGeneration):
             mask[mask_idx, valid_keys] = 0
         else:
             # ALL children over-visited (remaining < 0) — fire sentinel.
-            in_object = (self.tokenizer or state.tokenizer).decode(
-                sequence).count('> <') >= 2
+            _, in_object = self._structural_flags(sequence)
             if in_object:
                 self._begin_sentinel(mask, mask_idx, sequence=sequence)
             else:
@@ -770,7 +790,7 @@ class ConstrainedStateList():
 class ConstrainedLogitsProcessor(LogitsProcessor):
     def __init__(self, states, tokenizer, reinit_states=False,
                  on_triple_generated=None, on_count_generated=None,
-                 on_sentinel_generated=None):
+                 on_sentinel_generated=None, parallel_workers=0):
         self.states = states
         self.reinit_states = reinit_states
         self.on_triple_generated = on_triple_generated
@@ -778,6 +798,12 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
         self.on_sentinel_generated = on_sentinel_generated
         self.tokenizer = tokenizer
         self.pattern_configs = []
+        self.parallel_workers = max(0, int(parallel_workers or 0))
+        self._executor = (
+            ThreadPoolExecutor(max_workers=self.parallel_workers)
+            if self.parallel_workers > 1 else None
+        )
+        self._mask_matrix_buffer = None
         self._attach_callbacks()
 
     def _attach_callbacks(self):
@@ -828,6 +854,35 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             beam_i = self.states.get_beam_idx(i)
             self.states[batch_idx, beam_i].input_ids = input_ids[i].tolist()[:-1]
 
+    def _mask_row(self, scores):
+        """Return a reusable ``(1, vocab)`` scratch buffer on ``scores.device``."""
+        shape = (1, scores.shape[-1])
+        buffer = getattr(self, '_mask_buffer', None)
+        if (
+            buffer is None
+            or buffer.shape != shape
+            or buffer.dtype != scores.dtype
+            or buffer.device != scores.device
+        ):
+            buffer = torch.empty(shape, dtype=scores.dtype, device=scores.device)
+            self._mask_buffer = buffer
+        return buffer
+
+    def _mask_matrix(self, scores, rows):
+        """Return a reusable ``(rows, vocab)`` buffer for parallel masking."""
+        shape = (rows, scores.shape[-1])
+        buffer = self._mask_matrix_buffer
+        if (
+            buffer is None
+            or buffer.shape[1] != shape[1]
+            or buffer.shape[0] < shape[0]
+            or buffer.dtype != scores.dtype
+            or buffer.device != scores.device
+        ):
+            buffer = torch.empty(shape, dtype=scores.dtype, device=scores.device)
+            self._mask_matrix_buffer = buffer
+        return buffer
+
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
         if input_ids.shape[0] != len(self.states):
             message = f'number of states ({len(self.states)}) should match `num_batches * num_beams` ({input_ids.shape[0]})'
@@ -842,41 +897,131 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
         self.states.beam_permutation()
 
-        mask = torch.zeros_like(scores)
-        mask = mask.to(scores.dtype)
-
+        sequence_length = input_ids.shape[1]
+        constrained_rows = []
         for i in range(input_ids.shape[0]):
             batch_idx = self.states.get_batch_idx(i)
             beam_i = self.states.get_beam_idx(i)
-            sequence = input_ids[i].tolist()
+            state = self.states[batch_idx, beam_i]
 
-            if not self.states[batch_idx, beam_i].first_call():
-                last_token = sequence[-1]
-                if sequence[:-1] != self.states[batch_idx, beam_i].input_ids:
-                    if self.reinit_states:
-                        print(f'Warning: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}, reinitializing all states.')
-                        self.states.reset()
-                        self._reinit_states_to_input_ids(input_ids)
-                        self.states[batch_idx, beam_i].update(last_token)
-                    else:
-                        raise ValueError(f'Error: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}')
-                else:
-                    self.states[batch_idx, beam_i].update(last_token)
+            if state.first_call():
+                state.input_ids = input_ids[i].tolist()
             else:
-                self.states[batch_idx, beam_i].input_ids = sequence
+                # Fast path: a normal decode step appends exactly one token, so
+                # only the tail needs checking.  Materialize the full sequence
+                # only for constrained rows or when the prefix unexpectedly
+                # changed (e.g. beam reordering).
+                last_token = int(input_ids[i, -1])
+                expected_length = len(state.input_ids) + 1
+                consistent = sequence_length == expected_length
+                if consistent and expected_length >= 2 and state.input_ids:
+                    consistent = int(input_ids[i, expected_length - 2]) == state.input_ids[-1]
+                if not consistent:
+                    sequence = input_ids[i].tolist()
+                    if sequence[:-1] != state.input_ids:
+                        if self.reinit_states:
+                            print(f'Warning: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}, reinitializing all states.')
+                            self.states.reset()
+                            self._reinit_states_to_input_ids(input_ids)
+                            self.states[batch_idx, beam_i].update(last_token)
+                            state = self.states[batch_idx, beam_i]
+                        else:
+                            raise ValueError(f'Error: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}')
+                    else:
+                        state.update(last_token)
+                else:
+                    state.update(last_token)
 
-            if self.states[batch_idx, beam_i].is_constrained():
-                mask[i] = -math.inf
-                state = self.states[batch_idx, beam_i]
-                constrain_generation_sequence_start_idx = len(sequence) - state.get_cursor()
-                constrain_generation_sequence = sequence[constrain_generation_sequence_start_idx:]
-                state.active_generation.constrain(
-                    constrain_generation_sequence, mask, i)
+            if state.is_constrained():
+                constrained_rows.append((i, state))
 
-        scores_processed = scores + mask
+        if not constrained_rows:
+            return scores
 
-        return scores_processed
+        use_parallel = (
+            self._executor is not None and len(constrained_rows) > 1
+        )
+        if use_parallel:
+            mask = self._mask_matrix(scores, len(constrained_rows))
 
+            def _constrain_one(position):
+                i, state = constrained_rows[position]
+                row = mask[position]
+                row.fill_(-math.inf)
+                sequence = input_ids[i].tolist()
+                start = len(sequence) - state.get_cursor()
+                state.active_generation.constrain(sequence[start:], row.unsqueeze(0), 0)
+
+            list(self._executor.map(_constrain_one, range(len(constrained_rows))))
+            for position, (i, _state) in enumerate(constrained_rows):
+                scores[i].add_(mask[position])
+            return scores
+
+        mask = self._mask_row(scores)
+        for i, state in constrained_rows:
+            mask.fill_(-math.inf)
+            sequence = input_ids[i].tolist()
+            constrain_generation_sequence_start_idx = len(sequence) - state.get_cursor()
+            constrain_generation_sequence = sequence[constrain_generation_sequence_start_idx:]
+            state.active_generation.constrain(
+                constrain_generation_sequence, mask, 0)
+            # Adding -inf on disallowed positions and 0 on allowed positions
+            # keeps the model's relative scores for allowed tokens.
+            scores[i].add_(mask[0])
+
+        return scores
+
+
+
+# ---------------------------------------------------------------------------
+# State/pattern factory (shared by HF, vLLM and benchmark paths)
+# ---------------------------------------------------------------------------
+
+def make_pattern_configs(index, sentinel=True, fact_pattern='<fact>',
+                         count_pattern='<count>', eot=' </fact>\n', **kwargs):
+    """Build the fact/count pattern configs used by every decode backend."""
+    fact_config = dict(kwargs)
+    fact_config['eot'] = eot
+    fact_config['index'] = index
+    fact_config['sentinel'] = sentinel
+    return [
+        PatternConfig(fact_pattern, FactGeneration, fact_config),
+        PatternConfig(count_pattern, CountBranchesGeneration, {'kb_index': index}),
+    ]
+
+
+def build_pattern_state(tokenizer, index, sentinel=True,
+                        fact_pattern='<fact>', count_pattern='<count>',
+                        eot=' </fact>\n', **kwargs):
+    """Create a ``PatternConstrainedState`` with the standard patterns."""
+    state = PatternConstrainedState(
+        tokenizer=tokenizer,
+        cache_index=DictIndex(),
+        subtree_cache=DictIndex(),
+    )
+    state.patterns.extend(make_pattern_configs(
+        index, sentinel=sentinel, fact_pattern=fact_pattern,
+        count_pattern=count_pattern, eot=eot, **kwargs))
+    return state
+
+
+def activate_constrained_fact(state, index, start_idx=0,
+                              sentinel=True, eot=' </fact>\n', **kwargs):
+    """Force a state into fact-constrained mode immediately.
+
+    Useful for throughput benchmarks and engines that start constrained after
+    their own trigger handling.  The caller is responsible for keeping the
+    state's ``token_ids`` / ``cursor`` in sync with the constrained segment.
+    """
+    config = make_pattern_configs(
+        index, sentinel=sentinel, eot=eot, **kwargs)[0]
+    state.active_generation = config.generation_class(
+        state=state, tokenizer=state.tokenizer, start_idx=start_idx,
+        **config.config)
+    state.state = state.CONSTRAINED_GENERATION
+    state.token_ids = []
+    state.cursor = 0
+    return state.active_generation
 
 # ---------------------------------------------------------------------------
 # Factory
@@ -888,7 +1033,8 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
                                      eot=' </fact>\n', reinit_states=False,
                                      on_triple_generated=None,
                                      on_count_generated=None,
-                                     on_sentinel_generated=None, **kwargs):
+                                     on_sentinel_generated=None,
+                                     parallel_workers=0, **kwargs):
     """Build the constrained processor.
 
     Sentinel (exhausted-retrieval ``<no further records>``) is enabled by
@@ -901,6 +1047,10 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
                 debug_tokenizer=tokenizer
         )
 
+    # Parallel row processing is only safe for read-only in-memory tries.
+    effective_workers = (
+        parallel_workers if getattr(index, 'is_thread_safe', False) else 0
+    )
     constrained_processor = ConstrainedLogitsProcessor(
         states=CONSTRAINED_STATES,
         tokenizer=tokenizer,
@@ -908,6 +1058,7 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
         on_triple_generated=on_triple_generated,
         on_count_generated=on_count_generated,
         on_sentinel_generated=on_sentinel_generated,
+        parallel_workers=effective_workers,
     )
 
     fact_config = dict(kwargs)

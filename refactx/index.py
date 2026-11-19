@@ -235,6 +235,11 @@ class WrongNumleavesException(Exception):
     pass
 
 class Index():
+    # Whether concurrent ``next_tokens`` calls are safe.  In-memory tries are
+    # read-only during decoding; PostgreSQL/HTTP backends share a connection or
+    # client and must stay sequential.
+    is_thread_safe = False
+
     def __init__(self) -> None:
         self.tokenizer = None
 
@@ -320,6 +325,10 @@ class RoutedIndex(Index):
                 f"{sorted(self.indexes)}"
             )
         self.key_attr = key_attr
+        self.is_thread_safe = all(
+            getattr(index, "is_thread_safe", False)
+            for index in self.indexes.values()
+        )
 
         switch_parameters = {
             getattr(index, "switch_parameter", None)
@@ -379,6 +388,8 @@ class RoutedIndex(Index):
 
 
 class DictIndex(Index):
+    is_thread_safe = True
+
     def __init__(self, tree = None):
         super().__init__()
         self.tree = None
@@ -445,9 +456,17 @@ class DictIndex(Index):
             'tree': deepcopy(self.tree) if copy else self.tree,
         }
 
+    @staticmethod
+    def _copy_tree(tree):
+        """Fast structural clone of a trie (much cheaper than deepcopy)."""
+        if isinstance(tree, list):
+            return [DictIndex._copy_tree(item) for item in tree]
+        if isinstance(tree, dict):
+            return {key: DictIndex._copy_tree(value) for key, value in tree.items()}
+        return tree
+
     def copy(self):
-        copy_of_index = DictIndex(tree=deepcopy(self.tree))
-        return copy_of_index
+        return DictIndex(tree=self._copy_tree(self.tree))
 
     def add(self, sequence, new_leaf=False):
         # could be replaced with to_dict and merge
@@ -690,6 +709,15 @@ class PostgresTrieIndex(Index):
 
         self.tokenizer = tokenizer
 
+        # Lightweight instrumentation.  These counters make it possible to
+        # measure the database/cache split without adding timing to every
+        # token by default.
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.queries = 0
+        self.query_time = 0.0
+        self.merge_time = 0.0
+
         if self.postgresql_connection:
             self.get_config()
 
@@ -766,8 +794,20 @@ class PostgresTrieIndex(Index):
         return config
 
     def flush_cache(self):
-        if self.cache:
-            self.cache.flush()
+        if self.cache is None:
+            return
+        flush = getattr(self.cache, 'flush', None)
+        if callable(flush):
+            flush()
+        else:
+            clear = getattr(self.cache, 'cache', None)
+            if clear is not None and hasattr(clear, 'clear'):
+                clear.clear()
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.queries = 0
+        self.query_time = 0.0
+        self.merge_time = 0.0
 
     def _merge_next_tokens(self, src, dst):
         if src is not None:
@@ -807,58 +847,94 @@ class PostgresTrieIndex(Index):
 
         return _next_tokens, extra
 
+    def _build_next_tokens_and_subtree(self, sequence, query_result):
+        """Turn raw PostgreSQL rows into next tokens and a *canonical* subtree.
+
+        The returned subtree is rooted at ``sequence`` and contains only the
+        rows returned for this prefix.  Older code cached
+        ``state.subtree_cache``, an accumulated tree that also held sibling
+        branches explored earlier; every cache entry then duplicated a growing
+        amount of overlapping trie data.  Canonical per-prefix subtrees are
+        much smaller and make cache comparisons predictable.
+        """
+        _next_tokens = {}
+        if len(query_result) == 0:
+            return _next_tokens, None
+
+        own_tree = DictIndex()
+        totalnumleaves_subtree = 0
+        for row, (query_id, children, subtree, numleaves, childrenleaves) in enumerate(query_result):
+            for child, childleaves in zip(children, childrenleaves):
+                if child not in _next_tokens:
+                    _next_tokens[child] = 0
+                _next_tokens[child] += childleaves
+
+            if subtree:
+                totalnumleaves_subtree += numleaves
+                subtree = pickle.loads(subtree)
+                current_tree = own_tree.to_dict(sequence, numleaves, subtree)
+                if self.do_count_leaves and numleaves != own_tree.count_leaves(current_tree):
+                    print('WARNING: number of leaves does not match after COUNT LEAVES for sequence {}.'.format(sequence))
+
+                merge_numleaves = own_tree.merge(current_tree, update_numleaves=True)
+                numleaves_diff = totalnumleaves_subtree - merge_numleaves
+                if numleaves_diff != 0:
+                    # WORKAROUND to solve duplicates (or wrong count) problem
+                    print('WARNING: number of leaves does not match for sequence {}.'.format(sequence))
+
+        canonical_subtree = own_tree if own_tree.tree[1] else None
+        return _next_tokens, canonical_subtree
+
+    def _apply_cached_subtree(self, state, subtree):
+        """Give the decode state the subtree for this prefix when available."""
+        if subtree is not None:
+            state.subtree_cache = subtree
+
     def _next_tokens_from_postgresql(self, sequence, state):
-        found_in_cache = False
-        if self.cache:
-            # key --> (children, childrenleaves, subtree)
-            # better saving entire or incremental cache?
-            # better entire to reduce computation
+        if self.cache is not None:
             _next_tokens, new_subtree_cache = self.cache.next_tokens(sequence)
-            found_in_cache = _next_tokens is not None
-            if found_in_cache:
-                # do not reset the cache if not found
-                if new_subtree_cache:
-                    state.subtree_cache = new_subtree_cache
+            if _next_tokens is not None:
+                self.cache_hits += 1
+                self._apply_cached_subtree(state, new_subtree_cache)
+                return _next_tokens
+            self.cache_misses += 1
 
-        if not found_in_cache:
-            query_result = self._query_postgresql(sequence)
+        start = time.perf_counter()
+        query_result = self._query_postgresql(sequence)
+        self.queries += 1
+        self.query_time += time.perf_counter() - start
 
-            _next_tokens = {}
-            if len(query_result) > 0:
-                totalnumleaves = 0
-                totalnumleaves_subtree = 0
-                for row, (query_id, children, subtree, numleaves, childrenleaves) in enumerate(query_result):
-                    totalnumleaves += numleaves
-                    for child, childleaves in zip(children, childrenleaves):
-                        if (child not in _next_tokens):
-                            _next_tokens[child] = 0
-                        _next_tokens[child] += childleaves
+        start = time.perf_counter()
+        _next_tokens, canonical_subtree = self._build_next_tokens_and_subtree(
+            sequence, query_result)
+        self.merge_time += time.perf_counter() - start
 
-                    if subtree:
-                        totalnumleaves_subtree += numleaves
-                        subtree = pickle.loads(subtree)
-                        current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
-                        if self.do_count_leaves and numleaves != state.subtree_cache.count_leaves(current_tree):
-                            print('WARNING: number of leaves does not match after COUNT LEAVES for sequence {}.'.format(sequence))
+        self._apply_cached_subtree(state, canonical_subtree)
 
-                        merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
-                        numleaves_diff = totalnumleaves_subtree - merge_numleaves
-                        if numleaves_diff != 0:
-                            # TODO debug
-                            # reduce all the upper numleaves by the difference
-                            # WORKAROUND to solve duplicates (or wrong count) problem
-                            print('WARNING: number of leaves does not match for sequence {}.'.format(sequence))
+        if self.cache is not None:
+            try:
+                # SimpleCache serializes the subtree, so the state can keep the
+                # original object without risking mutation of the cached copy.
+                self.cache.add(sequence, _next_tokens, canonical_subtree)
+            except Exception as e:
+                print('WARNING: failed to populate cache', e)
 
-            # TODO maybe do it only when there is no subtree cache to save space and bandwidth
-            # (first calls are the slowest)
-            if self.cache:
-                try:
-                    self.cache.add(sequence, _next_tokens, state.subtree_cache)
-                except Exception as e:
-                    print('WARNING: failed to populate cache', e)
-
-        # print(_next_tokens)
         return _next_tokens
+
+    def cache_stats(self):
+        lookups = self.cache_hits + self.cache_misses
+        stats = {
+            'cache_enabled': self.cache is not None,
+            'cache_hits': self.cache_hits,
+            'cache_misses': self.cache_misses,
+            'cache_hit_rate': (self.cache_hits / lookups) if lookups else 0.0,
+            'queries': self.queries,
+            'query_time_s': self.query_time,
+            'merge_time_s': self.merge_time,
+        }
+        if self.cache is not None and hasattr(self.cache, 'stats'):
+            stats['cache'] = self.cache.stats()
+        return stats
 
 class HTTPPostgresError(Exception):
     pass
@@ -914,63 +990,40 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
         return config
 
     def _next_tokens_from_postgresql(self, sequence, state):
-        found_in_cache = False
-        if self.cache:
-            # key --> (children, childrenleaves, subtree)
-            # better saving entire or incremental cache?
-            # better entire to reduce computation
+        if self.cache is not None:
             _next_tokens, new_subtree_cache = self.cache.next_tokens(sequence)
-            found_in_cache = _next_tokens is not None
-            if found_in_cache:
-                # do not reset the cache if not found
-                if new_subtree_cache:
-                    state.subtree_cache = new_subtree_cache
+            if _next_tokens is not None:
+                self.cache_hits += 1
+                self._apply_cached_subtree(state, new_subtree_cache)
+                return _next_tokens
+            self.cache_misses += 1
 
-        if not found_in_cache:
-            data = serialize(dict(sequence=sequence))
-            response = self.session.post(self.base_url,
-                data=data,
-                headers={'Content-Type': 'application/octet-stream'},
-                verify=self.rootcert,
-                timeout=self.timeout,
-            )
-            if not response.ok:
-                raise HTTPPostgresError(response.text)
-            query_result = deserialize(response.content)
+        data = serialize(dict(sequence=sequence))
+        start = time.perf_counter()
+        response = self.session.post(self.base_url,
+            data=data,
+            headers={'Content-Type': 'application/octet-stream'},
+            verify=self.rootcert,
+            timeout=self.timeout,
+        )
+        self.query_time += time.perf_counter() - start
+        self.queries += 1
+        if not response.ok:
+            raise HTTPPostgresError(response.text)
+        query_result = deserialize(response.content)
 
-            _next_tokens = {}
-            if len(query_result) > 0:
-                totalnumleaves = 0
-                totalnumleaves_subtree = 0
-                for row, (query_id, children, subtree, numleaves, childrenleaves) in enumerate(query_result):
-                    totalnumleaves += numleaves
-                    for child, childleaves in zip(children, childrenleaves):
-                        if (child not in _next_tokens):
-                            _next_tokens[child] = 0
-                        _next_tokens[child] += childleaves
+        start = time.perf_counter()
+        _next_tokens, canonical_subtree = self._build_next_tokens_and_subtree(
+            sequence, query_result)
+        self.merge_time += time.perf_counter() - start
 
-                    if subtree:
-                        totalnumleaves_subtree += numleaves
-                        subtree = pickle.loads(subtree)
-                        current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
-                        if self.do_count_leaves and numleaves != state.subtree_cache.count_leaves(current_tree):
-                            print('WARNING: number of leaves does not match after COUNT LEAVES.')
+        self._apply_cached_subtree(state, canonical_subtree)
 
-                        merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
-                        numleaves_diff = totalnumleaves_subtree - merge_numleaves
-                        if numleaves_diff != 0:
-                            # TODO debug
-                            # reduce all the upper numleaves by the difference
-                            # WORKAROUND to solve duplicates (or wrong count) problem
-                            print('WARNING: number of leaves does not match.')
-
-            # TODO maybe do it only when there is no subtree cache to save space and bandwidth
-            # (first calls are the slowest)
-            if self.cache:
-                try:
-                    self.cache.add(sequence, _next_tokens, state.subtree_cache)
-                except Exception as e:
-                    print('WARNING: failed to populate cache', e)
+        if self.cache is not None:
+            try:
+                self.cache.add(sequence, _next_tokens, canonical_subtree)
+            except Exception as e:
+                print('WARNING: failed to populate cache', e)
 
         return _next_tokens
 

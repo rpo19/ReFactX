@@ -92,6 +92,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-column", default=None,
                         help="Dataset column carrying train/validation (default: split)")
     parser.add_argument("--no-cuda", action="store_true", help="Allow running without CUDA (default: require CUDA)")
+    parser.add_argument(
+        "--attn-implementation",
+        default=None,
+        help="Transformers attention backend (e.g. sdpa, flash_attention_2); default: auto",
+    )
+    parser.add_argument(
+        "--dataset-num-proc",
+        type=int,
+        default=None,
+        help="Processes used while formatting the training/eval datasets (>1 speeds up setup)",
+    )
+    parser.add_argument(
+        "--use-generation-cache",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable the KV cache during rollouts/eval (default: true unless configured otherwise)",
+    )
+    parser.add_argument(
+        "--parallel-workers",
+        type=int,
+        default=None,
+        help="Threads for per-row constraint processing on thread-safe in-memory indexes (0/1 disables)",
+    )
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--generation-output", default=None, help="Append validation generations as JSONL")
     parser.add_argument("--save-steps", type=int, default=None, help="Save a training checkpoint every N steps")
@@ -192,6 +215,10 @@ def parse_args() -> argparse.Namespace:
         "index_table_column": config.get("index_table_column", "index_table"),
         "dataset_column": config.get("dataset_column", "dataset"),
         "split_column": config.get("split_column", "split"),
+        "attn_implementation": config.get("attn_implementation"),
+        "dataset_num_proc": config.get("dataset_num_proc"),
+        "use_generation_cache": config.get("use_generation_cache", True),
+        "parallel_workers": config.get("parallel_workers", 0),
         "output_dir": config.get("output_dir", "./grpo-output"),
         "save_steps": config.get("save_steps", 100),
         "save_total_limit": config.get("save_total_limit", 2),
@@ -402,7 +429,8 @@ def _is_count_question_text(question: Any) -> bool:
     ))
 
 
-def _processor_kwargs(fact_pattern: str, count_pattern: str, sentinel: bool) -> dict:
+def _processor_kwargs(fact_pattern: str, count_pattern: str, sentinel: bool,
+                      parallel_workers: int = 0) -> dict:
     """Static kwargs forwarded to the constrained logits processor.
 
     Centralised so the training and validation construction sites forward
@@ -417,6 +445,7 @@ def _processor_kwargs(fact_pattern: str, count_pattern: str, sentinel: bool) -> 
         "return_list": True,
         "avoid_duplicates": True,
         "reinit_states": True,
+        "parallel_workers": parallel_workers,
     }
 
 
@@ -661,6 +690,40 @@ def exact_reward(
     return rewards
 
 
+class _GenerationKVCache:
+    """Temporarily enable the KV cache for a no-grad generation pass.
+
+    ``model.config.use_cache`` is disabled for gradient checkpointing during
+    training, but generation does not need that and is dramatically slower
+    without the cache.  The original values are restored afterwards.
+    """
+
+    def __init__(self, model: Any, enabled: bool = True):
+        self.model = model
+        self.enabled = enabled
+        self.saved = []
+
+    def __enter__(self):
+        if self.enabled:
+            for obj in (
+                getattr(self.model, "config", None),
+                getattr(self.model, "generation_config", None),
+            ):
+                if obj is not None and hasattr(obj, "use_cache"):
+                    self.saved.append((obj, obj.use_cache))
+                    obj.use_cache = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        for obj, value in self.saved:
+            obj.use_cache = value
+        return False
+
+
+def _generation_kv_cache(model: Any, enabled: bool = True):
+    return _GenerationKVCache(model, enabled)
+
+
 def evaluate_policy(
     model: Any,
     tokenizer: Any,
@@ -735,7 +798,7 @@ def evaluate_policy(
         ]
         prompts = [example["prompt"] for example in examples]
         inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(model.device)
-        with torch.no_grad():
+        with torch.no_grad(), _generation_kv_cache(model, True):
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=max_completion_length,
@@ -1317,12 +1380,20 @@ def main() -> None:
         torch.bfloat16 if supports_bf16
         else (torch.float16 if use_cuda else torch.float32)
     )
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        dtype=model_dtype,
-        device_map="auto",
-    )
+    model_kwargs = {
+        "dtype": model_dtype,
+        "device_map": "auto",
+    }
+    attn_implementation = args.attn_implementation or os.getenv("REFACTX_ATTN_IMPLEMENTATION")
+    if attn_implementation:
+        model_kwargs["attn_implementation"] = attn_implementation
+    model = AutoModelForCausalLM.from_pretrained(args.model, **model_kwargs)
+    # Rollouts and validation still use the KV cache; the log-probability pass
+    # in GRPO explicitly disables it.  Gradient checkpointing only requires
+    # ``config.use_cache=False`` for the training forward pass.
     model.config.use_cache = False
+    if getattr(model, "generation_config", None) is not None:
+        model.generation_config.use_cache = bool(args.use_generation_cache)
     if args.adapter:
         # Load the existing adapter as the trainable policy. The base model
         # must match the one recorded in adapter_config.json.
@@ -1332,6 +1403,8 @@ def main() -> None:
             r=8, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM",
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         ))
+    if getattr(model, "generation_config", None) is not None:
+        model.generation_config.use_cache = bool(args.use_generation_cache)
     model.print_trainable_parameters()
 
     def _load_training_dataset(path, split_column, train_split, eval_split):
@@ -1401,9 +1474,12 @@ def main() -> None:
             "requires_full_enumeration": bool(requires_enumeration),
         }
 
-    train = train.map(format_example)
+    map_kwargs = {}
+    if args.dataset_num_proc and args.dataset_num_proc > 1:
+        map_kwargs["num_proc"] = args.dataset_num_proc
+    train = train.map(format_example, **map_kwargs)
     if evaluation is not None:
-        evaluation = evaluation.map(format_example)
+        evaluation = evaluation.map(format_example, **map_kwargs)
 
     judge = JudgeReward(args.judge_model, torch, type("Transformers", (), {
         "AutoTokenizer": AutoTokenizer, "AutoModelForCausalLM": AutoModelForCausalLM,
@@ -1580,7 +1656,10 @@ def main() -> None:
                 on_triple_generated=on_triple_generated,
                 on_count_generated=on_count_generated,
                 on_sentinel_generated=on_sentinel_generated,
-                **_processor_kwargs(args.fact_pattern, args.count_pattern, args.sentinel),
+                **_processor_kwargs(
+                    args.fact_pattern, args.count_pattern, args.sentinel,
+                    args.parallel_workers,
+                ),
             )
             if batch_size is not None:
                 row_tables = []
