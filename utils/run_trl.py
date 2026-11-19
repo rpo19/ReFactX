@@ -201,6 +201,10 @@ def parse_args() -> argparse.Namespace:
         "adapter": config.get("adapter"),
         "judge_model": config.get("judge_model"),
         "gspo": config.get("gspo", False),
+        # TRL's GRPO loss formulation. With gspo=True the sequence-level
+        # importance ratios are used; "grpo" makes the aggregation pure GSPO
+        # instead of TRL's default length-weighted "dapo".
+        "loss_type": config.get("loss_type", "dapo"),
         "dataset": config.get("dataset", "rmanluo/RoG-cwq"),
         "prompt": config.get("prompt", "prompts/prompt_qwen36_angular2_nothink.yaml"),
         "question_key": config.get("question_key", "question"),
@@ -1728,6 +1732,7 @@ def main() -> None:
         # GSPO is exposed by recent TRL through GRPOConfig rather than a
         # separate trainer: sequence-level importance ratios are the key change.
         **({"importance_sampling_level": "sequence"} if args.gspo else {}),
+        loss_type=args.loss_type,
         logging_steps=10,
         save_strategy="steps",
         save_steps=args.save_steps,
