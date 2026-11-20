@@ -1,14 +1,16 @@
 #!/bin/bash
-#SBATCH --output=logs/test_2wiki_qwen38_27b_%j.out
-#SBATCH --job-name=refactx_2wiki_qwen38
+#SBATCH --output=logs/test_2wiki_dev_qwen38_27b_%j.out
+#SBATCH --job-name=refactx_2wiki_dev_qwen38
 #SBATCH -N 1
-#SBATCH --error=logs/test_2wiki_qwen38_27b_%j.err
-#SBATCH --time=02:00:00
-#SBATCH --mem=64G
+#SBATCH --error=logs/test_2wiki_dev_qwen38_27b_%j.err
+#SBATCH --time=24:00:00
+#SBATCH --mem=100G
 #SBATCH --cpus-per-task=1
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:4
 
 set -euo pipefail
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 source "$SLURM_SUBMIT_DIR/hpc/env.sh"
 
@@ -21,6 +23,7 @@ pg_overlay_install_traps
 
 cd /home/ripo631h/ReFactX
 
-python -m utils.eval --config configs/config_2wiki_qwen38_27b_train.json
+# 2Wiki test is unlabeled; the benchmark is the dev split (validation).
+python -m utils.eval --config configs/config_2wiki_qwen38_27b_dev.json
 
-teleclinotify "test_2wiki_qwen38_27b done | SLURM_JOB_ID=$SLURM_JOB_ID"
+teleclinotify "test_2wiki_dev_qwen38_27b done | SLURM_JOB_ID=$SLURM_JOB_ID"

@@ -136,10 +136,10 @@ What exists today:
   `rpozzi/mintaka` test, `prompt_qwen36_angular2_nothink.yaml`, no adapter.
   13.4% correct (536/4,000), 21.0% complete, mean F1 0.135. Prefix slices:
   23% correct on the first 100 and 18.0% on the first 200.
-- **2Wiki: no test labels.** 2Wiki test is unlabeled, so the only usable 27B
-  script points at the *train* config (`hpc/test_2wiki_qwen38_27b.sh` uses
-  `configs/config_2wiki_qwen38_27b_train.json`); there is no
-  `config_2wiki_qwen38_27b_test.json`.
+- **2Wiki: dev split.** 2Wiki test is unlabeled, so the 27B test script uses
+  the dev split: `hpc/test_2wiki_qwen38_27b.sh` now points at
+  `configs/config_2wiki_qwen38_27b_dev.json` (`dataset_split: "validation"`).
+  There is still no `config_2wiki_qwen38_27b_test.json`.
 - **WebQSP / CWQ: configs and sbatch scripts exist**
   (`configs/config_{webqsp,cwq}_qwen38_27b_test.json`,
   `hpc/eval_{webqsp,cwq}_test_qwen38_27b.sh`), but I found no completed evaluation
