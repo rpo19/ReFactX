@@ -34,6 +34,8 @@ def _completion(answer, facts=0, extra="", count=None, sentinel=False):
     if count is not None:
         parts.append(f"<count> <A> <b>\n= {count}\n</count>")
     parts.extend(["<fact> <A> <r> <B> . </fact>"] * facts)
+    if sentinel:
+        parts.append("<fact> <A> <r> <no further records> . </fact>")
     parts.append(extra)
     parts.append(f"<answer>{json.dumps(answer)}</answer>")
     return "\n".join(parts)
@@ -190,6 +192,80 @@ class TestToolGating(unittest.TestCase):
             completion, ["Paris"], requires_enumeration=[False], alpha=0.0, beta=0.05
         )
         self.assertAlmostEqual(score, 2.1)
+
+
+class TestToolMentions(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ns = _load_module()
+
+    def reward_one(self, completion, reference, **kwargs):
+        return self.ns["exact_reward"]([completion], [reference], **kwargs)[0]
+
+    def test_bare_count_mention_is_not_tool_use(self):
+        completion = "I will use `<count>` here.\n" + _completion(["8"], facts=1)
+        score = self.reward_one(
+            completion, ["8"], question_type=["count"], alpha=0.1, beta=0.0,
+            orphan_tool_penalty=0.0,
+        )
+        # The mention alone must not earn the count multiplier.
+        self.assertAlmostEqual(score, 2.1)
+
+    def test_orphan_count_mention_is_penalized(self):
+        completion = "I will use `<count>` here.\n" + _completion(["8"], facts=1)
+        score = self.reward_one(
+            completion, ["8"], question_type=["count"], alpha=0.0, beta=0.0,
+            orphan_tool_penalty=0.1, max_orphan_penalty=1.0,
+        )
+        self.assertAlmostEqual(score, 2.1 - 0.1)
+
+    def test_unclosed_fact_block_gets_no_structure(self):
+        completion = '<fact> <A> <r> <B> .\n<answer>["Paris"]</answer>'
+        score = self.reward_one(completion, ["Paris"], orphan_tool_penalty=0.0)
+        # Only the answer section counts as structure here.
+        self.assertAlmostEqual(score, 1.8)
+
+    def test_unclosed_count_block_is_not_tool_use(self):
+        completion = "<count> <A> <b>\n= 8\n" + _completion(["8"], facts=1)
+        score = self.reward_one(
+            completion, ["8"], question_type=["count"], alpha=0.1, beta=0.0,
+            orphan_tool_penalty=0.0,
+        )
+        self.assertAlmostEqual(score, 2.1)
+
+
+class _FakeDataset:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, index):
+        return self.rows[index]
+
+    def select(self, indices):
+        return _FakeDataset([self.rows[i] for i in indices])
+
+
+class TestStratifiedEval(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ns = _load_module()
+
+    def test_counts_and_rare_types_are_represented(self):
+        rows = []
+        rows += [{"dataset": "a", "question_type": "generic"}] * 10
+        rows += [{"dataset": "b", "question_type": "count"}] * 5
+        rows += [{"dataset": "a", "question_type": "superlative"}] * 1
+        dataset = _FakeDataset(rows)
+        selected = self.ns["_select_stratified_eval"](
+            dataset, 8, "dataset", "count", seed=0
+        )
+        types = [row["question_type"] for row in selected.rows]
+        self.assertEqual(len(selected.rows), 8)
+        self.assertGreaterEqual(types.count("count"), 2)
+        self.assertIn("superlative", types)
 
 
 class TestRewardStats(unittest.TestCase):

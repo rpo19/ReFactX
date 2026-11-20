@@ -34,6 +34,7 @@ from dotenv import load_dotenv
 PATH_FIELDS = (
     "adapter",
     "dataset",
+    "eval_dataset",
     "prompt",
     "generation_output",
     "output_dir",
@@ -206,6 +207,7 @@ def parse_args() -> argparse.Namespace:
         # instead of TRL's default length-weighted "dapo".
         "loss_type": config.get("loss_type", "dapo"),
         "dataset": config.get("dataset", "rmanluo/RoG-cwq"),
+        "eval_dataset": config.get("eval_dataset"),
         "prompt": config.get("prompt", "prompts/prompt_qwen36_angular2_nothink.yaml"),
         "question_key": config.get("question_key", "question"),
         "answer_key": config.get("answer_key", "answer"),
@@ -254,6 +256,8 @@ def parse_args() -> argparse.Namespace:
         "fact_soft_cap": config.get("fact_soft_cap", 20),
         "fact_penalty": config.get("fact_penalty", 0.01),
         "max_fact_penalty": config.get("max_fact_penalty", 0.2),
+        "orphan_tool_penalty": config.get("orphan_tool_penalty", 0.1),
+        "max_orphan_penalty": config.get("max_orphan_penalty", 0.3),
         "count_type": config.get("count_type", "count"),
         "enumeration_datasets": config.get("enumeration_datasets", ["webqsp"]),
         "use_normalized_reward": config.get("use_normalized_reward", True),
@@ -301,6 +305,22 @@ def _marker_count(text: str, pattern: str) -> int:
         name = pattern[1:-1].split()[0]
         return len(re.findall(rf"<{re.escape(name)}\b[^>]*>", text, flags=re.IGNORECASE))
     return len(re.findall(re.escape(pattern), text, flags=re.IGNORECASE))
+
+
+def _tagged_blocks(text: str, pattern: str) -> list[str]:
+    """Return the contents of well-formed ``<tag> ... </tag>`` sections.
+
+    A bare mention of a marker (e.g. "I will use `<count>`") is not a tool call
+    and must not be treated as one. Only complete sections count.
+    """
+    if not (pattern.startswith("<") and pattern.endswith(">")):
+        return []
+    name = pattern[1:-1].split()[0]
+    return re.findall(
+        rf"<{re.escape(name)}\b[^>]*>(.*?)</{re.escape(name)}\s*>",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
 
 def _answer(text: str, answer_pattern: str = "<answer>") -> str:
@@ -503,6 +523,73 @@ def _derive_requires_enumeration(answer: Any, dataset: str, enumeration_datasets
     return sum(1 for v in values if v not in (None, "")) >= 2
 
 
+def _select_stratified_eval(dataset, max_samples, dataset_column, count_type, seed=42):
+    """Select an eval subset balanced over (dataset, question type).
+
+    Every group present in the split keeps at least one example (budget
+    permitting), and count questions are oversampled (4x weight) so the eval
+    actually measures the count tool instead of a couple of lucky samples.
+    """
+    total = len(dataset)
+    if max_samples is None or max_samples <= 0 or max_samples >= total:
+        return dataset
+
+    import random
+
+    groups: dict[tuple[str, str], list[int]] = {}
+    for index in range(total):
+        example = dataset[index]
+        dataset_tag = _dataset_tag(example.get(dataset_column))
+        qtype = _derive_question_type(example)
+        qtype = str(qtype).lower() if qtype is not None else "unknown"
+        groups.setdefault((dataset_tag, qtype), []).append(index)
+
+    count_label = str(count_type).lower()
+    weights = {
+        key: len(indices) * (4.0 if key[1] == count_label else 1.0)
+        for key, indices in groups.items()
+    }
+    quota = {key: 0 for key in groups}
+    used = 0
+
+    # First give every group a slot (largest groups first) so rare types and
+    # counts are represented even with a small budget.
+    for key in sorted(groups, key=lambda k: -weights[k]):
+        if used >= max_samples:
+            break
+        quota[key] = 1
+        used += 1
+
+    # Then fill the remainder proportionally, with the count boost.
+    while used < max_samples:
+        best_key = None
+        best_score = -1.0
+        for key, indices in groups.items():
+            if quota[key] >= len(indices):
+                continue
+            score = weights[key] / (quota[key] + 1)
+            if score > best_score:
+                best_score = score
+                best_key = key
+        if best_key is None:
+            break
+        quota[best_key] += 1
+        used += 1
+
+    rng = random.Random(seed)
+    selected: list[int] = []
+    for key, indices in groups.items():
+        take = min(quota[key], len(indices))
+        if take <= 0:
+            continue
+        if take >= len(indices):
+            selected.extend(indices)
+        else:
+            selected.extend(rng.sample(sorted(indices), take))
+    selected.sort()
+    return dataset.select(selected)
+
+
 # Cached import probe for the conservative answer normalizer. ``None`` means
 # "not yet attempted"; ``False`` records that the module is unavailable.
 _COMPARE_ANSWERS = None
@@ -557,6 +644,8 @@ def exact_reward(
     fact_soft_cap: int = 20,
     fact_penalty: float = 0.01,
     max_fact_penalty: float = 0.2,
+    orphan_tool_penalty: float = 0.1,
+    max_orphan_penalty: float = 0.3,
     use_normalized: bool = True,
     stats: dict | None = None,
     details: list | None = None,
@@ -566,16 +655,20 @@ def exact_reward(
 
     The reward is deliberately made up of small, interpretable terms:
 
-    * ``0.3`` for using at least one configured fact section;
-    * ``0.3`` for having exactly one configured answer section;
+    * ``0.3`` for a complete ``<fact>`` section;
+    * ``0.3`` for exactly one complete ``<answer>`` section;
     * ``0.5`` for producing a JSON answer;
     * ``0..1`` for answer credit: full credit for a semantically equivalent
       answer (via ``utils/answer_normalization.py``), otherwise the strict
       answer-set intersection-over-union (IoU);
-    * a small penalty for fact calls beyond ``fact_soft_cap`` (loop breaker);
+    * an optional penalty for fact calls beyond ``fact_soft_cap`` (disabled by
+      setting ``fact_penalty=0``);
+    * a penalty for marker mentions that never form a tool section, e.g.
+      ``<count>``/``<fact>`` written in prose (``orphan_tool_penalty``);
     * a correct-answer-gated multiplier: ``alpha`` for count questions that
-      used ``<count>``, ``beta`` for enumeration questions that used the
-      exhausted-retrieval sentinel.
+      emitted a complete ``<count>`` section, ``beta`` for enumeration
+      questions whose ``<fact>`` section contains the exhausted-retrieval
+      sentinel.
 
     A malformed answer still receives the formatting points, but no answer
     credit. When ``stats`` is given it is updated in place with component sums
@@ -591,20 +684,39 @@ def exact_reward(
         qtype = _at(question_type, index)
         dataset_tag = _dataset_tag(_at(datasets, index) if datasets is not None else dataset)
 
-        # Encourage the configured output markers. These are soft incentives
+        # Count only well-formed tool sections. A bare marker mention such as
+        # "I will use `<count>`" is not a tool call and must not be rewarded.
+        fact_blocks = _tagged_blocks(text, fact_pattern)
+        count_blocks = _tagged_blocks(text, count_pattern)
+        answer_blocks = _tagged_blocks(text, answer_pattern)
+        fact_mentions = _marker_count(normalized, fact_pattern)
+        count_mentions = _marker_count(normalized, count_pattern)
+        orphan_fact = max(0, fact_mentions - len(fact_blocks))
+        orphan_count = max(0, count_mentions - len(count_blocks))
+
+        # Encourage the configured output sections. These are soft incentives
         # and do not require a complete proof.
         structure = 0.0
-        if _marker_count(normalized, fact_pattern) > 0:
+        if fact_blocks:
             structure += 0.3
-        if _marker_count(normalized, answer_pattern) == 1:
+        if len(answer_blocks) == 1:
             structure += 0.3
 
-        # Retrieval-loop breaker: examples needing more than ~20 fact calls are
-        # essentially never answered correctly, so stop the policy inflating
-        # the trace. Bounded so it cannot dominate the correctness term.
-        fact_calls = _marker_count(normalized, fact_pattern)
-        excess = max(0, fact_calls - fact_soft_cap)
-        penalty = min(max_fact_penalty, fact_penalty * excess)
+        # Optional retrieval-loop breaker. Set fact_penalty=0 to optimize
+        # answers instead of brevity (the default for this round of RL).
+        fact_calls = len(fact_blocks)
+        excess = max(0, fact_calls - fact_soft_cap) if fact_soft_cap > 0 else 0
+        penalty = min(max_fact_penalty, fact_penalty * excess) if fact_penalty > 0 else 0.0
+
+        # Penalize marker mentions that never became a tool call so the policy
+        # does not learn to write `<count>`/`<fact>` in prose.
+        if orphan_tool_penalty > 0:
+            orphan_penalty = min(
+                max_orphan_penalty,
+                orphan_tool_penalty * (orphan_fact + orphan_count),
+            )
+        else:
+            orphan_penalty = 0.0
 
         json_score = 0.0
         answer_credit = 0.0
@@ -643,14 +755,14 @@ def exact_reward(
             # whole batch fail; keep the structural reward accumulated above.
             pass
 
-        used_count = _marker_count(normalized, count_pattern) > 0
-        used_sentinel = SENTINEL_MARKER in normalized
+        used_count = len(count_blocks) > 0
+        used_sentinel = any(SENTINEL_MARKER in block.lower() for block in fact_blocks)
         if qtype:
             is_count_question = str(qtype).strip().lower() == count_type.lower()
         else:
             is_count_question = _is_count_question_text(_at(question, index))
 
-        score = structure + json_score + answer_credit - penalty
+        score = structure + json_score + answer_credit - penalty - orphan_penalty
 
         # Tool use is rewarded only when it coincides with a correct answer and
         # a question type where the tool is designed to help. A multiplier (not
@@ -672,6 +784,11 @@ def exact_reward(
             stats["json"] = stats.get("json", 0.0) + json_score
             stats["answer"] = stats.get("answer", 0.0) + answer_credit
             stats["fact_penalty"] = stats.get("fact_penalty", 0.0) + penalty
+            stats["orphan_penalty"] = stats.get("orphan_penalty", 0.0) + orphan_penalty
+            stats["orphan_fact"] = stats.get("orphan_fact", 0) + orphan_fact
+            stats["orphan_count"] = stats.get("orphan_count", 0) + orphan_count
+            stats["fact_blocks"] = stats.get("fact_blocks", 0) + len(fact_blocks)
+            stats["count_blocks"] = stats.get("count_blocks", 0) + len(count_blocks)
             stats["tool_bonus"] = stats.get("tool_bonus", 0.0) + tool_bonus
             stats["fact_calls"] = stats.get("fact_calls", 0) + fact_calls
             stats["correct"] = stats.get("correct", 0) + int(is_correct)
@@ -684,6 +801,11 @@ def exact_reward(
                 "correct": is_correct,
                 "normalized_match": normalized_match,
                 "fact_calls": fact_calls,
+                "fact_blocks": len(fact_blocks),
+                "count_blocks": len(count_blocks),
+                "orphan_fact": orphan_fact,
+                "orphan_count": orphan_count,
+                "orphan_penalty": orphan_penalty,
                 "used_count": used_count,
                 "used_sentinel": used_sentinel,
                 "question_type": None if qtype is None else str(qtype),
@@ -1027,6 +1149,11 @@ def _reward_component_metrics(stats: dict | None, prefix: str = "") -> dict[str,
         f"{prefix}reward_json": stats.get("json", 0.0) / n,
         f"{prefix}reward_answer": stats.get("answer", 0.0) / n,
         f"{prefix}reward_fact_penalty": stats.get("fact_penalty", 0.0) / n,
+        f"{prefix}reward_orphan_penalty": stats.get("orphan_penalty", 0.0) / n,
+        f"{prefix}reward_orphan_fact": stats.get("orphan_fact", 0) / n,
+        f"{prefix}reward_orphan_count": stats.get("orphan_count", 0) / n,
+        f"{prefix}reward_fact_blocks": stats.get("fact_blocks", 0) / n,
+        f"{prefix}reward_count_blocks": stats.get("count_blocks", 0) / n,
         f"{prefix}reward_tool_bonus": stats.get("tool_bonus", 0.0) / n,
         f"{prefix}reward_fact_calls": stats.get("fact_calls", 0) / n,
         f"{prefix}reward_correct_rate": stats.get("correct", 0) / n,
@@ -1038,6 +1165,18 @@ def _stats_delta(current: dict, previous: dict) -> dict:
     """Per-key difference between two running accumulators (window = now - then)."""
     keys = set(current) | set(previous)
     return {key: current.get(key, 0) - previous.get(key, 0) for key in keys}
+
+
+def _training_log_keys(metrics: dict) -> dict:
+    """Strip a leading ``train/`` because Trainer adds the split prefix itself.
+
+    Without this, ``train/window/reward_answer`` is reported as
+    ``train/train/window/reward_answer`` (and the W&B dashboards miss it).
+    """
+    return {
+        key[len("train/"):] if key.startswith("train/") else key: value
+        for key, value in metrics.items()
+    }
 
 
 def _percentile(values, q: float) -> float:
@@ -1211,37 +1350,58 @@ class CustomMetricsCallback:
 
     def on_step_end(self, args, state, control, model=None, **kwargs):
         model = self.model if self.model is not None else model
-        # Without a validation dataset there is nothing to evaluate; the
-        # cumulative tool counters are still reported from on_log.
-        if (
-            self.dataset is None
-            or len(self.dataset) == 0
-            or self.every_steps <= 0
-            or state.global_step == 0
-            or state.global_step % self.every_steps != 0
-            or model is None
-        ):
+        if state.global_step == 0:
             return control
-        was_training = model.training
-        eval_reward_stats = {}
-        self.pending_metrics = evaluate_policy(
-            model, self.tokenizer, self.dataset, self.max_completion_length,
-            self.fact_pattern, self.answer_pattern, self.eval_batch_size,
-            generation_output=self.generation_output,
-            evaluation_label=f"step_{state.global_step}",
-            decoder_counter=self.decoder_counter,
-            reward_options=self.reward_options,
-            reward_stats=eval_reward_stats,
+
+        logging_steps = int(getattr(args, "logging_steps", 0) or 0)
+        log_due = logging_steps > 0 and state.global_step % logging_steps == 0
+        should_eval = (
+            self.dataset is not None
+            and len(self.dataset) > 0
+            and self.every_steps > 0
+            and state.global_step % self.every_steps == 0
+            and model is not None
         )
-        self.pending_metrics["constrained_triples_generated"] = self.triple_counter["count"]
-        self.pending_metrics.update(
-            _tool_counter_metrics(self.tool_counter, self.decoder_counter)
-        )
-        if self.trainer is not None:
-            self.trainer.log(self.pending_metrics)
-            self.pending_metrics = None
-        if was_training:
-            model.train()
+        if not (log_due or should_eval):
+            return control
+
+        metrics = {}
+        if should_eval:
+            was_training = model.training
+            eval_reward_stats = {}
+            metrics.update(evaluate_policy(
+                model, self.tokenizer, self.dataset, self.max_completion_length,
+                self.fact_pattern, self.answer_pattern, self.eval_batch_size,
+                generation_output=self.generation_output,
+                evaluation_label=f"step_{state.global_step}",
+                decoder_counter=self.decoder_counter,
+                reward_options=self.reward_options,
+                reward_stats=eval_reward_stats,
+            ))
+            if was_training:
+                model.train()
+
+        # Window deltas are taken only when logging, so each point covers the
+        # whole logging interval rather than a single optimizer step.
+        reward_window = _stats_delta(self.train_reward_stats, self._reward_snapshot)
+        group_window = _stats_delta(self.train_group_stats, self._group_snapshot)
+        self._reward_snapshot = dict(self.train_reward_stats)
+        self._group_snapshot = dict(self.train_group_stats)
+
+        metrics["constrained_triples_generated"] = self.triple_counter["count"]
+        metrics.update(_tool_counter_metrics(self.tool_counter, self.decoder_counter))
+        metrics.update(_reward_component_metrics(
+            self.train_reward_stats, prefix="train/cumulative/"
+        ))
+        metrics.update(_reward_component_metrics(
+            reward_window, prefix="train/window/"
+        ))
+        metrics.update(_group_metrics(group_window))
+        metrics.update(_behavior_metrics(group_window))
+
+        self._warn_on_tool_gap(_tool_counter_gaps(self.tool_counter, self.decoder_counter))
+        if self.trainer is not None and metrics:
+            self.trainer.log(_training_log_keys(metrics))
         return control
 
     def _warn_on_tool_gap(self, gaps):
@@ -1266,28 +1426,9 @@ class CustomMetricsCallback:
             )
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs is not None:
-            logs["constrained_triples_generated"] = self.triple_counter["count"]
-            logs.update(_tool_counter_metrics(self.tool_counter, self.decoder_counter))
-            gaps = _tool_counter_gaps(self.tool_counter, self.decoder_counter)
-            self._warn_on_tool_gap(gaps)
-
-            # Cumulative reward components and the delta since the last log, so
-            # a late-phase change is not hidden by the whole-run average.
-            logs.update(_reward_component_metrics(self.train_reward_stats, prefix="train/cumulative/"))
-            reward_window = _stats_delta(self.train_reward_stats, self._reward_snapshot)
-            logs.update(_reward_component_metrics(reward_window, prefix="train/window/"))
-
-            # Group signal and behavior metrics are naturally windowed.
-            group_window = _stats_delta(self.train_group_stats, self._group_snapshot)
-            logs.update(_group_metrics(group_window))
-            logs.update(_behavior_metrics(group_window))
-
-            self._reward_snapshot = dict(self.train_reward_stats)
-            self._group_snapshot = dict(self.train_group_stats)
-        if logs is not None and self.pending_metrics:
-            logs.update(self.pending_metrics)
-            self.pending_metrics = None
+        # Reward/window/group metrics are logged from on_step_end. Mutating
+        # `logs` here is too late: the W&B callback runs before this one, which
+        # is why train/window/* used to be missing from W&B.
         return control
 
 
@@ -1443,11 +1584,24 @@ def main() -> None:
     train, evaluation = _load_training_dataset(
         args.dataset, args.split_column, args.train_split, args.eval_split
     )
+    if args.eval_dataset:
+        if os.path.isfile(args.eval_dataset):
+            evaluation = load_dataset(
+                "json", data_files=args.eval_dataset, split="train"
+            )
+        else:
+            warnings.warn(
+                f"eval_dataset not found at {args.eval_dataset}; "
+                f"using the '{args.eval_split}' split",
+                RuntimeWarning,
+                stacklevel=2,
+            )
     if evaluation is not None and len(evaluation) == 0:
         evaluation = None
     if evaluation is not None and args.max_eval_samples is not None:
-        evaluation = evaluation.select(
-            range(min(args.max_eval_samples, len(evaluation)))
+        evaluation = _select_stratified_eval(
+            evaluation, args.max_eval_samples, args.dataset_column,
+            args.count_type, args.seed,
         )
 
     def format_example(example):
@@ -1506,6 +1660,8 @@ def main() -> None:
         "fact_soft_cap": args.fact_soft_cap,
         "fact_penalty": args.fact_penalty,
         "max_fact_penalty": args.max_fact_penalty,
+        "orphan_tool_penalty": args.orphan_tool_penalty,
+        "max_orphan_penalty": args.max_orphan_penalty,
         "use_normalized": args.use_normalized_reward,
     }
     # Cumulative component sums so on_log can report each reward term separately.

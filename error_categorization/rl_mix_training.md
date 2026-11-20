@@ -166,6 +166,38 @@ PostgreSQL overlay as the other HPC scripts. SLURM logs are
 `logs/trl_qwen35_4b_sft_mix_<jobid>.{out,err}`; checkpoints and generations go to
 `${WS_PATH}/grpo_output_supported_mix_all4`.
 
+## Stratified evaluation
+
+The training mixture's `validation` split has only 200 rows (50 per dataset) and
+5 count questions, which is too noisy to tell whether the policy is learning.
+Build a larger held-out set balanced over datasets and question types, with a
+dedicated count quota:
+
+```bash
+python -m utils.build_eval_set \
+  --output "${WS_PATH}/datasets/rl_eval_stratified.jsonl" \
+  --exclude-from "${WS_PATH}/datasets/rl_train_mix.jsonl" \
+  --per-dataset 50 --count-per-dataset 40
+```
+
+The fast config points `eval_dataset` at this file with `max_eval_samples: null`.
+If the file is missing, `run_trl.py` warns and falls back to the train file's
+`validation` split; in both cases the selection is stratified and count-weighted
+(counts get a 4x weight, every group keeps at least one example).
+
+## Reward defaults for the answer-focused round
+
+`configs/trl_qwen35_4b_sft_grpo_mix_fast.json` disables length shaping
+(`fact_penalty=0`, `max_fact_penalty=0`) and the tool multipliers
+(`reward_alpha=reward_beta=0`). It enables `orphan_tool_penalty`: a mention of
+`<count>`/`<fact>` that does not form a complete section is penalized, and only
+complete sections count as tool use. Structure points now also require complete
+sections, so prose marker mentions earn nothing.
+
+`train/window/*` and `train/group/*` are logged from `on_step_end` (not from
+`on_log`), so they now reach W&B; the stale `train/train/...` double prefix is
+also fixed.
+
 ## GSPO loss type
 
 `"gspo": true` sets `importance_sampling_level="sequence"` in `GRPOConfig` but
