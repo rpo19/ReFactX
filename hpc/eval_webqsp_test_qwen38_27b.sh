@@ -23,6 +23,7 @@ pg_overlay_install_traps
 
 cd /home/h7/ripo631h/ReFactX
 
-python -m utils.eval --config configs/config_webqsp_qwen38_27b_test.json
+PYTHON="${REFACTX_PYTHON:-python}"
+"$PYTHON" -m utils.eval --config configs/config_webqsp_qwen38_27b_test.json
 
 teleclinotify "eval_webqsp_test_qwen38_27b done | SLURM_JOB_ID=$SLURM_JOB_ID"

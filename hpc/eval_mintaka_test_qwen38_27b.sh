@@ -21,6 +21,7 @@ pg_overlay_install_traps
 
 cd /home/ripo631h/ReFactX
 
-python -m utils.eval --config configs/config_mintaka_qwen38_27b_test.json
+PYTHON="${REFACTX_PYTHON:-python}"
+"$PYTHON" -m utils.eval --config configs/config_mintaka_qwen38_27b_test.json
 
 teleclinotify "test_mintaka_qwen38_27b done | SLURM_JOB_ID=$SLURM_JOB_ID"

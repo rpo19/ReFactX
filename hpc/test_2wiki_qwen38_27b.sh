@@ -24,6 +24,7 @@ pg_overlay_install_traps
 cd /home/ripo631h/ReFactX
 
 # 2Wiki test is unlabeled; the benchmark is the dev split (validation).
-python -m utils.eval --config configs/config_2wiki_qwen38_27b_dev.json
+PYTHON="${REFACTX_PYTHON:-python}"
+"$PYTHON" -m utils.eval --config configs/config_2wiki_qwen38_27b_dev.json
 
 teleclinotify "test_2wiki_dev_qwen38_27b done | SLURM_JOB_ID=$SLURM_JOB_ID"
