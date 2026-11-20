@@ -180,6 +180,10 @@ python -m utils.build_eval_set \
   --per-dataset 50 --count-per-dataset 40
 ```
 
+2Wiki is sampled from its **train** split (`--split-overrides 2wiki=train`, the
+default) because the project evaluates 2Wiki on the canonical dev split; any
+question already present in the RL mixture (train or validation) is excluded.
+
 The fast config points `eval_dataset` at this file with `max_eval_samples: null`.
 If the file is missing, `run_trl.py` warns and falls back to the train file's
 `validation` split; in both cases the selection is stratified and count-weighted

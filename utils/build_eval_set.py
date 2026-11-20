@@ -6,8 +6,10 @@ whether the policy is learning. This builder samples a larger evaluation set
 from the held-out HuggingFace validation splits, balanced by dataset and
 question type, with a dedicated quota for count questions.
 
-Questions already used for RL training are excluded (normalized match) so the
-eval stays held out.
+Questions already present in the RL mixture (train or validation) are excluded
+(normalized match) so the eval stays held out. 2Wiki is sampled from its *train*
+split because the project reports 2Wiki results on the canonical dev split;
+`--split-overrides 2wiki=train` is the default.
 
 Example::
 
@@ -46,8 +48,6 @@ def _load_excluded(paths: Iterable[str]) -> set[str]:
                 if not line:
                     continue
                 record = json.loads(line)
-                if str(record.get("split", "train")) != "train":
-                    continue
                 nested = record.get("input_sample")
                 question = record.get("question")
                 if not question and isinstance(nested, dict):
@@ -85,6 +85,7 @@ def _collect_rows(dataset: str, split: str, *, excluded: set[str],
             "dataset": dataset,
             "index_table": table,
             "split": "validation",
+            "source_split": split,
             "question": question,
             "answer": answer,
             "question_type": question_type,
@@ -116,13 +117,16 @@ def build(output: str, datasets: Iterable[str], splits: Iterable[str], *,
           per_dataset: int, count_per_dataset: int, exclude_from: Iterable[str],
           wikidata_table: str, freebase_table: str,
           enumeration_datasets: Iterable[str], count_type: str,
-          seed: int) -> dict:
+          split_overrides: dict[str, str], seed: int) -> dict:
     excluded = _load_excluded(exclude_from)
     enumeration = {name.lower() for name in enumeration_datasets}
     rng = random.Random(seed)
     selected: list[dict] = []
     for dataset in datasets:
-        for split in splits:
+        dataset_splits = (
+            [split_overrides[dataset]] if dataset in split_overrides else list(splits)
+        )
+        for split in dataset_splits:
             rows = _collect_rows(
                 dataset, split, excluded=excluded,
                 wikidata_table=wikidata_table,
@@ -167,6 +171,10 @@ def build(output: str, datasets: Iterable[str], splits: Iterable[str], *,
         "records": len(unique),
         "datasets": sorted(set(row["dataset"] for row in unique)),
         "splits": sorted(set(splits)),
+        "split_overrides": dict(split_overrides),
+        "source_splits": dict(Counter(
+            f"{row['dataset']}:{row.get('source_split', '')}" for row in unique
+        )),
         "seeded_from": seed,
         "excluded_questions": len(excluded),
         "per_dataset": per_dataset,
@@ -190,6 +198,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--datasets", nargs="+", default=list(DATASETS),
                         choices=sorted(DATASETS))
     parser.add_argument("--splits", nargs="+", default=["validation"])
+    parser.add_argument(
+        "--split-overrides", nargs="+", default=["2wiki=train"],
+        help="Per-dataset split override, e.g. 2wiki=train (the project evaluates "
+             "2Wiki on the canonical dev split, so it must not be used here)",
+    )
     parser.add_argument("--per-dataset", type=int, default=50,
                         help="Budget per dataset for non-count question types")
     parser.add_argument("--count-per-dataset", type=int, default=40,
@@ -203,6 +216,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(argv)
 
+    split_overrides: dict[str, str] = {}
+    for item in args.split_overrides or []:
+        if "=" not in item:
+            parser.error(f"--split-overrides expects dataset=split, got {item!r}")
+        dataset, split = item.split("=", 1)
+        split_overrides[dataset] = split
+
     manifest = build(
         args.output,
         args.datasets,
@@ -214,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
         freebase_table=args.freebase_table,
         enumeration_datasets=args.enumeration_datasets,
         count_type=args.count_type,
+        split_overrides=split_overrides,
         seed=args.seed,
     )
     print(json.dumps(manifest, indent=2))
