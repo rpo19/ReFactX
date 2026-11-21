@@ -1327,13 +1327,22 @@ class CustomMetricsCallback:
         self.eval_batch_size = eval_batch_size
         self.every_steps = every_steps
         self.triple_counter = triple_counter
-        self.tool_counter = tool_counter or {}
-        self.decoder_counter = decoder_counter or {}
+        # These are shared, mutable accumulators populated by the reward
+        # function. Use identity-preserving defaults: `x or {}` would create a
+        # new dict when the accumulator is still empty at construction time and
+        # silently disconnect the callback from the reward updates (which is
+        # why train/window/* and the group metrics never reached W&B).
+        self.tool_counter = tool_counter if tool_counter is not None else {}
+        self.decoder_counter = decoder_counter if decoder_counter is not None else {}
         self.generation_output = generation_output
         self.model = model
-        self.reward_options = reward_options or {}
-        self.train_reward_stats = train_reward_stats or {}
-        self.train_group_stats = train_group_stats or {}
+        self.reward_options = reward_options if reward_options is not None else {}
+        self.train_reward_stats = (
+            train_reward_stats if train_reward_stats is not None else {}
+        )
+        self.train_group_stats = (
+            train_group_stats if train_group_stats is not None else {}
+        )
         self.trainer = None
         self.pending_metrics = None
         self._tool_gap_warned = {}
