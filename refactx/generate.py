@@ -401,6 +401,7 @@ class CountBranchesGeneration(PatternConstrainedGeneration):
         return sum(next_tokens.values())
 
     def _finish_collecting(self, mask, mask_idx):
+        self.state.tool_calls += 1
         count = self._count_at_prefix(self.prefix_tokens)
         prefix_text = self._decode(self.prefix_tokens).strip()
         self.calls.append((prefix_text, count))
@@ -470,7 +471,7 @@ class CountBranchesGeneration(PatternConstrainedGeneration):
 class PatternConstrainedState():
     def __init__(self, tokenizer, cache_index, subtree_cache, state=0,
                  debug=False, regex_window=10, ignore_case=True,
-                 thinking_end_pattern='</think>') -> None:
+                 thinking_end_pattern='</think>', max_tool_calls=None) -> None:
 
         self.NORMAL_GENERATION = 0
         self.CONSTRAINED_GENERATION = 1
@@ -506,6 +507,14 @@ class PatternConstrainedState():
 
         self.sentinel_remaining = []
 
+        # Retrieval budget: after this many completed fact/count calls the
+        # decoder is forced to open the answer section, which prevents the
+        # retrieval loops that otherwise run into max_new_tokens.
+        self.max_tool_calls = max_tool_calls
+        self.tool_calls = 0
+        self.answer_prefix_remaining = []
+        self.answer_started = False
+
         self.thinking_end_pattern = thinking_end_pattern.lower() if ignore_case and thinking_end_pattern else thinking_end_pattern
         self._thinking_cache_reset_done = False
 
@@ -528,6 +537,7 @@ class PatternConstrainedState():
             return False
 
     def cache_add(self, sequence, start_idx=0):
+        self.tool_calls += 1
         self.cache_index.add(sequence, new_leaf=True)
         self.generated_triples.append(sequence)
         self.generated_triples_idx.append([list(range(start_idx, len(sequence)))])
@@ -557,6 +567,9 @@ class PatternConstrainedState():
         self._thinking_cache_reset_done = False
         self._first_call = True
         self.active_generation = None
+        self.tool_calls = 0
+        self.answer_prefix_remaining = []
+        self.answer_started = False
         if clear_patterns:
             self.patterns = []
         self.generation_history = []
@@ -585,6 +598,10 @@ class PatternConstrainedState():
         self.subtree_cache = deepcopy(other.subtree_cache) if copy else other.subtree_cache
         self.thinking_end_pattern = other.thinking_end_pattern
         self._thinking_cache_reset_done = other._thinking_cache_reset_done
+        self.max_tool_calls = other.max_tool_calls
+        self.tool_calls = other.tool_calls
+        self.answer_prefix_remaining = list(other.answer_prefix_remaining)
+        self.answer_started = other.answer_started
 
         self.debug = other.debug
         self.debug_history = deepcopy(other.debug_history) if copy else other.debug_history
@@ -790,13 +807,17 @@ class ConstrainedStateList():
 class ConstrainedLogitsProcessor(LogitsProcessor):
     def __init__(self, states, tokenizer, reinit_states=False,
                  on_triple_generated=None, on_count_generated=None,
-                 on_sentinel_generated=None, parallel_workers=0):
+                 on_sentinel_generated=None, parallel_workers=0,
+                 max_tool_calls=None):
         self.states = states
         self.reinit_states = reinit_states
         self.on_triple_generated = on_triple_generated
         self.on_count_generated = on_count_generated
         self.on_sentinel_generated = on_sentinel_generated
         self.tokenizer = tokenizer
+        self.max_tool_calls = max_tool_calls
+        self._answer_prefix_ids_cache = None
+        self._tool_block_ids_cache = None
         self.pattern_configs = []
         self.parallel_workers = max(0, int(parallel_workers or 0))
         self._executor = (
@@ -813,6 +834,51 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
                 state.on_triple_generated = self.on_triple_generated
                 state.on_count_generated = self.on_count_generated
                 state.on_sentinel_generated = self.on_sentinel_generated
+                state.max_tool_calls = self.max_tool_calls
+
+    def _encode(self, text):
+        tokenizer = getattr(self.tokenizer, 'tokenizer', self.tokenizer)
+        return tokenizer.encode(text, add_special_tokens=False)
+
+    def _answer_prefix_ids(self):
+        if self._answer_prefix_ids_cache is None:
+            self._answer_prefix_ids_cache = self._encode('\n<answer>\n')
+        return self._answer_prefix_ids_cache
+
+    def _tool_block_ids(self):
+        """First tokens that can start a new fact/count call."""
+        if self._tool_block_ids_cache is None:
+            ids = set()
+            for marker in ('<', ' <', '<count', ' <count'):
+                encoded = self._encode(marker)
+                if encoded:
+                    ids.add(encoded[0])
+            self._tool_block_ids_cache = sorted(ids)
+        return self._tool_block_ids_cache
+
+    def _retrieval_budget_action(self, state):
+        """Advance the forced-answer state machine for one unconstrained row.
+
+        Returns ``('force', token)`` to force a specific token, ``('block', None)``
+        to forbid new tool calls, or ``None`` when no action is required.
+        """
+        if state.answer_prefix_remaining:
+            token = state.answer_prefix_remaining.pop(0)
+            if not state.answer_prefix_remaining:
+                state.answer_started = True
+            return ('force', token)
+        if state.answer_started:
+            return ('block', None)
+        if state.max_tool_calls is not None and state.tool_calls >= state.max_tool_calls:
+            state.answer_prefix_remaining = list(self._answer_prefix_ids())
+            if state.answer_prefix_remaining:
+                token = state.answer_prefix_remaining.pop(0)
+                if not state.answer_prefix_remaining:
+                    state.answer_started = True
+                return ('force', token)
+            state.answer_started = True
+            return ('block', None)
+        return None
 
     def add_pattern(self, pattern, generation_class, **config):
         cfg = PatternConfig(pattern=pattern, generation_class=generation_class, config=config)
@@ -899,6 +965,7 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
         sequence_length = input_ids.shape[1]
         constrained_rows = []
+        budget_rows = []
         for i in range(input_ids.shape[0]):
             batch_idx = self.states.get_batch_idx(i)
             beam_i = self.states.get_beam_idx(i)
@@ -934,8 +1001,12 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
             if state.is_constrained():
                 constrained_rows.append((i, state))
+            else:
+                action = self._retrieval_budget_action(state)
+                if action is not None:
+                    budget_rows.append((i, action))
 
-        if not constrained_rows:
+        if not constrained_rows and not budget_rows:
             return scores
 
         use_parallel = (
@@ -955,19 +1026,29 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
             list(self._executor.map(_constrain_one, range(len(constrained_rows))))
             for position, (i, _state) in enumerate(constrained_rows):
                 scores[i].add_(mask[position])
-            return scores
+        else:
+            mask = self._mask_row(scores)
+            for i, state in constrained_rows:
+                mask.fill_(-math.inf)
+                sequence = input_ids[i].tolist()
+                constrain_generation_sequence_start_idx = len(sequence) - state.get_cursor()
+                constrain_generation_sequence = sequence[constrain_generation_sequence_start_idx:]
+                state.active_generation.constrain(
+                    constrain_generation_sequence, mask, 0)
+                # Adding -inf on disallowed positions and 0 on allowed positions
+                # keeps the model's relative scores for allowed tokens.
+                scores[i].add_(mask[0])
 
-        mask = self._mask_row(scores)
-        for i, state in constrained_rows:
-            mask.fill_(-math.inf)
-            sequence = input_ids[i].tolist()
-            constrain_generation_sequence_start_idx = len(sequence) - state.get_cursor()
-            constrain_generation_sequence = sequence[constrain_generation_sequence_start_idx:]
-            state.active_generation.constrain(
-                constrain_generation_sequence, mask, 0)
-            # Adding -inf on disallowed positions and 0 on allowed positions
-            # keeps the model's relative scores for allowed tokens.
-            scores[i].add_(mask[0])
+        for i, action in budget_rows:
+            kind, token = action
+            if kind == 'force':
+                scores[i].fill_(-math.inf)
+                if 0 <= token < scores.shape[-1]:
+                    scores[i, token] = 0.0
+            else:
+                for blocked in self._tool_block_ids():
+                    if 0 <= blocked < scores.shape[-1]:
+                        scores[i, blocked] = -math.inf
 
         return scores
 
@@ -1034,7 +1115,8 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
                                      on_triple_generated=None,
                                      on_count_generated=None,
                                      on_sentinel_generated=None,
-                                     parallel_workers=0, **kwargs):
+                                     parallel_workers=0, max_tool_calls=None,
+                                     **kwargs):
     """Build the constrained processor.
 
     Sentinel (exhausted-retrieval ``<no further records>``) is enabled by
@@ -1059,6 +1141,7 @@ def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=
         on_count_generated=on_count_generated,
         on_sentinel_generated=on_sentinel_generated,
         parallel_workers=effective_workers,
+        max_tool_calls=max_tool_calls,
     )
 
     fact_config = dict(kwargs)
