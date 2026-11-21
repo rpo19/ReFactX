@@ -1,0 +1,33 @@
+{
+  "output": null,
+  "log_dir": "logs",
+  "model_name": "Qwen/Qwen3.5-0.8B",
+  "model_dtype": "float16",
+  "prompt": "prompts/prompt_compact.yaml",
+  "wandb": false,
+  "unconstrained_generation": false,
+  "sentinel": true,
+  "count_pattern": "<count>",
+  "debug": false,
+  "debug_states": false,
+  "continue": true,
+  "http_rootcert": null,
+  "device": "auto",
+  "thinking": false,
+  "num_beams": 1,
+  "batch_size": 1,
+  "n": 50,
+  "generation_config": {
+    "max_new_tokens": 1024,
+    "do_sample": false
+  },
+  "dataset": "rmanluo/RoG-cwq",
+  "dataset_split": "test",
+  "answer_key": "answer",
+  "sample_index_file": "configs/samples/cwq_test_100_seed42.json",
+  "id_key": "id",
+  "tablename": "qwen36fbwikipops",
+  "experiment_name": "prelim100_cwq_sft08b_clean_budget",
+  "adapter_path": "sft_output_08b_combined/checkpoint-100",
+  "max_tool_calls": 12
+}
