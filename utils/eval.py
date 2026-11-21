@@ -115,6 +115,15 @@ def main(config_path, flush_output, no_cuda):
     with open(config_path) as f:
         cfg = json.load(f)
 
+    # Allow HPC configs to use ${WS_PATH}, ${KQAPRO_DIR}, ~, etc. in paths.
+    for key in ("prompt", "data_files", "index_path", "adapter_path",
+                "output", "log_dir", "sample_index_file"):
+        value = cfg.get(key)
+        if isinstance(value, list):
+            cfg[key] = [os.path.expanduser(os.path.expandvars(v)) for v in value]
+        elif isinstance(value, str):
+            cfg[key] = os.path.expanduser(os.path.expandvars(value))
+
     print("Loading tokenizer and model...")
     try:
         processor = None
@@ -216,22 +225,29 @@ def main(config_path, flush_output, no_cuda):
 
     question_key = cfg.get("question_key", "question")
     options_key = cfg.get("options_key")
+    choices_key = cfg.get("choices_key")
     prompt_length = tokenizer(refactx.apply_prompt_template(tokenizer, PROMPT_TEMPLATE, "question"),
                     return_tensors='pt', padding=False)['input_ids'].shape[1]
 
 
     print("Loading index...")
     load_dotenv()
-    index_path = os.getenv("BASE_INDEX_PATH")
-    assert index_path is not None, 'ERROR: index must be provided via --index or BASE_INDEX_PATH environment variables.'
+    index_path = cfg.get("index_path") or os.getenv("BASE_INDEX_PATH")
+    assert index_path is not None, 'ERROR: index must be provided via config index_path or BASE_INDEX_PATH environment variable.'
 
     tablename = cfg.get("tablename", None)
-    assert tablename or 'tablename' in index_path, 'tablename must be provided in config or as part of index filename'
+    assert tablename or 'tablename' in index_path or os.path.isfile(index_path), 'tablename must be provided in config or as part of index filename'
 
     if tablename:
-        index_path = f'{index_path}?tablename={tablename}'
+        separator = '&' if '?' in index_path else '?'
+        index_path = f'{index_path}{separator}tablename={tablename}'
 
-    index = refactx.load_index(index_path, rootcert=cfg.get("http_rootcert"))
+    index_kwargs = {}
+    if index_path.startswith(("http://", "https://")):
+        index_kwargs["rootcert"] = cfg.get("http_rootcert")
+    elif not index_path.startswith(("postgres://", "postgresql://")):
+        index_kwargs["tokenizer"] = tokenizer
+    index = refactx.load_index(index_path, **index_kwargs)
     index.set_tokenizer(tokenizer)
 
     pad_token_id = tokenizer.pad_token_id
@@ -248,12 +264,19 @@ def main(config_path, flush_output, no_cuda):
 
     metadata = {**cfg, 'date': get_utc_date_and_time(), 'prompt_length': prompt_length}
 
-    dataset = load_dataset(
-        cfg["dataset"],
-        cfg.get("dataset_config", None),
-        revision=cfg.get("dataset_revision", None),
-        split=cfg.get("dataset_split", "train"),
-    )
+    if cfg.get("data_files"):
+        dataset = load_dataset(
+            cfg["dataset"],
+            data_files=cfg["data_files"],
+            split=cfg.get("dataset_split", "train"),
+        )
+    else:
+        dataset = load_dataset(
+            cfg["dataset"],
+            cfg.get("dataset_config", None),
+            revision=cfg.get("dataset_revision", None),
+            split=cfg.get("dataset_split", "train"),
+        )
 
     sample_index_file = cfg.get("sample_index_file", None)
     if sample_index_file is not None:
@@ -323,6 +346,7 @@ def main(config_path, flush_output, no_cuda):
                 count_pattern=cfg.get('count_pattern', '<count>'),
                 eot=cfg.get('fact_eot', '</fact>\n'),
                 avoid_duplicates=cfg.get('avoid_duplicates', True),
+                max_tool_calls=cfg.get('max_tool_calls'),
             )
             constrained_processor = logits_processor_list[0]
 
@@ -361,6 +385,10 @@ def main(config_path, flush_output, no_cuda):
                     options = [get_field(dataset_sample, options_key) for dataset_sample in dataset.select(
                         range(batch_number * cfg.get('batch_size', 1), min((batch_number + 1) * cfg.get('batch_size', 1), len(dataset))))]
                     questions = [q + "\n\nOptions:\n" + "\n".join(f"{k}: {v}" for k, v in o.items()) for q, o in zip(questions, options)]
+                if choices_key:
+                    choices = [get_field(dataset_sample, choices_key) for dataset_sample in dataset.select(
+                        range(batch_number * cfg.get('batch_size', 1), min((batch_number + 1) * cfg.get('batch_size', 1), len(dataset))))]
+                    questions = [q + "\n\nChoices:\n" + "\n".join(f"- {c}" for c in cs) for q, cs in zip(questions, choices)]
 
                 prompted_batch = [
                     refactx.apply_prompt_template(
