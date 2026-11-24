@@ -1,0 +1,33 @@
+{
+  "output": null,
+  "log_dir": "logs",
+  "model_name": "Qwen/Qwen3.5-0.8B",
+  "model_dtype": "float16",
+  "prompt": "prompts/prompt_kqa_pro_teacher.yaml",
+  "wandb": false,
+  "unconstrained_generation": false,
+  "sentinel": true,
+  "count_pattern": "<count>",
+  "debug": false,
+  "debug_states": false,
+  "continue": true,
+  "http_rootcert": null,
+  "device": "auto",
+  "thinking": false,
+  "num_beams": 1,
+  "batch_size": 1,
+  "n": 100,
+  "generation_config": {
+    "max_new_tokens": 1024,
+    "do_sample": false
+  },
+  "dataset": "json",
+  "dataset_split": "train",
+  "answer_key": "answer",
+  "experiment_name": "eval100_kqa_reason3_plain",
+  "adapter_path": "sft_output_08b_reason3_plain/checkpoint-100",
+  "max_tool_calls": 8,
+  "data_files": "configs/samples/kqapro_val_100_seed42.jsonl",
+  "choices_key": "choices",
+  "index_path": "/workspace/data/kqa_pro/kqapro_qwen36_qualifiers.pkl"
+}
