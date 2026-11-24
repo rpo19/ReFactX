@@ -86,3 +86,34 @@ Defects 1 and 3 mean some of the training signal is wrong, not merely weak.
 - Bigger lever: gold-program traces from KQA Pro (KoPL) and gold graphs from
   RoG (already used by `utils/build_path_sft.py`) give verified supervision with
   no API cost.
+
+## 6. Results after fixing the templates (n=100, greedy, same IDs)
+
+Parent-matched ablation (`scripts/run_reason3_ablation.sh`), both adapters
+trained from `sft_output_08b_combined/checkpoint-100`, 100 steps, mask-objects:
+
+| Dataset | Plain control (no narration) | No-think reasoning |
+|---|---:|---:|
+| KQA Pro | 40% | 32% |
+| 2Wiki | 43% | 22% |
+| WebQSP | 15% | 7% |
+| CWQ | 15% | 10% |
+
+Reference points on the same sets (different parents, so not matched):
+combined ckpt-100 gives 2Wiki 49%, CWQ 16%; clean ckpt-200 gives WebQSP 16%;
+the mask-object adapter gives KQA 43%.
+
+Conclusion: the narration hurts on all four datasets. The fixed templates
+did not change that.
+
+## 7. Gold-program KQA traces (`utils/kqa_gold_traces.py`)
+
+Each KQA train program is executed over `kb.json`; a trace is kept only if its
+answer matches gold. Only single linear chains from one `Find` are supported,
+which is 2,332 of 94,376 train programs (about 2.5%). Main blockers: multi-`Find`
+programs and `FindAll`/`Filter`.
+
+Adapter from `combined/checkpoint-100` on these 2,332 traces, 100 steps,
+mask-objects (`scripts/run_kqa_gold.sh`): KQA 100-question accuracy **34%**,
+below the plain control (40%) and the mask-object adapter (43%). Training loss
+fell to 0.08, so the model mainly memorised the narrow pattern.
