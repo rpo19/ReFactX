@@ -174,6 +174,10 @@ def parse_args() -> argparse.Namespace:
         help="List-answer datasets whose multi-item answers gate the sentinel bonus (default: webqsp)",
     )
     parser.add_argument(
+        "--max-tool-calls", type=int, default=None,
+        help="Force the answer section after this many fact/count calls (default: disabled)",
+    )
+    parser.add_argument(
         "--no-normalized-reward", action="store_true", default=None,
         help="Disable semantically-normalized answer credit in the reward",
     )
@@ -228,6 +232,7 @@ def parse_args() -> argparse.Namespace:
         "dataset_num_proc": config.get("dataset_num_proc"),
         "use_generation_cache": config.get("use_generation_cache", True),
         "parallel_workers": config.get("parallel_workers", 0),
+        "max_tool_calls": config.get("max_tool_calls"),
         "output_dir": config.get("output_dir", "./grpo-output"),
         "save_steps": config.get("save_steps", 100),
         "save_total_limit": config.get("save_total_limit", 2),
@@ -457,7 +462,7 @@ def _is_count_question_text(question: Any) -> bool:
 
 
 def _processor_kwargs(fact_pattern: str, count_pattern: str, sentinel: bool,
-                      parallel_workers: int = 0) -> dict:
+                      parallel_workers: int = 0, max_tool_calls: int | None = None) -> dict:
     """Static kwargs forwarded to the constrained logits processor.
 
     Centralised so the training and validation construction sites forward
@@ -473,6 +478,7 @@ def _processor_kwargs(fact_pattern: str, count_pattern: str, sentinel: bool,
         "avoid_duplicates": True,
         "reinit_states": True,
         "parallel_workers": parallel_workers,
+        "max_tool_calls": max_tool_calls,
     }
 
 
@@ -1836,7 +1842,7 @@ def main() -> None:
                 on_sentinel_generated=on_sentinel_generated,
                 **_processor_kwargs(
                     args.fact_pattern, args.count_pattern, args.sentinel,
-                    args.parallel_workers,
+                    args.parallel_workers, args.max_tool_calls,
                 ),
             )
             if batch_size is not None:

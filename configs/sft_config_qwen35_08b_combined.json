@@ -1,0 +1,32 @@
+{
+  "_description": "Continued LoRA SFT from the no-mask teacher adapter on a 50/50 mix of teacher traces (unmasked) and answer-conditioned WebQSP/CWQ path traces (objects masked).",
+  "model_name": "Qwen/Qwen3.5-0.8B",
+  "data": "logs/sft_combined_v3_path.jsonl",
+  "mask_triples": false,
+  "max_length": 1280,
+  "batch_size": 2,
+  "grad_accum": 8,
+  "lr": 1e-05,
+  "epochs": 1,
+  "max_steps": 100,
+  "save_steps": 50,
+  "logging_steps": 10,
+  "eval_steps": 50,
+  "lora_r": 16,
+  "lora_alpha": 32,
+  "lora_dropout": 0.05,
+  "weight_decay": 0.01,
+  "optim": "adamw_torch",
+  "betas": [
+    0.9,
+    0.999
+  ],
+  "val_split": 0.03,
+  "report_to": "none",
+  "wandb_project": "sft_training",
+  "wandb_run_name": "sft-qwen35-08b-combined-path",
+  "gradient_checkpointing": true,
+  "use_dora": false,
+  "adapter": "sft_output_08b_clean/checkpoint-200",
+  "mask_objects": false
+}

@@ -1,0 +1,32 @@
+{
+  "output": null,
+  "log_dir": "logs",
+  "model_name": "Qwen/Qwen3.5-0.8B",
+  "model_dtype": "float16",
+  "prompt": "prompts/prompt_compact.yaml",
+  "wandb": false,
+  "unconstrained_generation": false,
+  "sentinel": true,
+  "count_pattern": "<count>",
+  "debug": false,
+  "debug_states": false,
+  "continue": true,
+  "http_rootcert": null,
+  "device": "auto",
+  "thinking": false,
+  "num_beams": 1,
+  "batch_size": 1,
+  "n": 100,
+  "generation_config": {
+    "max_new_tokens": 1024,
+    "do_sample": false
+  },
+  "dataset": "xanhho/2WikiMultihopQA",
+  "dataset_revision": "refs/convert/parquet",
+  "dataset_split": "validation",
+  "answer_key": "answer",
+  "sample_index_file": "configs/samples/2wiki_validation_100_seed42.json",
+  "id_key": "_id",
+  "tablename": "qwen36",
+  "experiment_name": "prelim100_2wiki_vanilla08b_compact"
+}

@@ -29,6 +29,8 @@ def load_index(url, **kwargs):
     if isinstance(url, list):
         return _load_index_from_triple_list(url, **kwargs)
     elif os.path.isfile(url):
+        if url.endswith((".pkl", ".pickle")):
+            return _load_local_index(url)
         return _load_index_from_txt(url, **kwargs)
     elif url.startswith('postgresql://') or url.startswith('postgres://'):
         return _load_index_from_postgresql(url, **kwargs)
@@ -673,6 +675,42 @@ class DictIndex(Index):
 
                 cursor += 1
         return dst[0]
+
+class LocalIndex(DictIndex):
+    """In-memory trie loaded from a pickle instead of PostgreSQL."""
+
+    def __init__(self, tree=None, rootkey: int = -100,
+                 switch_parameter: int = 7, tokenizer_name: str | None = None):
+        super().__init__(tree)
+        self.rootkey = rootkey
+        self.switch_parameter = switch_parameter
+        self.tokenizer_name = tokenizer_name
+        self.cache = None
+
+
+def save_local_index(index: DictIndex, path: str, rootkey: int = -100,
+                     switch_parameter: int = 7,
+                     tokenizer_name: str | None = None) -> None:
+    payload = {
+        "tree": index.tree,
+        "rootkey": rootkey,
+        "switch_parameter": switch_parameter,
+        "tokenizer_name": tokenizer_name,
+    }
+    with open(path, "wb") as fd:
+        pickle.dump(payload, fd, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def _load_local_index(path: str) -> LocalIndex:
+    with open(path, "rb") as fd:
+        payload = pickle.load(fd)
+    return LocalIndex(
+        tree=payload["tree"],
+        rootkey=payload.get("rootkey", -100),
+        switch_parameter=payload.get("switch_parameter", 7),
+        tokenizer_name=payload.get("tokenizer_name"),
+    )
+
 
 class Cache():
     def __init__(self, cache_db):

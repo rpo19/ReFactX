@@ -28,3 +28,5 @@ build/
 opencode.json
 .opencode
 *.parquet
+
+sft_output_08b_*/

@@ -1,0 +1,32 @@
+{
+  "_description": "Parent-matched ablation (v3 data): reason3_nothink, init combined ckpt-100, 100 steps",
+  "model_name": "Qwen/Qwen3.5-0.8B",
+  "data": "logs/reasoning_templates_v3/nothink_reasoning.jsonl",
+  "mask_triples": false,
+  "max_length": 1280,
+  "batch_size": 2,
+  "grad_accum": 8,
+  "lr": 1e-05,
+  "epochs": 1,
+  "max_steps": 100,
+  "save_steps": 50,
+  "logging_steps": 10,
+  "eval_steps": 50,
+  "lora_r": 16,
+  "lora_alpha": 32,
+  "lora_dropout": 0.05,
+  "weight_decay": 0.01,
+  "optim": "adamw_torch",
+  "betas": [
+    0.9,
+    0.999
+  ],
+  "val_split": 0.05,
+  "report_to": "none",
+  "wandb_project": "sft_training",
+  "wandb_run_name": "sft-qwen35-08b-reason3_nothink",
+  "gradient_checkpointing": true,
+  "use_dora": false,
+  "adapter": "sft_output_08b_combined/checkpoint-100",
+  "mask_objects": true
+}
