@@ -34,6 +34,11 @@ httpindex = [
 	"flask",
 	"gunicorn",
 ]
+vadalog = [
+	"vadalog-portable @ git+https://github.com/joint-kg-labs/vadalog-portable@b0e96f5b6c60ba4a507916c60795f515e16b26cf",
+	"pandas",
+	"ipywidgets",
+]
 
 [project.scripts]
 refactx-populate-postgres = "refactx.cli.populate_postgres:main"

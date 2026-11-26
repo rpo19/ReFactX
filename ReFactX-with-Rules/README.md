@@ -4,6 +4,14 @@ This extension uses constrained decoding to generate executable Nemo Datalog rul
 
 The [November 2026 milestone](MILESTONE_NEMO_RULE_GENERATION.md) records the first successful Qwen3.5-4B server run, the observed accuracy and latency, and the questions for the next experiment.
 
+## Vadalog full mode (`<kg>` + `<rule>`)
+
+The Nemo pipeline below is ported to the open-source [vadalog-portable](https://github.com/joint-kg-labs/vadalog-portable)
+engine, with a **full mode**: free generation in which `<kg>` writes one fact (stored, derived, or from a rule written
+earlier in the answer) and `<rule>` writes one syntactically and semantically valid Vadalog rule, which Vadalog executes
+on the spot. See [vadalog_full/README.md](vadalog_full/README.md) and the notebook
+`try_refactx_full_mode_vadalog.ipynb` in the parent repository.
+
 ## What works
 
 - A seeded graph of 100,000 entities and 273,594 base triples. The stored predicates are `OWN(owner, company, stake_percent)`, `ROLE(person, company, role)`, and `REACHABLE(entity, other_entity)`.
