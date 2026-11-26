@@ -19,11 +19,13 @@ services:
   #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
   #     - ./.htpasswd:/etc/nginx/.htpasswd:ro
   # httpindex:
+  #   image: rpozzi/refactx-httpindex:latest
+
   #   restart: $RESTART_POLICY
-  #   build:
-  #     context: ./httpindex
-  #     additional_contexts:
-  #       repo: ../..
+  # #  build:
+  # #    context: ./httpindex
+  # #    additional_contexts:
+  # #      repo: ../..
   #   environment:
   #     INDEX: $HTTP_INDEX
   #     WORKERS_NUM: $API_WORKERS_NUM

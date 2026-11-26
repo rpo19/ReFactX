@@ -1,17 +1,29 @@
 from refactx.index import load_index, populate_postgres_index
+from refactx.generate import KnowledgeGraphGeneration
 from refactx.prompt_base import PROMPT_TEMPLATE
+import json
+import yaml
 
-def apply_prompt_template(tokenizer, prompt_template=PROMPT_TEMPLATE, question=None):
+def apply_prompt_template(tokenizer, prompt_template=PROMPT_TEMPLATE, question=None, **kwargs):
     if question is None:
         # only prompt for caching
-        return tokenizer.apply_chat_template(prompt_template, tokenize=False, add_generation_prompt=False)
+        return tokenizer.apply_chat_template(prompt_template, tokenize=False, add_generation_prompt=True, **kwargs)
     else:
         question_w_role = {'role':'user', 'content': question}
-        return tokenizer.apply_chat_template(prompt_template + [question_w_role], tokenize=False, add_generation_prompt=True)
+        return tokenizer.apply_chat_template(prompt_template + [question_w_role], tokenize=False, add_generation_prompt=True, **kwargs)
 
-def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=False):
+def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True, **kwargs):
     from refactx.generate import get_constrained_logits_processor as _base
-    return _base(tokenizer, index, num_beams=num_beams, num_batches=num_batches, return_list=return_list)
+    return _base(tokenizer, index, num_beams=num_beams, num_batches=num_batches, return_list=return_list, **kwargs)
+
+def get_count_branches_logits_processor(tokenizer, kb_index, **kwargs):
+    import warnings
+    warnings.warn(
+        "get_count_branches_logits_processor is deprecated. Use "
+        "processor.add_pattern('count_branches: ', CountBranchesGeneration, kb_index=kb_index) "
+        "instead.", DeprecationWarning, stacklevel=2)
+    from refactx.count_branches import CountBranchesLogitsProcessor
+    return CountBranchesLogitsProcessor(tokenizer, kb_index, **kwargs)
 
 def patch_model(model):
     from refactx.generate import patch_model as _base
@@ -35,6 +47,43 @@ def _read_version_from_pyproject():
 		pass
 	return '0.0.0'
 
+def get_answer(full_answer):
+
+    answer_pattern = "<answer>\n"
+    answer = None
+    if answer_pattern in full_answer:
+        answer_raw = full_answer.split(answer_pattern)[1]
+        answer_raw = answer_raw.split('\n')[0]
+        try:
+            answer = json.loads(answer_raw.strip())
+        except json.decoder.JSONDecodeError:
+             pass
+        return answer
+    return answer
+
+def load_prompt(path):
+    """Load a JSON/YAML chat-message list or a plain-text system prompt."""
+    with open(path, encoding="utf-8") as f:
+        content = f.read()
+
+    path_lower = str(path).lower()
+    if path_lower.endswith(".json"):
+        prompt = json.loads(content)
+        if not isinstance(prompt, list):
+            raise ValueError("JSON prompt must be a list of chat messages")
+        return prompt
+    if path_lower.endswith((".yml", ".yaml")):
+        prompt = yaml.safe_load(content)
+        if not isinstance(prompt, list):
+            raise ValueError("YAML prompt must be a list of chat messages")
+        return prompt
+    return [{"role": "system", "content": content}]
+
 __version__ = _read_version_from_pyproject()
 
-__all__ = [load_index, populate_postgres_index, apply_prompt_template, get_constrained_logits_processor, patch_model, get_constrained_states]
+__all__ = [
+    'load_index', 'populate_postgres_index', 'apply_prompt_template',
+    'load_prompt', 'get_constrained_logits_processor',
+    'get_count_branches_logits_processor', 'patch_model',
+    'get_constrained_states',
+]

@@ -1,0 +1,19 @@
+{
+    "experiment_name": null,
+    "output": null,
+    "log_dir": ".",
+    "index_data": "indexes/simple_index.txt.gz",
+    "index_config": "indexes.qwen25_index",
+    "model_name": "Qwen/Qwen2.5-3B",
+    "model_config": "models.qwen25_3B_model",
+    "dataset": "datamodules.mintaka_test",
+    "prompt": "prompts/prompt_qwen36_mini2.json",
+    "wandb": false,
+    "unconstrained_generation": false,
+    "debug": false,
+    "debug_states": false,
+    "continue": false,
+    "http_rootcert": null,
+    "device": "auto",
+    "thinking": false
+}

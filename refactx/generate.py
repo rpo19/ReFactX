@@ -1,86 +1,1106 @@
 from transformers import LogitsProcessorList
 from refactx.index import DictIndex
 from transformers.generation.logits_process import LogitsProcessor
+from transformers import ProcessorMixin
 import torch
 from copy import deepcopy
 import math
 import types
+from collections import Counter
+from dataclasses import dataclass, field
+from typing import Type
 
 from refactx.index import EmptyIndexException, TripleNotFoundException
 
 
 def patch_model(model, verbose=True):
     _get_running_beams_for_next_iteration_original = model.__class__._get_running_beams_for_next_iteration
-    
+
     def _get_running_beams_for_next_iteration_patch(self,*args, **kwargs):
         global CONSTRAINED_STATES
         running_sequences, running_beam_scores, running_beam_indices = _get_running_beams_for_next_iteration_original(self, *args, **kwargs)
         CONSTRAINED_STATES.beam_idx = running_beam_indices
-        return running_sequences, running_beam_scores, running_beam_indices    
-    
+        return running_sequences, running_beam_scores, running_beam_indices
+
     model._get_running_beams_for_next_iteration = types.MethodType(_get_running_beams_for_next_iteration_patch, model)
 
     if verbose:
         print('WARNING: this patching method relies on shared mutable global state to support constrained generation with beam search. It is not thread-safe and may produce incorrect results in concurrent or multi-process setups (e.g. multiple workers).')
 
-# def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1, return_list=True):
-def get_constrained_logits_processor(tokenizer, index, num_beams, num_batches, return_list):
-    states = [[PatternConstrainedState(
-                    pattern = 'Fact:',
-                    tokenizer = tokenizer,
-                    cache_index = DictIndex(),
-                    subtree_cache = DictIndex(),
-                )]]
 
-    CONSTRAINED_STATES.__init__(states,
-                num_beams=num_beams,
-                num_batches =num_batches,
+# ---------------------------------------------------------------------------
+# PatternConfig — registers a pattern with its generation class
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PatternConfig:
+    pattern: str
+    generation_class: Type
+    config: dict = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# PatternConstrainedGeneration — base class for all constrained generation
+# ---------------------------------------------------------------------------
+
+class PatternConstrainedGeneration:
+    """Base class for constrained generation logic.
+
+    Subclasses implement ``constrain()`` which is called on every token
+    while the generation is active.  Set ``self.done = True`` when the
+    generation is complete; the state will move it to ``generation_history``.
+    """
+
+    def __init__(self, state, tokenizer, start_idx):
+        self.state = state
+        self.tokenizer = tokenizer
+        self.start_idx = start_idx
+        self.done = False
+
+    def constrain(self, sequence, mask, mask_idx):
+        raise NotImplementedError
+
+    def on_complete(self):
+        pass
+
+
+# ---------------------------------------------------------------------------
+# FactGeneration — trie-guided triple generation (was constrained_generation)
+# ---------------------------------------------------------------------------
+
+class FactGeneration(PatternConstrainedGeneration):
+    """Generates ``<Subject> <Relation> <Object> .`` triples guided by a KB trie."""
+
+    def __init__(self, state, tokenizer, start_idx,
+                 index, sentinel=False, sentinel_text='no further records>',
+                 avoid_duplicates=True, eot='\n'):
+        super().__init__(state, tokenizer, start_idx)
+        self.index = index
+        self.sentinel = sentinel
+        self.sentinel_text = sentinel_text
+        self.avoid_duplicates = avoid_duplicates
+
+        self.eot_tokens = []
+        if eot is not None:
+            if isinstance(eot, str):
+                if isinstance(tokenizer, ProcessorMixin):
+                    encoded = tokenizer.tokenizer.encode(eot, add_special_tokens=False)
+                else:
+                    encoded = tokenizer.encode(eot, add_special_tokens=False)
+            else:
+                encoded = list(eot)
+            self.eot_tokens = encoded
+        self.eot_remaining = []
+
+        self._sentinel_ids_cache = None
+        self.completed_with_sentinel = False
+        self.prev_exhausted = set()
+
+    def _sentinel_ids(self):
+        if self._sentinel_ids_cache is None:
+            if isinstance(self.tokenizer, ProcessorMixin):
+                self._sentinel_ids_cache = self.tokenizer.tokenizer.encode(
+                    self.sentinel_text, add_special_tokens=False)
+            else:
+                self._sentinel_ids_cache = self.tokenizer.encode(
+                    self.sentinel_text, add_special_tokens=False)
+        return self._sentinel_ids_cache
+
+    def _begin_sentinel(self, mask, mask_idx, sequence=None, sentinel_text=None):
+        """Start emitting sentinel tokens.
+
+        Parameters
+        ----------
+        sentinel_text : str, optional
+            Override the default ``self.sentinel_text`` for this invocation.
+            Use this to emit a level-appropriate sentinel (e.g. with
+            surrounding ``<>`` and ``.`` at subject/relation level).
+        """
+        if sentinel_text is not None:
+            if isinstance(self.tokenizer, ProcessorMixin):
+                ids = self.tokenizer.tokenizer.encode(
+                    sentinel_text, add_special_tokens=False)
+            else:
+                ids = self.tokenizer.encode(
+                    sentinel_text, add_special_tokens=False)
+        else:
+            ids = self._sentinel_ids()
+        mask[mask_idx, :] = -math.inf
+        mask[mask_idx, ids[0]] = 0
+        self.state.sentinel_remaining = list(ids[1:])
+        self.completed_with_sentinel = True
+        if sequence is not None:
+            self._sentinel_triple = sequence[:]
+        if not self.state.sentinel_remaining:
+            self._queue_eot_or_finish()
+
+    def _emit_next(self, remaining, mask, mask_idx, on_complete):
+        """Constrain the next token in a queued terminal sequence."""
+        nxt = remaining.pop(0)
+        mask[mask_idx, :] = -math.inf
+        mask[mask_idx, nxt] = 0
+        if not remaining:
+            on_complete()
+
+    def _queue_eot_or_finish(self):
+        """Queue the EOT sequence, or finish when no EOT is configured."""
+        if self.eot_tokens:
+            self.eot_remaining = list(self.eot_tokens)
+        else:
+            self._finish()
+
+    def _start_eot(self, mask, mask_idx):
+        """Start emitting EOT immediately from the current mask row."""
+        self._queue_eot_or_finish()
+        if self.eot_remaining:
+            self._emit_next(self.eot_remaining, mask, mask_idx, self._finish)
+
+    def _finish(self):
+        # print('finish')
+        if self.completed_with_sentinel and hasattr(self, '_sentinel_triple'):
+            self.state.cache_add(self._sentinel_triple, self.start_idx)
+            #print('Adding sentinel triple to cache', self._sentinel_triple)
+        self.state.subtree_cache.reset()
+        self.state.sentinel_remaining = []
+        self.state.state = 0
+        self.done = True
+
+    def constrain(self, sequence, mask, mask_idx):
+        state = self.state
+
+        # Mid-sentinel: keep emitting the "no further records" object token by token.
+        if state.sentinel_remaining:
+            self._emit_next(
+                state.sentinel_remaining, mask, mask_idx,
+                self._queue_eot_or_finish)
+            return
+
+        if self.eot_remaining:
+            self._emit_next(
+                self.eot_remaining, mask, mask_idx, self._finish)
+            return
+
+        possible_tokens, _ = self.index.next_tokens(sequence, state=state)
+
+        if not self.sentinel:
+            # ---- original behaviour: prune exhausted branches ----
+            if self.avoid_duplicates:
+                try:
+                    visited_tokens, _ = state.cache_index.next_tokens(sequence)
+                    state.cache_index.subtract_tokens(possible_tokens, visited_tokens)
+                except EmptyIndexException:
+                    pass
+                except TripleNotFoundException:
+                    pass
+
+            possible_tokens = list(possible_tokens.keys())
+
+            if len(possible_tokens) == 0:
+                state.cache_add(sequence, self.start_idx)
+                if self.eot_tokens:
+                    self._start_eot(mask, mask_idx)
+                    return
+                self._finish()
+            else:
+                vocab_size = mask.shape[-1]
+                invalid_tokens = [t for t in possible_tokens if t < 0 or t >= vocab_size]
+                if invalid_tokens:
+                    raise ValueError(
+                        f"Invalid token ids in constrained generation: {invalid_tokens[:10]} "
+                        f"(showing up to 10) with vocab_size={vocab_size}"
+                    )
+
+            mask[mask_idx, possible_tokens] = 0
+            return
+
+        # ---- sentinel-enabled behaviour ----
+        # If the model just picked an exhausted token (remaining == 0)
+        # on the previous step, fire the sentinel — there are no valid
+        # children left down this branch.
+        if sequence and sequence[-1] in self.prev_exhausted:
+            in_object = (self.tokenizer or state.tokenizer).decode(
+                sequence).count('> <') >= 2
+            if in_object:
+                self._begin_sentinel(mask, mask_idx, sequence=sequence)
+            else:
+                self._begin_sentinel(
+                    mask, mask_idx, sequence=sequence,
+                    sentinel_text=' <no further records> .')
+            return
+
+        # Compute *live* (remaining > 0) and *exhausted* (remaining == 0)
+        # dicts.  Over-visited tokens (remaining < 0) are discarded.
+        # Both live and exhausted are always offered — the prev_exhausted
+        # check above catches when the model enters a dead end.
+        live = {}
+        exhausted = {}
+        if self.avoid_duplicates:
+            visited_tokens = {}
+            try:
+                visited_tokens, _ = state.cache_index.next_tokens(sequence)
+            except EmptyIndexException:
+                pass
+            except TripleNotFoundException:
+                pass
+            for tok, total in possible_tokens.items():
+                remaining = total - visited_tokens.get(tok, 0)
+                if remaining > 0:
+                    live[tok] = remaining
+                elif remaining == 0:
+                    exhausted[tok] = remaining
+        else:
+            live = dict(possible_tokens)
+
+        self.prev_exhausted = set(exhausted.keys())
+
+        if len(possible_tokens) == 0:
+            # Index itself has nothing at this prefix — record and emit EOT.
+            state.cache_add(sequence, self.start_idx)
+            if self.eot_tokens:
+                self._start_eot(mask, mask_idx)
+                return
+            self._finish()
+            mask[mask_idx, :] = 0
+            return
+
+        # At subject / relation levels offer live + exhausted so the
+        # model can explore exhausted branches (prev_exhausted catches
+        # it on the next call).  At object+ levels only live tokens
+        # are offered — exhausted objects must not be re-chosen.
+        _decoded = (self.tokenizer or state.tokenizer).decode(sequence)
+        at_or_past_object = _decoded.count('>') >= 2
+
+        if at_or_past_object:
+            offer_keys = list(live.keys())
+        else:
+            offer_keys = list(set(list(live.keys()) + list(exhausted.keys())))
+
+        if offer_keys:
+            vocab_size = mask.shape[-1]
+            valid_keys = [t for t in offer_keys if 0 <= t < vocab_size]
+            mask[mask_idx, valid_keys] = 0
+        else:
+            # ALL children over-visited (remaining < 0) — fire sentinel.
+            in_object = (self.tokenizer or state.tokenizer).decode(
+                sequence).count('> <') >= 2
+            if in_object:
+                self._begin_sentinel(mask, mask_idx, sequence=sequence)
+            else:
+                self._begin_sentinel(
+                    mask, mask_idx, sequence=sequence,
+                    sentinel_text=' <no further records> .')
+
+
+# ---------------------------------------------------------------------------
+# KnowledgeGraphGeneration — callback-backed graph traversal
+# ---------------------------------------------------------------------------
+
+class KnowledgeGraphGeneration(PatternConstrainedGeneration):
+    """Generate a graph path as ``<entity> <relation> <object> ...``.
+
+    ``index`` contains the initial entity names.  After an entity is selected,
+    ``get_relations(entity)`` is called and its result is converted to a
+    temporary :class:`DictIndex`.  The same happens for objects through
+    ``get_objects(subject, relation)``.  Callback results may be mappings from
+    names to opaque metadata, or iterables of names.
+
+    By default generation stops after the first object.  With ``long_chains``
+    enabled, that object becomes the subject of the next hop.
+
+    With ``forbid_revisits`` (default) the walk is kept acyclic: an object that
+    already appears as an entity on the path is never offered, and neither is
+    the reverse of an already-traversed edge (following the same property back
+    from the object it just reached).  Set it to ``False`` to allow revisits.
+
+    ``avoid_duplicates`` suppresses *facts* that were already generated in a
+    previous ``<kg>`` of the same chat turn: re-using a subject or relation is
+    fine, but the same ``<subject> <relation> <object>`` triple is not offered
+    twice.  The check is deliberately applied only while choosing the object
+    (otherwise the shared first token of the index would forbid starting a new
+    path with an already-used subject).
+
+    With ``sentinel`` enabled, when the current prefix runs out of new facts
+    the model emits an explicit ``<no further records>`` object instead of the
+    branch being silently truncated.  An exhausted branch is offered only once
+    (so the model gets to see the sentinel, even mid-entity, e.g.
+    ``<Gremese <no further records>``) and is then forbidden: a relation with no
+    live object is dropped from the relation index, and an entity whose every
+    relation is dead is dropped from the entity prefix.  This keeps the model
+    from looping on ``<S> <R> <no further records>``.
+
+    Metadata is retained on ``generated_path_metadata`` and is deliberately not
+    given a prescribed schema; ``metadata_filter`` is the optional place to
+    enforce a schema-specific policy.
+    """
+
+    ENTITY = 'entity'
+    RELATION = 'relation'
+    OBJECT = 'object'
+
+    def __init__(self, state, tokenizer, start_idx, index,
+                 get_relations, get_objects, long_chains=False,
+                 relation_metadata=None, object_metadata=None,
+                 metadata_filter=None, eot='\\n', avoid_duplicates=True,
+                 forbid_revisits=True, sentinel=False,
+                 sentinel_text='no further records>'):
+        super().__init__(state, tokenizer, start_idx)
+        if not callable(get_relations) or not callable(get_objects):
+            raise TypeError('get_relations and get_objects must be callable')
+        self.index = index
+        self.get_relations = get_relations
+        self.get_objects = get_objects
+        self.long_chains = long_chains
+        self.relation_metadata = relation_metadata
+        self.object_metadata = object_metadata
+        self.metadata_filter = metadata_filter
+        self.avoid_duplicates = avoid_duplicates
+        self.forbid_revisits = forbid_revisits
+        self.sentinel = sentinel
+        self.sentinel_text = sentinel_text
+        # Dead-branch bookkeeping (show a sentinel once, then forbid the
+        # prefix) matters both for duplicate suppression and for the sentinel.
+        self.track_dead = bool(avoid_duplicates or sentinel)
+        self.phase = self.ENTITY
+        self.phase_index = index
+        self.phase_start = 0
+        self.phase_names = {}
+        self.path = []
+        self.generated_path_metadata = []
+        self._terminal = []
+        self._encode_cache = {}
+        # Set when a triple's terminal starts being emitted and cleared once it
+        # is recorded (``_complete``); if generation stops in between (e.g. it
+        # hits max_new_tokens) the triple is never added to the cache.  We keep
+        # it on the state so the caller can report ``incomplete_triples``.
+        self._pending_terminal = False
+        self.eot_tokens = self._encode(eot) if eot is not None else []
+        # `long_chains` turns each object into the next subject.  Since a path
+        # can always be extended while the current entity has relations, that
+        # would otherwise force the model to keep going.  We therefore offer
+        # the terminal sequence as an extra leaf in the relation index so the
+        # model may stop at any hop boundary (see `_begin_relations`).
+        self._hops = 0
+        self._stop_text = ' .' + self._decode(self.eot_tokens)
+        self._stop_ids = None
+
+    def _encode(self, value):
+        if value is None:
+            return []
+        if not isinstance(value, str):
+            return list(value)
+        tokenizer = self.tokenizer.tokenizer if isinstance(self.tokenizer, ProcessorMixin) else self.tokenizer
+        return list(tokenizer.encode(value, add_special_tokens=False))
+
+    def _decode(self, ids):
+        tokenizer = self.tokenizer.tokenizer if isinstance(self.tokenizer, ProcessorMixin) else self.tokenizer
+        return tokenizer.decode(ids)
+
+    @staticmethod
+    def _name(value):
+        text = str(value).strip()
+        if text.startswith('<') and text.endswith('>'):
+            return text[1:-1]
+        return text
+
+    def _result_items(self, result):
+        if isinstance(result, dict):
+            return result.items()
+        return ((item, {}) for item in result)
+
+    def _metadata_for(self, kind, name, metadata):
+        source = self.relation_metadata if kind == self.RELATION else self.object_metadata
+        if isinstance(source, dict) and name in source:
+            # Callback metadata takes precedence when supplied explicitly.
+            return source[name] if metadata in (None, {}) else metadata
+        return metadata
+
+    def _accept(self, kind, name, metadata, subject=None, relation=None):
+        if self.metadata_filter is None:
+            return True
+        return bool(self.metadata_filter(
+            kind=kind, name=name, metadata=metadata,
+            subject=subject, relation=relation,
+        ))
+
+    def _path_entities(self):
+        return {entry['entity'] for entry in self.path}
+
+    def _traversed_edges(self):
+        return {(e['entity'], e['relation'], e['object'])
+                for e in self.path if 'relation' in e and 'object' in e}
+
+    def _revisit_blocked(self, name, subject, relation, visited, edges):
+        # 1) never visit an entity that is already on the path
+        if name in visited:
+            return True
+        # 2) never traverse the reverse of an edge already used, i.e. walking
+        #    the same property back from the object it just reached
+        if (name, relation, subject) in edges:
+            return True
+        return False
+
+    def _filter_objects(self, result, subject, relation):
+        """Drop objects that would revisit an entity or reverse a used edge."""
+        visited = self._path_entities()
+        edges = self._traversed_edges()
+
+        def _keep(raw_name):
+            return not self._revisit_blocked(
+                self._name(raw_name), subject, relation, visited, edges)
+
+        if isinstance(result, dict):
+            return {name: metadata for name, metadata in result.items() if _keep(name)}
+        return [name for name in result if _keep(name)]
+
+    def _prune_visited(self, possible, sequence):
+        """Drop next-tokens whose branches were already fully generated.
+
+        Only applied while choosing an object: the cache stores whole paths, so
+        evaluating it at the entity/relation level would also forbid re-using a
+        subject or relation for a *different* triple.
+        """
+        try:
+            visited, _ = self.state.cache_index.next_tokens(sequence)
+        except (EmptyIndexException, TripleNotFoundException):
+            return possible
+        return {
+            token: count - visited.get(token, 0)
+            for token, count in possible.items()
+            if count - visited.get(token, 0) > 0
+        }
+
+    # -- dead-branch bookkeeping -------------------------------------------
+    # Facts already generated (per ``<kg>`` block) are remembered here so an
+    # exhausted branch is offered exactly once — long enough for the model to
+    # see the ``<no further records>`` sentinel — and is then forbidden.  The
+    # memory lives on the shared ``state`` so it survives across the several
+    # ``<kg>`` blocks of a single answer.
+
+    def _memory(self):
+        mem = getattr(self.state, 'kg_memory', None)
+        if mem is None:
+            mem = {}
+            self.state.kg_memory = mem
+        if 'dead_entities' not in mem:
+            mem['dead_entities'] = set()
+            mem['dead_prefix_counts'] = Counter()
+            mem['dead_relations'] = set()
+            mem['sentinel_prefixes'] = set()
+        return mem
+
+    def _mark_relation_dead(self, subject, relation):
+        self._memory()['dead_relations'].add((subject, relation))
+
+    def _mark_entity_dead(self, name, tokens):
+        mem = self._memory()
+        if name in mem['dead_entities']:
+            return
+        mem['dead_entities'].add(name)
+        tokens = tuple(tokens)
+        for i in range(len(tokens) + 1):
+            mem['dead_prefix_counts'][tokens[:i]] += 1
+
+    def _entity_tokens(self, subject):
+        if self.path and self.path[-1].get('entity') == subject \
+                and 'tokens' in self.path[-1]:
+            return self.path[-1]['tokens']
+        return tuple(self._encode(' <' + subject + '>'))
+
+    def _maybe_mark_entity_dead(self, subject):
+        """Mark an entity dead once every one of its relations is dead."""
+        if not self.track_dead:
+            return
+        dead = self._memory()['dead_relations']
+        if any((subject, relation) not in dead
+               for relation in self.get_relations(subject)):
+            return
+        self._mark_entity_dead(subject, self._entity_tokens(subject))
+
+    def _subtree_count(self, tokens):
+        """Number of leaves of the entity index under this token prefix."""
+        tree = getattr(self.index, 'tree', None)
+        if tree is None:
+            return 0
+        level, cursor, level_cursor = tree, 0, 0
+        tokens = tuple(tokens)
+        while cursor < len(tokens) and level_cursor < len(level[1]):
+            item = level[1][level_cursor]
+            if isinstance(item, dict):
+                if tokens[cursor] not in item:
+                    return 0
+                level = item[tokens[cursor]]
+                level_cursor = 0
+            else:
+                if tokens[cursor] != item:
+                    return 0
+                level_cursor += 1
+            cursor += 1
+        if cursor < len(tokens):
+            return 0
+        return level[0]
+
+    def _is_fully_dead(self, tokens):
+        """Whether every entity under this prefix is a known dead entity."""
+        tokens = tuple(tokens)
+        total = self._subtree_count(tokens)
+        if total <= 0:
+            return False
+        return self._memory()['dead_prefix_counts'][tokens] >= total
+
+    def _make_index(self, result, kind, subject=None, relation=None):
+        dynamic = DictIndex()
+        self.phase_names = {}
+        for raw_name, metadata in self._result_items(result):
+            name = self._name(raw_name)
+            metadata = self._metadata_for(kind, name, metadata)
+            if not self._accept(kind, name, metadata, subject, relation):
+                continue
+            # A leading space preserves the conventional ``<S> <R> <O>``
+            # serialization while keeping each phase independently indexed.
+            text = '<' + name + '>' if kind == self.ENTITY else ' <' + name + '>'
+            ids = tuple(self._encode(text))
+            if not ids:
+                continue
+            dynamic.add(list(ids))
+            self.phase_names[ids] = (name, metadata)
+        return dynamic
+
+    def _begin_relations(self, entity, sequence):
+        result = self.get_relations(entity)
+        if self.track_dead:
+            dead = self._memory()['dead_relations']
+            result = [relation for relation in result if (entity, relation) not in dead]
+        dynamic = self._make_index(result, self.RELATION, subject=entity)
+        has_relations = len(dynamic) > 0
+        # At a hop boundary (at least one triple already emitted) allow the
+        # model to stop instead of forcing it to continue, because the graph
+        # could always provide another relation.  The terminal sequence is
+        # added as an extra leaf next to the relations so `next_tokens`
+        # naturally offers both choices.
+        self._stop_ids = None
+        if self.long_chains and self._hops >= 1 and has_relations:
+            self._stop_ids = tuple(self._encode(self._stop_text))
+            dynamic.add(list(self._stop_ids))
+        self.phase_index = dynamic
+        self.phase = self.RELATION
+        self.phase_start = len(sequence)
+        return has_relations
+
+    def _begin_objects(self, subject, relation, sequence):
+        result = self.get_objects(subject, relation)
+        if isinstance(result, dict):
+            items = dict(result)
+        else:
+            items = list(result)
+        if not items and self.track_dead:
+            # No object at all: remember so this relation stops being offered.
+            self._mark_relation_dead(subject, relation)
+            self._maybe_mark_entity_dead(subject)
+        if self.forbid_revisits:
+            items = self._filter_objects(items, subject, relation)
+        self.phase_index = self._make_index(items, self.OBJECT, subject, relation)
+        self.phase = self.OBJECT
+        self.phase_start = len(sequence)
+        return len(self.phase_index) > 0
+
+    def _queue_terminal(self, sequence, sentinel=False):
+        if not self._pending_terminal:
+            # A triple has just begun: it is only safe once ``_complete`` runs.
+            self._pending_terminal = True
+            self.state.incomplete_triples += 1
+        text = ' .' + self._decode(self.eot_tokens)
+        if sentinel:
+            # An explicit object standing for "nothing new down this branch".
+            text = ' <' + self.sentinel_text + text
+        self._terminal = self._encode(text)
+        if not self._terminal:
+            self._complete(sequence)
+
+    def _complete(self, sequence):
+        if self._pending_terminal:
+            self._pending_terminal = False
+            self.state.incomplete_triples = max(0, self.state.incomplete_triples - 1)
+        self.state.cache_add(sequence, self.start_idx)
+        self.state.subtree_cache.reset()
+        self.state.sentinel_remaining = []
+        self.state.state = 0
+        self.done = True
+
+    def _record_path(self):
+        """Record the completed path, dropping a trailing unfinished subject.
+
+        With ``long_chains`` the object becomes the next subject before the
+        following relation is known, so the last path entry may still lack a
+        ``relation`` when the model decides to stop.
+        """
+        path = self.path
+        if path and 'relation' not in path[-1]:
+            path = path[:-1]
+        if path:
+            self.generated_path_metadata.append(deepcopy(path))
+
+    def _emit_terminal(self, mask, mask_idx, sequence):
+        if self._terminal:
+            token = self._terminal.pop(0)
+            mask[mask_idx, :] = -math.inf
+            if 0 <= token < mask.shape[-1]:
+                mask[mask_idx, token] = 0
+            if not self._terminal:
+                self._complete(sequence)
+            return True
+        return False
+
+    def _advance(self, sequence):
+        component = sequence[self.phase_start:]
+        value = self.phase_names.get(tuple(component))
+        if value is None:
+            value = (self._name(self._decode(component)), {})
+        name, metadata = value
+        if self.phase == self.ENTITY:
+            self.path.append({'entity': name, 'metadata': metadata,
+                              'tokens': tuple(component)})
+            alive = self._begin_relations(name, sequence)
+            if not alive and self.track_dead:
+                # The entity has no live relation left: remember it so it is
+                # not offered again (it still gets to show one sentinel first).
+                self._mark_entity_dead(name, component)
+            return alive
+        if self.phase == self.RELATION:
+            if self._stop_ids is not None and tuple(component) == self._stop_ids:
+                # The model chose to stop at this hop boundary.
+                self._record_path()
+                self._complete(sequence)
+                return False
+            self.path[-1]['relation'] = name
+            self.path[-1]['relation_metadata'] = metadata
+            return self._begin_objects(self.path[-1]['entity'], name, sequence)
+        self.path[-1]['object'] = name
+        self.path[-1]['object_metadata'] = metadata
+        self._hops += 1
+        if self.long_chains and self._begin_relations(name, sequence):
+            # The object is also the next subject; do not emit it twice.
+            self.path.append({'entity': name, 'metadata': metadata})
+            return True
+        self._record_path()
+        self._queue_terminal(sequence)
+        return False
+
+    def constrain(self, sequence, mask, mask_idx):
+        if self._emit_terminal(mask, mask_idx, sequence):
+            return
+        while True:
+            component = sequence[self.phase_start:]
+            try:
+                possible, _ = self.phase_index.next_tokens(component, state=self.state)
+            except (EmptyIndexException, TripleNotFoundException):
+                possible = {}
+            raw_possible = bool(possible)
+
+            # Entity phase: forbid prefixes whose whole entity subtree is a
+            # known dead branch.  A prefix is shown the sentinel once (so the
+            # model sees there is nothing to visit, e.g. ``<Gremese <no further
+            # records>``) and enters ``sentinel_prefixes``; afterwards every
+            # token leading back into it is removed.
+            if self.phase == self.ENTITY and self.track_dead:
+                mem = self._memory()
+                if mem['dead_entities']:
+                    tokens = tuple(component)
+                    if self._is_fully_dead(tokens):
+                        if tokens not in mem['sentinel_prefixes']:
+                            mem['sentinel_prefixes'].add(tokens)
+                            self._queue_terminal(sequence, sentinel=True)
+                        else:
+                            self._queue_terminal(sequence)
+                        self._record_path()
+                        self._emit_terminal(mask, mask_idx, sequence)
+                        return
+                    possible = {
+                        token: count for token, count in possible.items()
+                        if not (tokens + (token,) in mem['sentinel_prefixes']
+                                and self._is_fully_dead(tokens + (token,)))
+                    }
+                    raw_possible = bool(possible)
+
+            # Only object selection may be pruned for duplicates: re-using a
+            # subject or relation for a different triple is legitimate, and
+            # pruning at those levels would forbid the shared first token.
+            if possible and self.avoid_duplicates and self.phase == self.OBJECT:
+                possible = self._prune_visited(possible, sequence)
+            if possible:
+                tokens = [token for token in possible if 0 <= token < mask.shape[-1]]
+                mask[mask_idx, tokens] = 0
+                return
+            if raw_possible and self.avoid_duplicates and self.phase == self.OBJECT:
+                # Every candidate object was already generated: this branch
+                # holds no new fact, so finish it (optionally via sentinel).
+                if len(self.path) and 'relation' in self.path[-1] and self.track_dead:
+                    self._mark_relation_dead(
+                        self.path[-1]['entity'], self.path[-1]['relation'])
+                    self._maybe_mark_entity_dead(self.path[-1]['entity'])
+                self._record_path()
+                self._queue_terminal(sequence, sentinel=self.sentinel)
+                self._emit_terminal(mask, mask_idx, sequence)
+                return
+
+            advanced = self._advance(sequence)
+            if self.done:
+                mask[mask_idx, :] = 0
+                return
+            if self._terminal:
+                self._emit_terminal(mask, mask_idx, sequence)
+                return
+            if not advanced:
+                # A callback with no results terminates the current path.
+                self._record_path()
+                self._queue_terminal(sequence, sentinel=self.sentinel)
+                self._emit_terminal(mask, mask_idx, sequence)
+                return
+            # ``_advance`` moved to the next component.  Query its index in
+            # this same call so the next token is constrained immediately.
+
+
+# ---------------------------------------------------------------------------
+# CountBranchesGeneration — count_branches: <S> <R> tool call
+# ---------------------------------------------------------------------------
+
+class CountBranchesGeneration(PatternConstrainedGeneration):
+    """Handles ``count_branches: <Subject> <Relation>`` tool calls.
+
+    Triggered when the state detects ``count_branches: ``.  Collects prefix
+    tokens until a newline, counts KB leaves, then forces ``= <count>``.
+    """
+
+    MODE_COLLECTING = 0
+    MODE_EMITTING = 1
+
+    def __init__(self, state, tokenizer, start_idx, kb_index, delimiter="\n", eot="</count>\n"):
+        super().__init__(state, tokenizer, start_idx)
+        self.kb_index = kb_index
+        self.mode = self.MODE_COLLECTING
+        self.prefix_tokens: list[int] = []
+        self.count_tokens: list[int] = []
+        self.calls: list[tuple[str, int]] = []
+        encoded_delim = self._encode(delimiter)
+        self.delimiter_token = encoded_delim[0] if encoded_delim else None
+        self.eot = eot
+
+    def _encode(self, text: str) -> list[int]:
+        if hasattr(self.tokenizer, "tokenizer"):
+            return self.tokenizer.tokenizer.encode(text, add_special_tokens=False)
+        return self.tokenizer.encode(text, add_special_tokens=False)
+
+    def _decode(self, token_ids) -> str:
+        return self.tokenizer.decode(token_ids)
+
+    def _count_at_prefix(self, prefix_token_ids: list[int]) -> int:
+        import logging
+        _log = logging.getLogger(__name__)
+        try:
+            # For PostgresTrieIndex: if the prefix exceeds switch_parameter,
+            # the index can't resolve it in one shot — it needs a warmed-up
+            # subtree cache.  Warm it by querying with the truncated prefix
+            # first, then query with the full prefix.
+            sp = getattr(self.kb_index, 'switch_parameter', None)
+            if sp is not None and len(prefix_token_ids) >= sp - 1:
+                warm = prefix_token_ids[:sp - 1]
+                self.kb_index.next_tokens(warm, state=self.state)
+
+            next_tokens, _ = self.kb_index.next_tokens(
+                prefix_token_ids, state=self.state)
+        except Exception as exc:
+            _log.warning(
+                "count_branches: lookup failed for prefix %s: %s",
+                prefix_token_ids, exc)
+            return 0
+        if not next_tokens:
+            _log.warning(
+                "count_branches: no children for prefix %s (%r)",
+                prefix_token_ids,
+                self.tokenizer.tokenizer.decode(prefix_token_ids)
+                    if hasattr(self.tokenizer, 'tokenizer')
+                    else prefix_token_ids)
+            return 0
+        return sum(next_tokens.values())
+
+    def constrain(self, sequence, mask, mask_idx):
+        last_token = sequence[-1] if sequence else None
+
+        if self.mode == self.MODE_COLLECTING:
+            if self.delimiter_token is not None and last_token == self.delimiter_token:
+                count = self._count_at_prefix(self.prefix_tokens)
+                prefix_text = self._decode(self.prefix_tokens).strip()
+                self.calls.append((prefix_text, count))
+                count_str = f"= {count}\n{self.eot}"
+                self.count_tokens = self._encode(count_str)
+                self.mode = self.MODE_EMITTING
+                self._emit_count(mask, mask_idx)
+            else:
+                if last_token is not None:
+                    self.prefix_tokens.append(last_token)
+                possible_tokens, _ = self.kb_index.next_tokens(self.prefix_tokens, state=self.state)
+                # allow the delimiter token to be generated
+                possible_tokens[self.delimiter_token] = 1
+
+                possible_tokens = list(possible_tokens.keys())
+
+                mask[mask_idx, possible_tokens] = 0
+
+        elif self.mode == self.MODE_EMITTING:
+            self._emit_count(mask, mask_idx)
+
+    def _emit_count(self, mask, mask_idx):
+        if self.count_tokens:
+            nxt = self.count_tokens.pop(0)
+            mask[mask_idx, :] = -math.inf
+            if 0 <= nxt < mask.shape[-1]:
+                mask[mask_idx, nxt] = 0
+            if not self.count_tokens:
+                self.done = True
+        else:
+            self.done = True
+
+
+# ---------------------------------------------------------------------------
+# PatternConstrainedState — per-beam state machine
+# ---------------------------------------------------------------------------
+
+class PatternConstrainedState():
+    def __init__(self, tokenizer, cache_index, subtree_cache, state=0,
+                 debug=False, regex_window=10, ignore_case=True,
+                 thinking_end_pattern='</think>') -> None:
+
+        self.NORMAL_GENERATION = 0
+        self.CONSTRAINED_GENERATION = 1
+
+        self.token_ids = []
+        self.input_ids = []
+
+        self.tokenizer = tokenizer
+        self.regex_window = regex_window
+
+        self.ignore_case = ignore_case
+
+        self.patterns: list[PatternConfig] = []
+        self.active_generation: PatternConstrainedGeneration | None = None
+        self.generation_history: list[PatternConstrainedGeneration] = []
+
+        self.state = state
+        self.cursor = 0
+
+        self.cache_index = cache_index
+        self.generated_triples = []
+        self.generated_triples_idx = []
+        self.generated_triples_str = []
+
+        self.subtree_cache = subtree_cache
+
+        self.sentinel_remaining = []
+
+        # KnowledgeGraphGeneration bookkeeping, shared across the several ``<kg>``
+        # blocks of a single answer.
+        self.kg_memory = {}
+        # Triples whose terminal started but was not recorded (truncation).
+        self.incomplete_triples = 0
+
+        self.thinking_end_pattern = thinking_end_pattern.lower() if ignore_case and thinking_end_pattern else thinking_end_pattern
+        self._thinking_cache_reset_done = False
+
+        self._first_call = True
+
+        self.debug = debug
+        self.debug_history = []
+
+    def print_debug(self, tokenizer, print_class=False, end_with_newline=True):
+        if print_class:
+            print('{} '.format(self), end='')
+        if end_with_newline:
+            print()
+
+    def first_call(self):
+        if self._first_call:
+            self._first_call = False
+            return True
+        else:
+            return False
+
+    def cache_add(self, sequence, start_idx=0):
+        self.cache_index.add(sequence, new_leaf=True)
+        self.generated_triples.append(sequence)
+        self.generated_triples_idx.append([list(range(start_idx, len(sequence)))])
+        if self.tokenizer is not None:
+            self.generated_triples_str.append(self.tokenizer.decode(sequence))
+
+    def is_constrained(self):
+        return self.active_generation is not None
+
+    def end_of_triple_reset(self):
+        self.subtree_cache.reset()
+        self.sentinel_remaining = []
+        self.state = 0
+
+    def reset(self, clear_patterns=True):
+        self.state = 0
+        self.token_ids = []
+        self.input_ids = []
+        self.history = ()
+        self.cursor = 0
+        self.generated_triples = []
+        self.generated_triples_idx = []
+        self.generated_triples_str = []
+        self.cache_index.reset()
+        self._thinking_cache_reset_done = False
+        self._first_call = True
+        self.active_generation = None
+        self.kg_memory = {}
+        self.incomplete_triples = 0
+        if clear_patterns:
+            self.patterns = []
+        self.generation_history = []
+        self.end_of_triple_reset()
+
+    def copy(self, other, copy=True):
+        self.state = other.state
+        self.tokenizer = other.tokenizer
+        self.regex_window = other.regex_window
+        self.token_ids = deepcopy(other.token_ids)
+        self.input_ids = deepcopy(other.input_ids)
+
+        self.history = other.history
+        self.cursor = other.cursor
+
+        self.patterns = other.patterns
+        self.active_generation = deepcopy(other.active_generation) if copy and other.active_generation else other.active_generation
+        self.generation_history = deepcopy(other.generation_history) if copy else other.generation_history
+
+        self.generated_triples = other.generated_triples.copy() if copy else other.generated_triples
+        self.cache_index = deepcopy(other.cache_index) if copy else other.cache_index
+        self.subtree_cache = deepcopy(other.subtree_cache) if copy else other.subtree_cache
+        self.thinking_end_pattern = other.thinking_end_pattern
+        self._thinking_cache_reset_done = other._thinking_cache_reset_done
+        self.kg_memory = deepcopy(getattr(other, 'kg_memory', {}))
+        self.incomplete_triples = getattr(other, 'incomplete_triples', 0)
+
+        self.debug = other.debug
+        self.debug_history = deepcopy(other.debug_history) if copy else other.debug_history
+
+    def _decode_recent(self):
+        text = self.tokenizer.decode(self.token_ids[-self.regex_window:])
+        if self.ignore_case:
+            text = text.lower()
+        return text
+
+    def _activate_generation(self, config: PatternConfig):
+        start_idx = self.get_cursor()
+        self.active_generation = config.generation_class(
+            state=self, tokenizer=self.tokenizer, start_idx=start_idx,
+            **config.config
         )
+        self.state = self.CONSTRAINED_GENERATION
+        self.token_ids = []
+        self.cursor = 0
 
-    constrained_processor = ConstrainedLogitsProcessor(
-        index=index,
-        states=CONSTRAINED_STATES, tokenizer=tokenizer)
+    def update(self, new_token):
+        state = self.state
+        self.token_ids.append(new_token)
+        self.input_ids.append(new_token)
+        self.cursor += 1
 
-    if return_list:
-        logits_processor_list = LogitsProcessorList([
-            constrained_processor
-        ])
-        return logits_processor_list
-    else:
-        return constrained_processor
+        # If a generation is active, check for completion
+        if self.active_generation:
+            if self.active_generation.done:
+                self.active_generation.on_complete()
+                self.generation_history.append(self.active_generation)
+                self.active_generation = None
+                self.end_of_triple_reset()
+                # Keep the token that arrived right after the constrained span:
+                # it is the first token of the free continuation and may start
+                # the next pattern (e.g. a back-to-back `<kg>`), so dropping it
+                # would hide that pattern from the sliding window.
+                self.token_ids = self.token_ids[-1:]
+            else:
+                return
+
+        # No active generation: check patterns
+        text = self._decode_recent()
+        for config in self.patterns:
+            pattern = config.pattern.lower() if self.ignore_case else config.pattern
+            if text.endswith(pattern):
+                self._activate_generation(config)
+                break
+
+        # Feat 3: detect end-of-thinking and reset duplicate cache
+        if (not self._thinking_cache_reset_done and
+                self.thinking_end_pattern is not None):
+            normalized = "".join(text.split())
+            if normalized.rstrip().endswith(self.thinking_end_pattern):
+                self.cache_index.reset()
+                self._thinking_cache_reset_done = True
+
+        if self.debug:
+            self.debug_history.append({
+                'state': self.state,
+                'token': new_token,
+                'token_ids': deepcopy(self.token_ids),
+                'input_ids': deepcopy(self.input_ids),
+            })
+
+    def _update_state(self, state, initial_cursor=0):
+        if state != self.state:
+            self.history = (self.state, self.cursor)
+            self.state = state
+            self.cursor = initial_cursor
+            self.token_ids = []
+
+    def get_cursor(self):
+        return self.cursor
+
+
+# ---------------------------------------------------------------------------
+# ConstrainedStateList — 2D container [batch][beam]
+# ---------------------------------------------------------------------------
 
 class ConstrainedStateList():
-    # states is list of list [num_batches, num_beams]
-    def __init__(self, states, num_beams = 1, num_batches = 1, debug=False, debug_tokenizer=None):
-        self.states = states
-        if states != []:
+    def __init__(self, states, num_beams=1, num_batches=1, debug=False, debug_tokenizer=None):
+        if states == 'auto':
+            assert debug_tokenizer is not None, 'debug_tokenizer must be provided when states is "auto"'
+            states = []
+            for _ in range(num_batches):
+                batch_states = []
+                for _ in range(num_beams):
+                    batch_states.append(PatternConstrainedState(
+                        tokenizer=debug_tokenizer,
+                        cache_index=DictIndex(),
+                        subtree_cache=DictIndex(),
+                    ))
+                states.append(batch_states)
+        elif states != []:
             assert isinstance(states, list) and isinstance(states[0], list), 'ERROR: states is not a list of lists'
             assert len(states) == num_batches and len(states[0]) == num_beams, 'ERROR: states size does not match num_batches or num_beams'
+
+        self.states = states
+
         self.num_beams = num_beams
-        self.num_batches = num_batches # used for computing beam id
-        self.beam_idx = [] # torch.tensor([-1]*num_batches*num_beams).view(num_batches,num_beams,1) # running beam idx
+        self.num_batches = num_batches
+        self.beam_idx = []
 
         self.debug = debug
         self.debug_tokenizer = debug_tokenizer
         assert not self.debug or self.debug_tokenizer is not None
 
-        self.num_permutations = 0 # for debugging
+        self.num_permutations = 0
 
     def __getitem__(self, key):
         if isinstance(key, tuple):
-            # TODO test # seems it is not working as expected
             batch_key, beam_key = key
 
             if isinstance(batch_key, int) and isinstance(beam_key, int):
                 return self.states[batch_key][beam_key]
             else:
-                # Convert int to slice to normalize
                 if isinstance(batch_key, int):
                     batch_key = slice(batch_key, batch_key + 1)
                 if isinstance(beam_key, int):
                     beam_key = slice(beam_key, beam_key + 1)
 
-                # Slice the states
                 sliced_states = [row[beam_key] for row in self.states[batch_key]]
 
                 new_num_batches = len(sliced_states)
@@ -106,17 +1126,17 @@ class ConstrainedStateList():
     def __len__(self):
         return len(self.states) * len(self.states[0])
 
-    def reset(self):
+    def reset(self, clear_patterns=True):
         for batch in self.states:
             for state in batch:
-                state.reset()
+                state.reset(clear_patterns=clear_patterns)
 
     def get_batch_idx(self, idx):
         return int(idx // self.num_beams)
-    
+
     def get_beam_idx(self, idx):
         return int(idx % self.num_beams)
-    
+
     def get_last_beam_z(self):
         z = -1
         ids = (self.beam_idx[0, 0] != -1).nonzero(as_tuple=False).squeeze()
@@ -128,18 +1148,15 @@ class ConstrainedStateList():
         return z
 
     def beam_permutation(self):
-        if len(self.beam_idx) > 0: # ignore first call
+        if len(self.beam_idx) > 0:
             assert self.beam_idx.shape[0] * self.beam_idx.shape[1] == self.num_beams * self.num_batches, f'ERROR: beam_idx size unexpected: {len(self.beam_idx)} != {self.num_beams} * {self.num_batches}'
-            # copies = self[:,:] # new object
             copies = []
             for batch_i in range(self.num_batches):
                 batch_copies = []
                 for beam_i in range(self.num_beams):
                     batch_copies.append(self[batch_i, beam_i].dump())
                 copies.append(batch_copies)
-            # copies = [[self[batch_i, beam_i].dump() for beam_i in range(self.num_beams)] for batch_i in range(self.num_batches)]
             last_beam_z = self.get_last_beam_z()
-            # skip first call
             if last_beam_z >= 0:
                 if self.debug:
                     for batch_idx in range(self.beam_idx.shape[0]):
@@ -153,151 +1170,78 @@ class ConstrainedStateList():
                         replacement_batch_idx = self.get_batch_idx(replacement_idx)
                         local_beam_idx = self.get_beam_idx(replacement_idx)
                         assert replacement_batch_idx == batch_idx, f'ERROR: permutating between different batches! {replacement_batch_idx} --> {batch_idx}, with num_beams {self.num_beams}. replacement_idx {replacement_idx}'
-                        # copy only when to change
                         if num_beam != local_beam_idx:
-                            # self.states[batch_idx][num_beam].copy(copies[batch_idx][local_beam_idx], copy=True)
                             self.states[batch_idx][num_beam].load(copies[batch_idx][local_beam_idx], copy=True)
                             self.num_permutations += 1
                             if self.debug:
                                 print(f'permutation {self.num_permutations}: ({batch_idx},{local_beam_idx}) into {batch_idx}{num_beam}')
 
-"""
-Pattern should be recognized as soon as it is generated. Usually you want to end it with $
-"""
-class PatternConstrainedState():
-    def __init__(self, pattern, tokenizer, cache_index, subtree_cache, state=0, debug=False, regex_window=10) -> None:
 
-        self.NORMAL_GENERATION = 0 # even numbers for normal
-        self.CONSTRAINED_GENERATION = 1 # odd numbers for constrained
-
-        self.token_ids = [] # keep all the token ids
-
-        self.tokenizer = tokenizer
-        self.regex_window = regex_window # regex will be performed on the last N tokens
-
-        # if the switch pattern is finally found --> CONSTRAINED_GENERATION
-        self.pattern = pattern
-
-        self.state = state
-
-        self.cursor = 0 # how many tokens since last change in state
-
-        self.cache_index = cache_index
-        self.generated_triples = []
-
-        self.subtree_cache = subtree_cache
-
-        self._first_call = True
-
-        self.debug = debug
-        self.debug_history = []
-
-    def print_debug(self, tokenizer, print_class=False, end_with_newline=True):
-        if print_class:
-            print('{} '.format(self), end='')
-        # for item in self.debug_history:
-        #     print('{} ({}) --> {}, '.format(tokenizer.decode(item['token']), item['token'], item['state']), end='')
-        if end_with_newline:
-            print()
-
-    def first_call(self):
-        if self._first_call:
-            self._first_call = False
-            return True
-        else:
-            return False
-
-    def cache_add(self, sequence):
-        self.cache_index.add(sequence, new_leaf=True)
-        # removing end of triple
-        self.generated_triples.append(sequence[:-1])
-
-    def is_constrained(self):
-        return self.state % 2 == self.CONSTRAINED_GENERATION
-
-    def end_of_triple_reset(self):
-        self.subtree_cache.reset()
-        # reset to normal generation
-        self.state = 0
-
-    def reset(self):
-        self.state = 0
-        self.token_ids = []
-        self.history = ()
-        self.cursor = 0
-        self.generated_triples = []
-        self.cache_index.reset()
-        self.end_of_triple_reset()
-
-    def copy(self, other, copy=True):
-        self.pattern = other.pattern
-        self.state = other.state
-        self.tokenizer = other.tokenizer
-        self.regex_window = other.regex_window
-        self.token_ids = deepcopy(other.token_ids)
-
-        self.history = other.history  # Assuming it's immutable or should be shallow copied
-        self.cursor = other.cursor
-
-        self.generated_triples = other.generated_triples.copy() if copy else other.generated_triples
-        self.cache_index = deepcopy(other.cache_index) if copy else other.cache_index
-        self.subtree_cache = deepcopy(other.subtree_cache) if copy else other.subtree_cache
-
-        self.debug = other.debug
-        self.debug_history = deepcopy(other.debug_history) if copy else other.debug_history
-
-
-    def update(self, new_token):
-        state = self.state
-        self.token_ids.append(new_token)
-        self.cursor += 1
-
-        text = self.tokenizer.decode(self.token_ids[-self.regex_window:])
-
-        _match = text.endswith(self.pattern)
-        if _match:
-            state = self.CONSTRAINED_GENERATION
-
-        self._update_state(state)
-
-        if self.debug:
-            self.debug_history.append({
-                'state': self.state,
-                'token': new_token,
-                'token_ids': deepcopy(self.token_ids)
-            })
-
-    def _update_state(self, state, initial_cursor = 0):
-        if state != self.state:
-            self.history = (self.state, self.cursor)
-
-            self.state = state
-            self.cursor = initial_cursor
-            self.token_ids = []
-
-    def get_cursor(self):
-        return self.cursor
+# ---------------------------------------------------------------------------
+# ConstrainedLogitsProcessor — thin orchestrator
+# ---------------------------------------------------------------------------
 
 class ConstrainedLogitsProcessor(LogitsProcessor):
-    def __init__(self, index, states, tokenizer=None, error_strategy=0, avoid_duplicates=True):
-        self.index = index
+    def __init__(self, states, tokenizer, reinit_states=False):
         self.states = states
-        self.error_strategy = error_strategy
-        self.avoid_duplicates = avoid_duplicates
+        self.reinit_states = reinit_states
+        self.tokenizer = tokenizer
+        self.pattern_configs = []
 
-        self.ERROR_STRATEGY_WARN = 0
-        self.ERROR_STRATEGY_FAIL = 1
+    def add_pattern(self, pattern, generation_class, **config):
+        cfg = PatternConfig(pattern=pattern, generation_class=generation_class, config=config)
+        self.pattern_configs.append(cfg)
+        for batch in self.states.states:
+            for state in batch:
+                state.patterns.append(cfg)
 
-        self.tokenizer=tokenizer # for debugging
+    def reset_states(self, num_beams=None, num_batches=None):
+        """Reset request state while retaining registered pattern configs."""
+        num_beams = self.states.num_beams if num_beams is None else num_beams
+        num_batches = self.states.num_batches if num_batches is None else num_batches
+        if (num_beams != self.states.num_beams or
+                num_batches != self.states.num_batches or
+                len(self.states.states) == 0):
+            self.states.__init__(
+                'auto', num_beams=num_beams, num_batches=num_batches,
+                debug_tokenizer=self.tokenizer,
+            )
+            for cfg in self.pattern_configs:
+                for batch in self.states.states:
+                    for state in batch:
+                        state.patterns.append(cfg)
+        else:
+            self.states.reset(clear_patterns=False)
+
+    def _reinit_states(self, num_beams, num_batches):
+        self.states.__init__('auto',
+                num_beams=num_beams,
+                num_batches=num_batches,
+                debug_tokenizer=self.tokenizer
+        )
+
+    def _reinit_states_to_input_ids(self, input_ids):
+        for i in range(input_ids.shape[0]):
+            batch_idx = self.states.get_batch_idx(i)
+            beam_i = self.states.get_beam_idx(i)
+            self.states[batch_idx, beam_i].input_ids = input_ids[i].tolist()[:-1]
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
-        assert input_ids.shape[0] == len(self.states), \
-            f'Error: number of states ({len(self.states)}) should match `num_batches * num_beams` ({input_ids.shape[0]})'
+        if input_ids.shape[0] != len(self.states):
+            message = f'number of states ({len(self.states)}) should match `num_batches * num_beams` ({input_ids.shape[0]})'
+            if self.reinit_states:
+                num_beams = 1
+                num_batches = input_ids.shape[0]
+                self._reinit_states(num_beams, num_batches)
+                print(f'Warning: {message}')
+            else:
+                raise ValueError(f'Error: {message}')
+            self._reinit_states(num_beams=1, num_batches=input_ids.shape[0])
 
         self.states.beam_permutation()
 
-        # TODO create a mask of zeros same shape as scores and same device
         mask = torch.zeros_like(scores)
+        mask = mask.to(scores.dtype)
 
         for i in range(input_ids.shape[0]):
             batch_idx = self.states.get_batch_idx(i)
@@ -306,52 +1250,66 @@ class ConstrainedLogitsProcessor(LogitsProcessor):
 
             if not self.states[batch_idx, beam_i].first_call():
                 last_token = sequence[-1]
-                self.states[batch_idx, beam_i].update(last_token)
+                if sequence[:-1] != self.states[batch_idx, beam_i].input_ids:
+                    if self.reinit_states:
+                        print(f'Warning: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}, reinitializing all states.')
+                        self.states.reset()
+                        self._reinit_states_to_input_ids(input_ids)
+                        self.states[batch_idx, beam_i].update(last_token)
+                    else:
+                        raise ValueError(f'Error: sequence changed unexpectedly for batch {batch_idx} beam {beam_i}')
+                else:
+                    self.states[batch_idx, beam_i].update(last_token)
+            else:
+                self.states[batch_idx, beam_i].input_ids = sequence
 
-            if self.states[batch_idx, beam_i].is_constrained(): # odd number means constrained generation
-                # constrained generation
-                mask[i] = -math.inf # set for all tokens by default
-                constrain_generation_sequence = sequence[len(sequence) - self.states[batch_idx, beam_i].get_cursor():]
-                self.constrained_generation(
-                    constrain_generation_sequence, mask, i, state=self.states[batch_idx, beam_i])
-
-                # else:
-                #     # normal generation
-                #     # scores are not altered
-                #     pass
+            if self.states[batch_idx, beam_i].is_constrained():
+                mask[i] = -math.inf
+                state = self.states[batch_idx, beam_i]
+                constrain_generation_sequence_start_idx = len(sequence) - state.get_cursor()
+                constrain_generation_sequence = sequence[constrain_generation_sequence_start_idx:]
+                state.active_generation.constrain(
+                    constrain_generation_sequence, mask, i)
 
         scores_processed = scores + mask
 
         return scores_processed
 
-    def constrained_generation(self, sequence, mask: torch.FloatTensor, mask_idx, state):
 
-        possible_tokens, _ = self.index.next_tokens(sequence, state = state)
-        if self.avoid_duplicates:
-            try:
-                visited_tokens, _ = state.cache_index.next_tokens(sequence)
-                # print(visited_tokens, end=' = ')
-                state.cache_index.subtract_tokens(possible_tokens, visited_tokens)
-                # print(possible_tokens)
-            except EmptyIndexException:
-                # ignore when the cache index is empty
-                pass
-            except TripleNotFoundException:
-                # ignore if triple not in cache index
-                pass
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
 
-        possible_tokens = list(possible_tokens.keys()) # TODO transform subtract tokens in a prob modifier
+def get_constrained_logits_processor(tokenizer, index, num_beams=1, num_batches=1,
+                                     return_list=True, sentinel=False,
+                                     fact_pattern='<fact>', count_pattern='<count>',
+                                     eot=' </fact>\n', **kwargs):
+    CONSTRAINED_STATES.__init__('auto',
+                num_beams=num_beams,
+                num_batches=num_batches,
+                debug_tokenizer=tokenizer
+        )
 
-        if len(possible_tokens) == 0:
-            # end of constrained generation
-            # send end of string
-            generated_triple = sequence
-            state.cache_add(generated_triple)
-            # ensure to reset after eof triple
-            state.end_of_triple_reset()
-            # end of constrained generation
-            mask[mask_idx, :] = 0
-        else:
-            mask[mask_idx, possible_tokens] = 0
+    constrained_processor = ConstrainedLogitsProcessor(
+        states=CONSTRAINED_STATES, tokenizer=tokenizer)
+
+    fact_config = dict(kwargs)
+    fact_config['eot'] = eot
+    constrained_processor.add_pattern(
+        fact_pattern, FactGeneration,
+        index=index, sentinel=sentinel, **fact_config)
+
+    constrained_processor.add_pattern(
+        count_pattern, CountBranchesGeneration,
+        kb_index=index)
+
+    if return_list:
+        logits_processor_list = LogitsProcessorList([
+            constrained_processor
+        ])
+        return logits_processor_list
+    else:
+        return constrained_processor
+
 
 CONSTRAINED_STATES = ConstrainedStateList([])

@@ -1,6 +1,5 @@
 **/venv
 *.pickle
-*.gz
 *.bz2
 *.zip
 **/__pycache__
@@ -16,7 +15,6 @@
 .env
 ca.crt
 data
-hpc
 **/.htpasswd
 **/htpasswd
 wandb
@@ -26,3 +24,7 @@ dist
 build/
 *.egg-info
 .eggs/
+*.swp
+opencode.json
+.opencode
+*.parquet

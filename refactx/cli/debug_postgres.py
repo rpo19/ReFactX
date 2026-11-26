@@ -156,7 +156,6 @@ def main(postgres_url, cache, configkey, flush_cache, random_seed, initial_token
 
 
     state = PatternConstrainedState(
-                pattern = 'Fact:',
                 tokenizer = tokenizer,
                 cache_index = DictIndex(),
                 subtree_cache = DictIndex(),

@@ -1,13 +1,16 @@
 import bz2
-from tqdm import tqdm
+import gzip
+from pathlib import Path
 from refactx import populate_postgres_index
 from transformers import AutoTokenizer
 import click
+from dotenv import load_dotenv
+import os
 
 @click.command()
 @click.argument('fname', type=click.Path(exists=True))
 @click.option("--model-name", required=True, help="Name of the model to use.")
-@click.option('--postgres-connection', type=str, required=True, help='PostgreSQL connection string')
+@click.option('--postgres-connection', type=str, required=False, default=None, help='PostgreSQL connection string (Default from environment variable POSTGRES_CONNECTION)')
 @click.option('--table-name', type=str, required=True, help='Database table name')
 @click.option("--prefix", required=True, help="Prefix used in processing.")
 @click.option("--end-of-triple", required=True, help="End of triple marker.")
@@ -23,6 +26,11 @@ def main(fname, model_name, postgres_connection, table_name, prefix, end_of_trip
     tokenizer_batch_size, batch_size, switch_parameter, total_number_of_triples, count_leaves, add_special_tokens, debug):
     """Command-line wrapper that delegates to refactx.populate_postgres_index."""
 
+    load_dotenv()
+    if postgres_connection is None:
+        postgres_connection = os.getenv("POSTGRES_CONNECTION")
+    assert postgres_connection is not None, 'ERROR: PostgreSQL connection string must be provided via --postgres-connection or POSTGRES_CONNECTION environment variable.'
+
     assert batch_size % tokenizer_batch_size == 0, f'ERROR: --batch-size ({batch_size}) must be multiple of --tokenizer-batch-size ({tokenizer_batch_size})'
 
     if not end_of_triple.startswith(' '):
@@ -33,8 +41,17 @@ def main(fname, model_name, postgres_connection, table_name, prefix, end_of_trip
     if not tokenizer.is_fast:
         print('WARNING: tokenizer is not fast.')
 
-    # open the compressed file and pass the file reader to the helper
-    with bz2.BZ2File(fname) as file_reader:
+    # The indexer consumes byte lines. Support the compressed formats used by
+    # the datasets as well as ordinary text files.
+    path = Path(fname)
+    if path.suffix == '.gz':
+        opener = gzip.open
+    elif path.suffix == '.bz2':
+        opener = bz2.open
+    else:
+        opener = open
+
+    with opener(path, 'rb') as file_reader:
         populate_postgres_index(
             file_reader=file_reader,
             postgres_url=postgres_connection,

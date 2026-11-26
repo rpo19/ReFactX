@@ -7,6 +7,8 @@ import os
 import gzip
 from tqdm import trange
 from urllib.parse import urlparse, parse_qs
+from transformers import ProcessorMixin
+
 
 from refactx.SimpleCache import SimpleCache
 
@@ -14,17 +16,27 @@ DEFAULT_CONFIGKEY=-200
 DEFAULT_ROOTKEY=-100
 DEFAULT_SWITCH_PARAMETER=7
 
+def _load_cache(cache):
+    if cache == 'simple':
+        cache = SimpleCache()
+    elif isinstance(cache, str):
+        raise ValueError(f'Unknown cache type: {cache}')
+    return cache
+
 def load_index(url, **kwargs):
-    if os.path.isfile(url):
+    if isinstance(url, list):
+        return _load_index_from_triple_list(url, **kwargs)
+    elif os.path.isfile(url):
         return _load_index_from_txt(url, **kwargs)
     elif url.startswith('postgresql://') or url.startswith('postgres://'):
         return _load_index_from_postgresql(url, **kwargs)
     elif url.startswith('http://') or url.startswith('https://'):
         return _load_http_index(url, **kwargs)
     else:
-        raise ValueError(f'Cannot load index from {url}')
+        raise ValueError(f'Unknown URL type: {url}')
 
 def _load_http_index(url, configkey=DEFAULT_CONFIGKEY, cache='simple', rootcert=None):
+    cache = _load_cache(cache)
     # tablename in url
     if rootcert is None:
         rootcert = os.environ.get('HTTP_ROOTCERT')
@@ -42,6 +54,27 @@ def _load_http_index(url, configkey=DEFAULT_CONFIGKEY, cache='simple', rootcert=
 
     return index
 
+def _load_index_from_string(triple_text, tokenizer=None, add_special_tokens=False, clean=True, batch_size=100):
+    assert tokenizer is not None, 'tokenizer must be provided when loading from text.'
+    index = DictIndex()
+    index.set_tokenizer(tokenizer)
+    index.verbalized_triples = triple_text.split('\n')
+    index.tokenize_triples(add_special_tokens, batch_size)
+    if clean:
+        index.clean()
+
+    return index
+
+def _load_index_from_triple_list(triple_lst, tokenizer=None, add_special_tokens=False, clean=True, batch_size=100):
+    assert tokenizer is not None, 'tokenizer must be provided when loading from triple list.'
+    index = DictIndex()
+    index.set_tokenizer(tokenizer)
+    index.verbalized_triples = triple_lst
+    index.tokenize_triples(add_special_tokens, batch_size)
+    if clean:
+        index.clean()
+
+    return index
 
 def _load_index_from_txt(path, tokenizer=None, add_special_tokens=False, clean=True, batch_size=100):
     assert tokenizer is not None, 'tokenizer must be provided when loading from text file.'
@@ -71,7 +104,7 @@ def _parse_postgresql_url(url):
 
     return url_without_query, parsed_query_flattened
 
-def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple'):
+def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple', **kwargs):
     # postgres://user:pwd@host:port/dbname?table_name=tablename&switch_parameter=7&rootkey=500000
     # Parse the URL
     url_without_query, parsed_query = _parse_postgresql_url(url)
@@ -81,10 +114,7 @@ def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple'
     import psycopg
     postgresql_connection = psycopg.connect(url_without_query)
 
-    if cache == 'simple':
-        cache = SimpleCache()
-    elif isinstance(cache, str):
-        raise ValueError(f'Unknown cache type: {cache}')
+    cache = _load_cache(cache)
 
     index = PostgresTrieIndex(
         postgresql_connection = postgresql_connection,
@@ -92,7 +122,7 @@ def _load_index_from_postgresql(url, configkey=DEFAULT_CONFIGKEY, cache='simple'
         cache = cache,
         configkey=configkey
         )
-    
+
     return index
 
 def populate_postgres_index(file_reader, postgres_url, tokenizer, table_name, batch_size=5000, rootkey = DEFAULT_ROOTKEY, configkey=DEFAULT_CONFIGKEY, switch_parameter = DEFAULT_SWITCH_PARAMETER, total_number_of_triples=None, prefix='', tokenizer_batch_size=5000, add_special_tokens=False, count_leaves=True, debug=False):
@@ -247,7 +277,11 @@ class Index():
             batch = self.verbalized_triples[batch_start:batch_end]
             if self.tokenizer is None:
                 raise ValueError('tokenizer must be set before tokenizing triples.')
-            ids = self.tokenizer(batch, add_special_tokens=add_special_tokens)['input_ids']
+            elif isinstance(self.tokenizer, ProcessorMixin):
+                ids = self.tokenizer.tokenizer(text=batch, add_special_tokens=add_special_tokens)['input_ids']
+            else:
+                ids = self.tokenizer(text=batch, add_special_tokens=add_special_tokens)['input_ids']
+
             self.batch_append(ids)
 
     def clean(self):
@@ -543,7 +577,7 @@ class Cache():
         return next_tokens, subtree_cache
 
 class PostgresTrieIndex(Index):
-    def __init__(self, postgresql_connection, table_name, switch_parameter : int = DEFAULT_SWITCH_PARAMETER, rootkey : int = DEFAULT_ROOTKEY, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False, tokenizer_name=None):
+    def __init__(self, postgresql_connection, table_name, switch_parameter : int = DEFAULT_SWITCH_PARAMETER, rootkey : int = DEFAULT_ROOTKEY, configkey = DEFAULT_CONFIGKEY, cache: Cache = None, return_state = False, do_count_leaves=False, tokenizer=None):
         super().__init__()
         self.rootkey = rootkey
         self.configkey = configkey
@@ -555,6 +589,8 @@ class PostgresTrieIndex(Index):
         self.select_query = self.base_select_query.format(sql.Identifier(self.table_name))
         self.return_state = return_state
         self.do_count_leaves = do_count_leaves # slower if true
+
+        self.tokenizer = tokenizer
 
         if self.postgresql_connection:
             self.get_config()
@@ -577,7 +613,7 @@ class PostgresTrieIndex(Index):
                     self.rootkey = config['rootkey']
                 if 'tokenizer_name' in config:
                     self.tokenizer_name = config['tokenizer_name']
-            
+
         return config
 
     def flush_cache(self):
@@ -656,7 +692,7 @@ class PostgresTrieIndex(Index):
                         subtree = pickle.loads(subtree)
                         current_tree = state.subtree_cache.to_dict(sequence, numleaves, subtree)
                         if self.do_count_leaves and numleaves != state.subtree_cache.count_leaves(current_tree):
-                            print('WARNING: number of leaves does not match after COUNT LEAVES.')
+                            print('WARNING: number of leaves does not match after COUNT LEAVES for sequence {}.'.format(sequence))
 
                         merge_numleaves = state.subtree_cache.merge(current_tree, update_numleaves=True)
                         numleaves_diff = totalnumleaves_subtree - merge_numleaves
@@ -664,7 +700,7 @@ class PostgresTrieIndex(Index):
                             # TODO debug
                             # reduce all the upper numleaves by the difference
                             # WORKAROUND to solve duplicates (or wrong count) problem
-                            print('WARNING: number of leaves does not match.')
+                            print('WARNING: number of leaves does not match for sequence {}.'.format(sequence))
 
             # TODO maybe do it only when there is no subtree cache to save space and bandwidth
             # (first calls are the slowest)
@@ -727,7 +763,7 @@ class HTTPPostgresTrieIndex(PostgresTrieIndex):
                 self.rootkey = config['rootkey']
             if 'tokenizer_name' in config:
                 self.tokenizer_name = config['tokenizer_name']
-        
+
         return config
 
     def _next_tokens_from_postgresql(self, sequence, state):
@@ -832,7 +868,7 @@ class PostgresIngestIndex(PostgresTrieIndex, DictIndex):
             FROM STDIN WITH (FREEZE)''').format(sql.Identifier(self.table_name))
 
         self.tokenizer_name = tokenizer_name
-        
+
     def get_config_row(self):
         config = {
             'switch_parameter': self.switch_parameter,
